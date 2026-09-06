@@ -13,7 +13,11 @@ impl Auth {
     }
 
     pub async fn login(Json(payload): Json<Auth>) -> &'static str {
-        println!("username: {}", payload.username);
+        println!(
+            "default username, password: {}:{}",
+            payload.username, payload.password
+        );
+
         "Login Page"
     }
 }
