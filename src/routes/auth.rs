@@ -1,4 +1,4 @@
-use axum::{Json, debug_handler};
+use axum::Json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -8,12 +8,10 @@ pub struct Auth {
 }
 
 impl Auth {
-    #[debug_handler]
     pub async fn home() -> &'static str {
         "Home Page"
     }
 
-    #[debug_handler]
     pub async fn login(Json(payload): Json<Auth>) -> &'static str {
         println!(
             "default username, password: {}:{}",
