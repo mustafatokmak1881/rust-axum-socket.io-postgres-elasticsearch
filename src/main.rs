@@ -15,7 +15,10 @@ async fn home_route() -> &'static str {
 }
 
 async fn login_route(Json(payload): Json<LoginRequest>) -> &'static str {
-    println!("Username: {}", payload.username);
+    println!(
+        "username: {}: password:{}",
+        payload.username, payload.password
+    );
     "Login Endpoint"
 }
 
