@@ -14,7 +14,7 @@ impl Auth {
 
     pub async fn login(Json(payload): Json<Auth>) -> &'static str {
         println!(
-            "default username, password: {}:{}",
+            "username, password: {}:{}",
             payload.username, payload.password
         );
 
