@@ -1,30 +1,16 @@
-use axum::{Json, Router, routing::get, routing::post};
+mod routes;
+
+use axum::{Router, routing::get, routing::post};
 use dotenvy::dotenv;
-use serde::Deserialize;
 use std::env;
 use tokio::net::TcpListener;
 
-#[derive(Deserialize)]
-struct LoginRequest {
-    username: String,
-    password: String,
-}
-
-async fn home_route() -> &'static str {
-    "Home Endpoint"
-}
-
-async fn login_route(Json(payload): Json<LoginRequest>) -> &'static str {
-    println!(
-        "username: {}: password:{}",
-        payload.username, payload.password
-    );
-    "Login Endpoint"
-}
+// routes klasörünün içindeki auth modülünden Auth struct'ını çekiyoruz
+use routes::auth::Auth;
 
 #[tokio::main]
 async fn main() {
-    dotenv().ok(); // Dotenv install
+    dotenv().ok();
 
     let host: String = env::var("HOST").expect("HOST is not set in the .env file!");
     let port: String = env::var("PORT").expect("PORT is not set in the .env file!");
@@ -32,10 +18,11 @@ async fn main() {
     let full_url: String = format!("{}:{}", &host, &port);
     let listener: TcpListener = TcpListener::bind(&full_url).await.unwrap();
 
+    // KRİTİK DÜZELTME: Fonksiyonların sonundaki parantezleri () sildik.
     let app = Router::new()
-        .route("/", get(home_route))
-        .route("/auth/login", post(login_route));
+        .route("/", get(Auth::home ))
+        .route("/auth/login", post( Auth::login ));
 
-    println!("Full_url:{}", &full_url);
+    println!("Full_url: {}", &full_url);
     axum::serve(listener, app).await.unwrap();
 }
