@@ -1,15 +1,21 @@
 use axum::{Json, Router, routing::get, routing::post};
 use dotenvy::dotenv;
-use serde_json::Value;
+use serde::Deserialize;
 use std::env;
 use tokio::net::TcpListener;
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
 
 async fn home_route() -> &'static str {
     "Home Endpoint"
 }
 
-async fn login_route(Json(body): Json<Value>) -> &'static str {
-    println!("Username: {}", body["username"]);
+async fn login_route(Json(payload): Json<LoginRequest>) -> &'static str {
+    println!("Username: {}", payload.username);
     "Login Endpoint"
 }
 
