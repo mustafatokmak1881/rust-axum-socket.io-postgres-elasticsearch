@@ -15,7 +15,7 @@ pub async fn is_authenticated(req: Request, next: Next) -> Response {
                 .or_else(|| auth_str.strip_prefix("bearer"))
                 .unwrap_or(auth_str)
                 .trim();
-            println!("Authorization: {:?}", clean_auth);
+            println!("Token: {:?}", clean_auth);
         }
     }
 
