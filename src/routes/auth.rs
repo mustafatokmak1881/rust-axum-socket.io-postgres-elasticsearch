@@ -12,7 +12,7 @@ pub async fn home() -> &'static str {
 }
 
 pub async fn login(Json(payload): Json<Login>) -> &'static str {
-    println!("Credentials: {}:{}", payload.username, payload.password);
+    println!("Credentials: {}:{}", &payload.username, &payload.password);
 
     "Login Page"
 }
