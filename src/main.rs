@@ -17,7 +17,7 @@ async fn main() {
     let full_url: String = format!("{}:{}", &host, &port);
     let listener: TcpListener = TcpListener::bind(&full_url).await.unwrap();
 
-    let auth_routes: Router = routes::auth::router().await;
+    let auth_routes: Router = routes::auth::new().await;
 
     // KRİTİK DÜZELTME: Fonksiyonların sonundaki parantezleri () sildik.
     let app = Router::new()

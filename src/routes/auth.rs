@@ -1,36 +1,27 @@
-use axum::{Json, Router, routing::get};
+use axum::{Json, Router, routing::get, routing::post};
 use serde::Deserialize;
+use serde_json::Value;
 
-// #[derive(Deserialize)]
-// pub struct Auth {
-//     username: String,
-//     password: String,
-// }
-
-// impl Auth {
-//     pub fn new() {
-//         let user_routes: Router = Router::new().route("/loginx", get(|| async { "Loginx Page" }));
-//     }
-//     pub async fn home() -> &'static str {
-//         "Home Page"
-//     }
-
-//     pub async fn login(Json(payload): Json<Auth>) -> &'static str {
-//         println!(
-//             "username, password: {}:{}",
-//             payload.username, payload.password
-//         );
-
-//         "Login Page"
-//     }
-// }
+#[derive(Deserialize)]
+pub struct Login {
+    username: String,
+    password: String,
+}
 
 pub async fn home() -> &'static str {
+    "Login Home Page"
+}
+
+pub async fn login(Json(payload): Json<Login>) -> &'static str {
+    println!("Credentials: {}:{}", payload.username, payload.password);,
+
     "Login Page"
 }
 
-pub async fn router() -> Router {
-    let routes: Router = Router::new().route("/", get(home));
+pub async fn new() -> Router {
+    let router: Router = Router::new()
+        .route("/", get(home))
+        .route("/login", post(login));
 
-    routes
+    router
 }
