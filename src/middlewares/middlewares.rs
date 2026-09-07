@@ -55,9 +55,9 @@ pub async fn is_authenticated(req: Request, next: Next) -> Response {
     );
 
     match token_data {
-        Ok(data) => {
+        Ok(_) => {
             // Türü sildik, sadece 'data' bıraktık
-            println!("Token valid: {:?}", &data);
+            println!("Token valid");
         }
         Err(err) => {
             // Türü sildik, sadece 'err' bıraktık
