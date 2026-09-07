@@ -1,3 +1,4 @@
+use crate::routes::auth::Claims;
 use axum::{
     Json,
     extract::Request,
@@ -5,7 +6,9 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use jsonwebtoken::{DecodingKey, Validation, decode};
 use serde_json::json;
+use std::env;
 
 pub async fn logger_middleware(req: Request, next: Next) -> Response {
     println!("Url: {:?}", req.uri());
@@ -43,7 +46,30 @@ pub async fn is_authenticated(req: Request, next: Next) -> Response {
         .unwrap_or(auth_str)
         .trim();
 
-    println!("Auth_str: {}", token);
+    let secret = env::var("JWT_TOKEN").expect("JWT_TOKEN not set in the .env file!");
+
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    );
+
+    match token_data {
+        Ok(data) => {
+            // Türü sildik, sadece 'data' bıraktık
+            println!("Token valid: {:?}", &data);
+        }
+        Err(err) => {
+            // Türü sildik, sadece 'err' bıraktık
+            println!("Invalid token: {:?}", err);
+
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Invalid token"})),
+            )
+                .into_response();
+        }
+    }
 
     let response = next.run(req).await;
 
