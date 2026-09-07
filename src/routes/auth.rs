@@ -11,13 +11,13 @@ pub struct Login {
 }
 
 pub async fn home() -> &'static str {
-    "Login Home Page"
+    "Auth Home Page"
 }
 
 pub async fn login(Json(payload): Json<Login>) -> &'static str {
     println!("Credentials: {}:{}", &payload.username, &payload.password);
 
-    "Login Page"
+    "Auth Login Page"
 }
 
 pub async fn new() -> Router {
