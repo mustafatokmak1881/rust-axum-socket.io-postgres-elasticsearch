@@ -18,10 +18,12 @@ async fn main() {
     let listener: TcpListener = TcpListener::bind(&full_url).await.unwrap();
 
     let auth_routes: Router = routes::auth::new().await;
+    let user_routes: Router = routes::user::new().await;
 
     // KRİTİK DÜZELTME: Fonksiyonların sonundaki parantezleri () sildik.
     let app = Router::new()
         .nest("/auth", auth_routes)
+        .nest("/user", user_routes)
         .layer(middleware::from_fn(logger_middleware));
 
     println!("Full_url: {}", &full_url);

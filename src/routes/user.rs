@@ -1,5 +1,6 @@
+use crate::middlewares::middlewares::is_authenticated;
 use axum::{
-    Json, Router,
+    Json, Router, middleware,
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -11,11 +12,11 @@ pub struct Login {
 }
 
 pub async fn home() -> &'static str {
-    "Login Home Page"
+    "Restricted User Home"
 }
 
 pub async fn login(Json(payload): Json<Login>) -> &'static str {
-    println!("Credentials: {}:{}", &payload.username, &payload.password);
+    println!("Login: {}:{}", &payload.username, &payload.password);
 
     "Login Page"
 }
@@ -23,7 +24,8 @@ pub async fn login(Json(payload): Json<Login>) -> &'static str {
 pub async fn new() -> Router {
     let router: Router = Router::new()
         .route("/", get(home))
-        .route("/login", post(login));
+        .route("/login", post(login))
+        .route_layer(middleware::from_fn(is_authenticated)); // Restricted - Required Success Login
 
     router
 }
