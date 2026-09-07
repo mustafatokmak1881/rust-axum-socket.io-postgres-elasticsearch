@@ -30,7 +30,7 @@ pub async fn login(Json(payload): Json<Login>) -> impl IntoResponse {
 
     (
         StatusCode::OK,
-        Json(json!({"error": "Wrong username or password !"})),
+        Json(json!({"error": "Login is successful!"})),
     )
         .into_response()
 }
