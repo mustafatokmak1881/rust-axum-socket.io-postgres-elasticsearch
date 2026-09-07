@@ -1,8 +1,11 @@
 use axum::{
     Json, Router,
+    http::StatusCode,
+    response::IntoResponse,
     routing::{get, post},
 };
 use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct Login {
@@ -14,10 +17,22 @@ pub async fn home() -> &'static str {
     "Auth Home Page"
 }
 
-pub async fn login(Json(payload): Json<Login>) -> &'static str {
-    println!("Credentials: {}:{}", &payload.username, &payload.password);
+pub async fn login(Json(payload): Json<Login>) -> impl IntoResponse {
+    let login_success: bool = &payload.username == "admin" && &payload.password == "123456";
 
-    "Auth Login Page"
+    if !login_success {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Wrong username or password !"})),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({"error": "Wrong username or password !"})),
+    )
+        .into_response()
 }
 
 pub async fn new() -> Router {
