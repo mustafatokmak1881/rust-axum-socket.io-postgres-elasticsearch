@@ -1,6 +1,5 @@
 use axum::{Json, Router, routing::get, routing::post};
 use serde::Deserialize;
-use serde_json::Value;
 
 #[derive(Deserialize)]
 pub struct Login {
