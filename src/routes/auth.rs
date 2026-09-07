@@ -24,6 +24,5 @@ pub async fn new() -> Router {
     let router: Router = Router::new()
         .route("/", get(home))
         .route("/login", post(login));
-
     router
 }
