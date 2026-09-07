@@ -1,10 +1,9 @@
 mod middlewares;
 mod routes;
 
-use axum::{Router, middleware, routing::get, routing::post};
+use axum::{Router, middleware};
 use dotenvy::dotenv;
 use middlewares::middlewares::logger_middleware;
-use routes::auth::Auth;
 use std::env;
 use tokio::net::TcpListener;
 
@@ -18,10 +17,11 @@ async fn main() {
     let full_url: String = format!("{}:{}", &host, &port);
     let listener: TcpListener = TcpListener::bind(&full_url).await.unwrap();
 
+    let auth_routes: Router = routes::auth::router().await;
+
     // KRİTİK DÜZELTME: Fonksiyonların sonundaki parantezleri () sildik.
     let app = Router::new()
-        .route("/", get(Auth::home))
-        .route("/auth/login", post(Auth::login))
+        .nest("/auth", auth_routes)
         .layer(middleware::from_fn(logger_middleware));
 
     println!("Full_url: {}", &full_url);
