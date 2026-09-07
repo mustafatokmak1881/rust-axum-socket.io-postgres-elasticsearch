@@ -6,3 +6,20 @@ pub async fn logger_middleware(req: Request, next: Next) -> Response {
 
     response
 }
+
+pub async fn is_authenticated(req: Request, next: Next) -> Response {
+    if let Some(auth_header) = req.headers().get("authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            let clean_auth = auth_str
+                .strip_prefix("Bearer")
+                .or_else(|| auth_str.strip_prefix("bearer"))
+                .unwrap_or(auth_str)
+                .trim();
+            println!("Authorizaion: {:?}", clean_auth);
+        }
+    }
+
+    let response = next.run(req).await;
+
+    response
+}

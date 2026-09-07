@@ -1,5 +1,10 @@
-use axum::{Json, Router, routing::get, routing::post};
+use axum::{
+    Json, Router, middleware,
+    routing::{get, post},
+};
 use serde::Deserialize;
+
+use crate::middlewares::middlewares::is_authenticated;
 
 #[derive(Deserialize)]
 pub struct Login {
@@ -20,7 +25,8 @@ pub async fn login(Json(payload): Json<Login>) -> &'static str {
 pub async fn new() -> Router {
     let router: Router = Router::new()
         .route("/", get(home))
-        .route("/login", post(login));
+        .route("/login", post(login))
+        .route_layer(middleware::from_fn(is_authenticated));
 
     router
 }
