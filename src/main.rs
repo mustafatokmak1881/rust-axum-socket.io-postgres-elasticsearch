@@ -5,6 +5,7 @@ mod jobs;
 mod middleware;
 mod security;
 mod state;
+mod web;
 
 use axum::{
     Json, Router,
@@ -72,6 +73,9 @@ async fn main() -> anyhow::Result<()> {
     let state: SharedState = Arc::new(AppState { config, db, google });
 
     let app = Router::new()
+        .route("/", get(web::index))
+        .route("/game", get(web::game))
+        .route("/assets/game.css", get(web::stylesheet))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/auth/google", get(auth::handlers::google_login))

@@ -159,7 +159,7 @@ pub async fn google_callback(
             Duration::days(7),
         ));
 
-    Ok((jar, Redirect::to("/auth/me")))
+    Ok((jar, Redirect::to("/game")))
 }
 
 pub async fn me(
