@@ -11,7 +11,7 @@ use axum::{
     Json, Router,
     extract::State,
     middleware::from_fn,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 
 use config::Config;
@@ -69,13 +69,34 @@ async fn main() -> anyhow::Result<()> {
     .set_redirect_uri(RedirectUrl::new(config.google_redirect_url())?);
 
     let bind_address = format!("{}:{}", config.host, config.port);
-
     let state: SharedState = Arc::new(AppState { config, db, google });
 
     let app = Router::new()
         .route("/", get(web::index))
         .route("/game", get(web::game))
         .route("/assets/game.css", get(web::stylesheet))
+        .route("/assets/game.js", get(web::javascript))
+        .route(
+            "/api/game",
+            get(web::api::bootstrap).layer(from_fn(
+                |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                    let mut response = next.run(request).await;
+
+                    response.headers_mut().insert(
+                        axum::http::header::CACHE_CONTROL,
+                        "no-store".parse().unwrap(),
+                    );
+
+                    response
+                },
+            )),
+        )
+        .route("/api/villages", post(web::api::create_village))
+        .route("/api/village/name", patch(web::api::rename_village))
+        .route(
+            "/api/buildings/{kind}/upgrade",
+            post(web::api::start_upgrade),
+        )
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/auth/google", get(auth::handlers::google_login))

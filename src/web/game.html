@@ -1,387 +1,226 @@
 <!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#18251f">
-  <title>Umaykut — Köy Merkezi</title>
+  <title>Umaykut — Köy merkezi</title>
   <link rel="stylesheet" href="/assets/game.css">
+  <script src="/assets/game.js" defer></script>
 </head>
-
 <body>
-  <div class="app">
-    <aside class="sidebar">
-      <a class="brand" href="/game" aria-label="Umaykut ana sayfa">
-        <span class="brand-symbol" aria-hidden="true">ᛟ</span>
-        <span>
-          <strong>UMAYKUT</strong>
-          <small>BİR BOYUN YÜKSELİŞİ</small>
-        </span>
-      </a>
+  <div class="top-strip">UMAYKUT · GELİŞTİRME DÜNYASI 01</div>
 
-      <div class="world-tag">
-        <span class="status-dot"></span>
-        Geliştirme dünyası
-        <span class="world-number">01</span>
+  <div class="shell game-shell">
+    <nav class="menu" aria-label="Oyun menüsü">
+      <a href="#overview" data-tab="overview">Köy merkezi</a>
+      <a href="#buildings" data-tab="buildings">Binalar</a>
+      <a href="#jobs" data-tab="jobs">Görevler</a>
+      <a href="#account" data-tab="account">Hesabım</a>
+      <button type="button" id="logout">Çıkış</button>
+    </nav>
+
+    <header class="hero compact">
+      <div class="hero-hills"></div>
+      <div class="hero-title">
+        <h1>Umaykut</h1>
+        <p>Bir boyun yükselişi</p>
       </div>
+    </header>
 
-      <div class="nav-label">YÖNETİM</div>
+    <main>
+      <div id="message" class="notice" role="status" hidden></div>
 
-      <nav class="navigation" aria-label="Ana menü">
-        <a href="/game" class="nav-item active" aria-current="page">
-          <span class="nav-icon">⌂</span>
-          Köy merkezi
-          <span class="active-marker"></span>
-        </a>
-
-        <button class="nav-item" disabled>
-          <span class="nav-icon">◇</span>
-          Dünya haritası
-          <small>YAKINDA</small>
-        </button>
-
-        <button class="nav-item" disabled>
-          <span class="nav-icon">⚔</span>
-          Ordu
-        </button>
-
-        <button class="nav-item" disabled>
-          <span class="nav-icon">⚑</span>
-          Boy meclisi
-        </button>
-
-        <button class="nav-item" disabled>
-          <span class="nav-icon">▤</span>
-          Raporlar
-        </button>
-
-        <button class="nav-item" disabled>
-          <span class="nav-icon">✉</span>
-          Mesajlar
-        </button>
-      </nav>
-
-      <div class="sidebar-story">
-        <span class="story-symbol">☼</span>
-        <h3>Bir köyden fazlası.</h3>
-        <p>Toprağını işle, boyunu büyüt.<br>Bozkırda kendi izini bırak.</p>
-        <div class="story-divider"></div>
-        <small>HER BÜYÜK DESTAN BİR OBA İLE BAŞLAR.</small>
-      </div>
-
-      <div class="account">
-        <div class="avatar">B</div>
-        <div class="account-info">
-          <strong>Beyim</strong>
-          <small>Google oturumu açık</small>
+      <section id="loading" class="panel">
+        <h2>Yurduna bağlanılıyor…</h2>
+        <div class="panel-body">
+          <p>Oyuncu ve köy bilgileri yükleniyor.</p>
+          <button class="button" id="retry" type="button">
+            Yeniden dene
+          </button>
         </div>
-        <button
-          id="logout"
-          class="logout"
-          type="button"
-          aria-label="Oturumu kapat"
-          title="Oturumu kapat"
-        >↪</button>
-      </div>
-    </aside>
+      </section>
 
-    <div class="workspace">
-      <header class="topbar">
-        <div class="breadcrumb">
-          Dünya 01 <span>/</span> Bozkır <span>/</span>
-          <strong>Köy merkezi</strong>
+      <section id="onboarding" class="panel" hidden>
+        <h2>Hoş geldin, beyim</h2>
+        <div class="panel-body onboarding-body">
+          <span class="onboarding-symbol">⚑</span>
+          <h3>Destanın ilk obanla başlasın.</h3>
+          <p>
+            Obanı kurarak 1.500 odun ve üç başlangıç binasıyla
+            gelişmeye başlayabilirsin.
+          </p>
+          <button id="create-village" class="button large" type="button">
+            İlk obamı kur
+          </button>
         </div>
+      </section>
 
-        <span class="preview-badge">
-          TASARIM ÖNİZLEMESİ
-        </span>
-      </header>
-
-      <main>
-        <section class="page-heading">
+      <div id="game-content" hidden>
+        <div class="village-bar">
           <div>
-            <div class="eyebrow">YURDUNA HOŞ GELDİN</div>
-            <h1>Gökçe Obası <span>⌄</span></h1>
-            <p>
-              <span class="coordinate">482 | 517</span>
-              Kuzey bozkırı
-              <span class="heading-dot">·</span>
-              1.284 puan
-            </p>
+            <small>YERLEŞİMİN</small>
+            <strong id="village-name"></strong>
           </div>
-
-          <div class="village-level">
-            <span class="level-emblem">III</span>
-            <div>
-              <small>YERLEŞİM SEVİYESİ</small>
-              <strong>Gelişen oba</strong>
-            </div>
+          <div class="resource">
+            <span class="wood-icon">▰</span>
+            <div><small>ODUN</small><strong id="wood">0</strong></div>
           </div>
-        </section>
-
-        <section class="resource-grid" aria-label="Örnek köy kaynakları">
-          <article class="resource">
-            <span class="resource-icon wood">▰</span>
-            <div>
-              <small>ODUN</small>
-              <strong>2.450 <span>/ 5.000</span></strong>
-              <div class="meter"><span style="width:49%"></span></div>
-            </div>
-            <span class="production">+120<small>/saat</small></span>
-          </article>
-
-          <article class="resource">
-            <span class="resource-icon clay">◆</span>
-            <div>
-              <small>KİL</small>
-              <strong>1.820 <span>/ 5.000</span></strong>
-              <div class="meter"><span style="width:36%"></span></div>
-            </div>
-            <span class="production">+96<small>/saat</small></span>
-          </article>
-
-          <article class="resource">
-            <span class="resource-icon iron">⬡</span>
-            <div>
-              <small>DEMİR</small>
-              <strong>1.160 <span>/ 5.000</span></strong>
-              <div class="meter"><span style="width:23%"></span></div>
-            </div>
-            <span class="production">+74<small>/saat</small></span>
-          </article>
-
-          <article class="resource population">
-            <span class="resource-icon people">♟</span>
-            <div>
-              <small>NÜFUS</small>
-              <strong>148 <span>/ 240</span></strong>
-              <div class="meter"><span style="width:62%"></span></div>
-            </div>
-            <span class="production neutral">92<small>boş yer</small></span>
-          </article>
-        </section>
-
-        <div class="content-grid">
-          <div class="main-column">
-            <section class="panel village-panel">
-              <div class="panel-heading">
-                <div>
-                  <span class="eyebrow">TOPRAĞIN, YURDUN, GELECEĞİN</span>
-                  <h2>Obaya genel bakış</h2>
-                </div>
-                <span class="season">☀ İlkbahar</span>
-              </div>
-
-              <div class="village-scene"
-                   role="img"
-                   aria-label="Dağlar, ağaçlar ve binalarla örnek Gökçe Obası görünümü">
-                <div class="scene-sun"></div>
-                <div class="mountain mountain-back"></div>
-                <div class="mountain mountain-front"></div>
-                <div class="village-ground"></div>
-                <div class="village-road"></div>
-
-                <span class="tree tree-1">♠</span>
-                <span class="tree tree-2">♠</span>
-                <span class="tree tree-3">♠</span>
-                <span class="tree tree-4">♠</span>
-                <span class="tree tree-5">♠</span>
-
-                <div class="building building-main">
-                  <span class="building-flag">⚑</span>
-                  <div class="building-roof"></div>
-                  <div class="building-body"><i></i></div>
-                  <span class="building-label">Bey otağı <b>8</b></span>
-                </div>
-
-                <div class="building building-wood">
-                  <div class="building-roof"></div>
-                  <div class="building-body"><i></i></div>
-                  <span class="building-label">Oduncu <b>6</b></span>
-                </div>
-
-                <div class="building building-barracks">
-                  <div class="building-roof"></div>
-                  <div class="building-body"><i></i></div>
-                  <span class="building-label">Kışla <b>4</b></span>
-                </div>
-
-                <div class="building building-storage">
-                  <div class="building-roof"></div>
-                  <div class="building-body"><i></i></div>
-                  <span class="building-label">Ambar <b>5</b></span>
-                </div>
-
-                <div class="building building-farm">
-                  <div class="building-roof"></div>
-                  <div class="building-body"><i></i></div>
-                  <span class="building-label">Çiftlik <b>7</b></span>
-                </div>
-
-                <div class="scene-caption">
-                  <span class="status-dot"></span>
-                  Gökçe Obası
-                  <span>Örnek köy görünümü</span>
-                </div>
-
-                <div class="compass" aria-hidden="true">
-                  <small>K</small>✧
-                </div>
-              </div>
-
-              <div class="village-footer">
-                <span>⌂ <strong>5</strong> gösterilen bina</span>
-                <span>◇ <strong>%62</strong> nüfus doluluğu</span>
-                <span>⚑ <strong>Örnek</strong> yerleşim</span>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <span class="eyebrow">OBANI BÜYÜT</span>
-                  <h2>İnşaat kuyruğu</h2>
-                </div>
-                <span class="subtle-badge">Örnek veri</span>
-              </div>
-
-              <div class="construction-row">
-                <div class="construction-icon">⌂</div>
-                <div class="construction-info">
-                  <div class="construction-title">
-                    <strong>Bey otağı</strong>
-                    <span>Seviye 8 → <b>9</b></span>
-                  </div>
-                  <p>Obanın yönetim merkezi genişletiliyor.</p>
-                  <div class="build-progress"><span></span></div>
-                </div>
-                <div class="construction-time">
-                  <strong>00:12:48</strong>
-                  <small>ÖRNEK KALAN SÜRE</small>
-                </div>
-              </div>
-
-              <div class="empty-slot">
-                <span>＋</span>
-                <div>
-                  <strong>Bir sonraki gelişimin burada başlayacak</strong>
-                  <p>Bina yükseltme sistemi eklendiğinde bu alan kullanılacak.</p>
-                </div>
-              </div>
-            </section>
+          <div class="resource">
+            <span>⌂</span>
+            <div><small>BİNA PUANI</small><strong id="points">0</strong></div>
           </div>
-
-          <aside class="right-column" aria-label="Köy bilgileri">
-            <section class="welcome-card">
-              <span class="card-kicker">BOZKIR SENİ BEKLİYOR</span>
-              <h2>Bugün küçük bir oba.<br>Yarın büyük bir boy.</h2>
-              <p>
-                Önce kaynaklarını güçlendir.
-                Sağlam bir yurt, güçlü bir ordunun temelidir.
-              </p>
-              <span class="welcome-decoration" aria-hidden="true">☼</span>
-              <div class="welcome-bottom">UMAYKUT <span>—</span> İLK ADIMLAR</div>
-            </section>
-
-            <section class="panel troops-panel">
-              <div class="panel-heading">
-                <h2>Obadaki birlikler</h2>
-                <span class="subtle-badge">Örnek</span>
-              </div>
-
-              <div class="troop-row">
-                <span class="unit-icon">⚔</span>
-                <div><strong>Mızraklı</strong><small>Piyade</small></div>
-                <b>24</b>
-              </div>
-
-              <div class="troop-row">
-                <span class="unit-icon">⌁</span>
-                <div><strong>Okçu</strong><small>Menzilli</small></div>
-                <b>16</b>
-              </div>
-
-              <div class="troop-row">
-                <span class="unit-icon">♞</span>
-                <div><strong>Atlı</strong><small>Süvari</small></div>
-                <b>8</b>
-              </div>
-
-              <div class="panel-note">
-                Birlik eğitimi sonraki geliştirme aşamasında açılacak.
-              </div>
-            </section>
-
-            <section class="panel roadmap-panel">
-              <div class="panel-heading">
-                <h2>Obanın yolculuğu</h2>
-              </div>
-
-              <ol class="milestones">
-                <li class="done">
-                  <span>✓</span>
-                  <div><strong>Yurduna giriş yap</strong><small>Google oturumu aktif</small></div>
-                </li>
-                <li class="current">
-                  <span>2</span>
-                  <div><strong>İlk obanı kur</strong><small>Köy sistemi sıradaki adım</small></div>
-                </li>
-                <li>
-                  <span>3</span>
-                  <div><strong>Sancağını yükselt</strong><small>Ordu ve boy sistemi</small></div>
-                </li>
-              </ol>
-            </section>
-          </aside>
         </div>
 
-        <footer class="page-footer">
-          <span>UMAYKUT <span class="footer-divider">/</span> Bir boyun yükselişi</span>
-          <span>Kaynaklar ve oyun içerikleri temsili verilerdir.</span>
-        </footer>
+        <div class="game-layout">
+          <aside class="side-panel">
+            <h3>Köy yönetimi</h3>
+            <a href="#overview">» Genel bakış</a>
+            <a href="#buildings">» Bina yükseltmeleri</a>
+            <a href="#jobs">» İnşaat geçmişi</a>
+            <a href="#account">» Köy adı ve hesap</a>
 
-        <p id="action-message" role="status" aria-live="polite"></p>
-      </main>
-    </div>
+            <div class="side-note">
+              <strong>Geliştirme notu</strong>
+              <p>
+                Bu sürümde odun üretimi yoktur.
+                Başlangıç kaynaklarını yükseltmeler için kullan.
+              </p>
+            </div>
+          </aside>
+
+          <div class="screens">
+            <section class="panel screen" data-screen="overview">
+              <h2>Köy merkezi</h2>
+              <div class="panel-body">
+                <div class="village-map">
+                  <div class="map-title">
+                    <span>UMAYKUT</span>
+                    <strong>Obanın kalbi</strong>
+                  </div>
+
+                  <a href="#buildings" class="map-building otaq">
+                    <span>⌂</span>
+                    <strong>Bey otağı</strong>
+                    <small id="level-headquarters"></small>
+                  </a>
+
+                  <a href="#buildings" class="map-building timber">
+                    <span>⚒</span>
+                    <strong>Oduncu</strong>
+                    <small id="level-timber"></small>
+                  </a>
+
+                  <a href="#buildings" class="map-building warehouse">
+                    <span>▤</span>
+                    <strong>Ambar</strong>
+                    <small id="level-warehouse"></small>
+                  </a>
+
+                  <div class="map-caption">Temsili yerleşim planı · Binalara tıklayabilirsin</div>
+                </div>
+
+                <h3 class="section-title">Devam eden inşaat</h3>
+                <div id="active-upgrade" class="queue-box"></div>
+
+                <p class="muted small">
+                  Bina seviyeleri ve kaynaklar PostgreSQL’den alınır.
+                  İnşaat tamamlanınca ekran otomatik yenilenir.
+                </p>
+              </div>
+            </section>
+
+            <section class="panel screen" data-screen="buildings" hidden>
+              <h2>Binalar</h2>
+              <div class="panel-body">
+                <p>
+                  İnşaat bedeli başlangıçta tahsil edilir.
+                  Aynı anda yalnızca bir bina yükseltilebilir.
+                </p>
+
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Bina</th>
+                        <th>Seviye</th>
+                        <th>Odun</th>
+                        <th>Süre</th>
+                        <th>İşlem</th>
+                      </tr>
+                    </thead>
+                    <tbody id="building-rows"></tbody>
+                  </table>
+                </div>
+
+                <div class="info-box">
+                  Bu aşamada yükseltmeler bina seviyesini artırır.
+                  Üretim hızı ve depo kapasitesi etkileri henüz uygulanmaz.
+                </div>
+              </div>
+            </section>
+
+            <section class="panel screen" data-screen="jobs" hidden>
+              <h2>İnşaatlar ve görev geçmişi</h2>
+              <div class="panel-body">
+                <p class="muted">
+                  Devam eden inşaat ve en son kayıtlar burada gösterilir.
+                  Başarılı işler BullMQ’dan silinir; bu geçmiş PostgreSQL’de kalır.
+                </p>
+
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Bina</th>
+                        <th>Hedef</th>
+                        <th>Planlanan bitiş</th>
+                        <th>Durum</th>
+                      </tr>
+                    </thead>
+                    <tbody id="job-rows"></tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel screen" data-screen="account" hidden>
+              <h2>Hesap ve köy ayarları</h2>
+              <div class="panel-body">
+                <dl class="account-details">
+                  <dt>Google hesabı</dt>
+                  <dd id="user-email"></dd>
+                  <dt>Kayıt tarihi</dt>
+                  <dd id="user-created"></dd>
+                </dl>
+
+                <h3 class="section-title">Köy adını değiştir</h3>
+
+                <form id="rename-form">
+                  <label for="new-name">Yeni köy adı</label>
+                  <div class="form-row">
+                    <input
+                      id="new-name"
+                      name="name"
+                      required
+                      minlength="3"
+                      maxlength="32"
+                      autocomplete="off"
+                    >
+                    <button class="button" type="submit">Kaydet</button>
+                  </div>
+                  <p class="muted small">3–32 karakter kullanabilirsin.</p>
+                </form>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      UMAYKUT · Rust / Axum · PostgreSQL · BullMQ
+      <span id="sync-status"></span>
+    </footer>
   </div>
-
-  <script>
-    const logoutButton = document.getElementById("logout");
-    const actionMessage = document.getElementById("action-message");
-
-    logoutButton.addEventListener("click", async () => {
-      logoutButton.disabled = true;
-      actionMessage.textContent = "";
-
-      try {
-        const response = await fetch("/auth/logout", {
-          method: "POST",
-          credentials: "same-origin",
-        });
-
-        if (!response.ok) {
-          throw new Error("Logout failed");
-        }
-
-        // Otomatik yeniden Google girişine gitmek yerine
-        // kapanan oturumu açıkça göster.
-        document.querySelector("main").innerHTML = `
-          <section class="panel signed-out">
-            <div class="eyebrow">GÖRÜŞMEK ÜZERE, BEYİM</div>
-            <h1>Oturumun kapatıldı.</h1>
-            <p>Oban bir sonraki gelişini bekliyor.</p>
-            <a class="login-link" href="/auth/google">Google ile tekrar giriş yap →</a>
-          </section>
-        `;
-
-        document.querySelector(".account-info small").textContent =
-          "Oturum kapalı";
-      } catch {
-        actionMessage.textContent =
-          "Çıkış yapılamadı. Lütfen tekrar dene.";
-        logoutButton.disabled = false;
-      }
-    });
-  </script>
 </body>
 </html>

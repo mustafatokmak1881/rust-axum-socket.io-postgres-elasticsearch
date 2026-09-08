@@ -77,16 +77,10 @@ pub async fn execute(
             );
         }
 
-        // Sonraki aşama:
-        //
-        // "battle.resolve.v1" => {
-        //     battle_service::resolve(
-        //         &mut transaction,
-        //         &job.payload,
-        //     ).await?;
-        // }
-        //
-        // Savaş sonucu ve completed_at aynı transaction'da yazılmalı.
+        "building.upgrade.v1" => {
+            crate::web::api::complete_upgrade(&mut *transaction, job_id).await?;
+        }
+
         _ => {
             return Err(AppError::BadRequest("Unsupported job kind"));
         }
