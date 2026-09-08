@@ -21,14 +21,11 @@ impl Config {
         let internal_worker_secret = required("INTERNAL_WORKER_SECRET")?;
 
         ensure!(
-            internal_worker_secret.len() >= 32
-                && !internal_worker_secret.starts_with("replace_"),
+            internal_worker_secret.len() >= 32 && !internal_worker_secret.starts_with("replace_"),
             "INTERNAL_WORKER_SECRET must be a random secret of at least 32 characters"
         );
 
-        let app_origin = required("APP_ORIGIN")?
-            .trim_end_matches('/')
-            .to_owned();
+        let app_origin = required("APP_ORIGIN")?.trim_end_matches('/').to_owned();
 
         let cookie_secure = env::var("COOKIE_SECURE")
             .unwrap_or_else(|_| "false".to_owned())

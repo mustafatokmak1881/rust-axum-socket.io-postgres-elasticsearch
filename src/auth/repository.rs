@@ -146,10 +146,7 @@ pub async fn find_session_user(
     .await
 }
 
-pub async fn delete_session(
-    db: &PgPool,
-    token_hash: &str,
-) -> Result<(), sqlx::Error> {
+pub async fn delete_session(db: &PgPool, token_hash: &str) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
         .bind(token_hash)
         .execute(db)

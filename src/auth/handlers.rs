@@ -16,18 +16,8 @@ use axum::{
 use axum_extra::extract::CookieJar;
 
 use openidconnect::{
-    AccessTokenHash,
-    AuthenticationFlow,
-    AuthorizationCode,
-    CsrfToken,
-    Nonce,
-    OAuth2TokenResponse,
-    PkceCodeChallenge,
-    PkceCodeVerifier,
-    Scope,
-    TokenResponse,
-    core::CoreAuthenticationFlow,
-    reqwest::async_http_client,
+    AccessTokenHash, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse, PkceCodeChallenge,
+    PkceCodeVerifier, Scope, core::CoreAuthenticationFlow, reqwest::async_http_client,
 };
 
 use serde::Deserialize;
@@ -43,13 +33,12 @@ pub async fn google_login(
     State(state): State<SharedState>,
     jar: CookieJar,
 ) -> Result<(CookieJar, Redirect), AppError> {
-    let (pkce_challenge, pkce_verifier) =
-        PkceCodeChallenge::new_random_sha256();
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let (authorization_url, csrf_token, nonce) = state
         .google
         .authorize_url(
-            AuthenticationFlow::<CoreAuthenticationFlow>::AuthorizationCode,
+            CoreAuthenticationFlow::AuthorizationCode,
             CsrfToken::new_random,
             Nonce::new_random,
         )
@@ -120,15 +109,11 @@ pub async fn google_callback(
         .map_err(|_| AppError::Unauthorized)?;
 
     if let Some(expected_access_token_hash) = claims.access_token_hash() {
-        let signing_algorithm = id_token
-            .signing_alg()
-            .map_err(|_| AppError::Unauthorized)?;
+        let signing_algorithm = id_token.signing_alg().map_err(|_| AppError::Unauthorized)?;
 
-        let actual_access_token_hash = AccessTokenHash::from_token(
-            token_response.access_token(),
-            &signing_algorithm,
-        )
-        .map_err(|_| AppError::Unauthorized)?;
+        let actual_access_token_hash =
+            AccessTokenHash::from_token(token_response.access_token(), &signing_algorithm)
+                .map_err(|_| AppError::Unauthorized)?;
 
         if actual_access_token_hash != *expected_access_token_hash {
             return Err(AppError::Unauthorized);
@@ -186,12 +171,9 @@ pub async fn me(
         .ok_or(AppError::Unauthorized)?
         .value();
 
-    let user = repository::find_session_user(
-        &state.db,
-        &hash_token(session_token),
-    )
-    .await?
-    .ok_or(AppError::Unauthorized)?;
+    let user = repository::find_session_user(&state.db, &hash_token(session_token))
+        .await?
+        .ok_or(AppError::Unauthorized)?;
 
     Ok(Json(user))
 }
@@ -211,11 +193,7 @@ pub async fn logout(
     }
 
     if let Some(cookie) = jar.get(state.config.session_cookie_name()) {
-        repository::delete_session(
-            &state.db,
-            &hash_token(cookie.value()),
-        )
-        .await?;
+        repository::delete_session(&state.db, &hash_token(cookie.value())).await?;
     }
 
     let jar = jar.remove(removal_cookie(

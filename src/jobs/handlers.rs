@@ -1,7 +1,4 @@
-use crate::{
-    error::AppError,
-    state::SharedState,
-};
+use crate::{error::AppError, state::SharedState};
 
 use axum::{
     extract::{Path, State},
@@ -90,7 +87,6 @@ pub async fn execute(
         // }
         //
         // Savaş sonucu ve completed_at aynı transaction'da yazılmalı.
-
         _ => {
             return Err(AppError::BadRequest("Unsupported job kind"));
         }

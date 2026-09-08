@@ -7,8 +7,7 @@ mod security;
 mod state;
 
 use axum::{
-    Json,
-    Router,
+    Json, Router,
     extract::State,
     middleware::from_fn,
     routing::{get, post},
@@ -18,10 +17,7 @@ use config::Config;
 use error::AppError;
 
 use openidconnect::{
-    ClientId,
-    ClientSecret,
-    IssuerUrl,
-    RedirectUrl,
+    ClientId, ClientSecret, IssuerUrl, RedirectUrl,
     core::{CoreClient, CoreProviderMetadata},
     reqwest::async_http_client,
 };
@@ -40,8 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -55,9 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Migration dosyaları binary içine gömülür.
     // Ayrı sqlx CLI kurmak zorunlu değildir.
-    sqlx::migrate!("./migrations")
-        .run(&db)
-        .await?;
+    sqlx::migrate!("./migrations").run(&db).await?;
 
     tracing::info!("Database migrations applied");
 
@@ -72,17 +65,11 @@ async fn main() -> anyhow::Result<()> {
         ClientId::new(config.google_client_id.clone()),
         Some(ClientSecret::new(config.google_client_secret.clone())),
     )
-    .set_redirect_uri(
-        RedirectUrl::new(config.google_redirect_url())?,
-    );
+    .set_redirect_uri(RedirectUrl::new(config.google_redirect_url())?);
 
     let bind_address = format!("{}:{}", config.host, config.port);
 
-    let state: SharedState = Arc::new(AppState {
-        config,
-        db,
-        google,
-    });
+    let state: SharedState = Arc::new(AppState { config, db, google });
 
     let app = Router::new()
         .route("/health/live", get(live))
@@ -104,15 +91,12 @@ async fn main() -> anyhow::Result<()> {
     let cleanup_db = state.db.clone();
 
     let cleanup_task = tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(Duration::from_secs(15 * 60));
+        let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
 
         loop {
             interval.tick().await;
 
-            if let Err(error) =
-                auth::repository::cleanup_expired(&cleanup_db).await
-            {
+            if let Err(error) = auth::repository::cleanup_expired(&cleanup_db).await {
                 tracing::error!(
                     %error,
                     "Expired authentication records cleanup failed"
@@ -144,12 +128,8 @@ async fn live() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-async fn ready(
-    State(state): State<SharedState>,
-) -> Result<Json<Value>, AppError> {
-    sqlx::query("SELECT 1")
-        .execute(&state.db)
-        .await?;
+async fn ready(State(state): State<SharedState>) -> Result<Json<Value>, AppError> {
+    sqlx::query("SELECT 1").execute(&state.db).await?;
 
     Ok(Json(json!({
         "status": "ok",
@@ -166,12 +146,10 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        )
-        .expect("Failed to install terminate handler")
-        .recv()
-        .await;
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install terminate handler")
+            .recv()
+            .await;
     };
 
     #[cfg(not(unix))]

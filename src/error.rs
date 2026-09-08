@@ -32,10 +32,7 @@ impl IntoResponse for AppError {
             Self::Internal(error) => {
                 tracing::error!(error = %error, "Internal request error");
 
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal server error",
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
             }
         };
 
