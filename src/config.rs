@@ -40,7 +40,7 @@ impl Config {
         Ok(Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_owned()),
             port: env::var("PORT")
-                .unwrap_or_else(|_| "8080".to_owned())
+                .unwrap_or_else(|_| "3000".to_owned())
                 .parse()
                 .context("Invalid PORT")?,
 

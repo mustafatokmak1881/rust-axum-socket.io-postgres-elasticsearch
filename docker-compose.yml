@@ -60,7 +60,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
 
-      RUST_API_URL: http://host.docker.internal:${PORT:-8080}
+      RUST_API_URL: http://host.docker.internal:${PORT:-3000}
       INTERNAL_WORKER_SECRET: ${INTERNAL_WORKER_SECRET:?INTERNAL_WORKER_SECRET is required}
 
     extra_hosts:

@@ -114,9 +114,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Docker worker'ın host üzerindeki Rust'a ulaşması için 0.0.0.0.
 # Geliştirme ortamında firewall ayarlarını buna göre tut.
 HOST=0.0.0.0
-PORT=8080
+PORT=3000
 
-APP_ORIGIN=http://localhost:8080
+APP_ORIGIN=http://localhost:3000
 COOKIE_SECURE=false
 
 RUST_LOG=info,sqlx=warn
@@ -141,7 +141,7 @@ INTERNAL_WORKER_SECRET=replace_with_a_random_secret_at_least_32_characters
 Google callback adresini ayrıca environment’ta tekrar tutmuyoruz. `APP_ORIGIN` üzerinden üretilecek:
 
 ```text
-http://localhost:8080/auth/google/callback
+http://localhost:3000/auth/google/callback
 ```
 
 ## `.gitignore`
@@ -225,7 +225,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
 
-      RUST_API_URL: http://host.docker.internal:${PORT:-8080}
+      RUST_API_URL: http://host.docker.internal:${PORT:-3000}
       INTERNAL_WORKER_SECRET: ${INTERNAL_WORKER_SECRET:?INTERNAL_WORKER_SECRET is required}
 
     extra_hosts:
@@ -378,7 +378,7 @@ impl Config {
         Ok(Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_owned()),
             port: env::var("PORT")
-                .unwrap_or_else(|_| "8080".to_owned())
+                .unwrap_or_else(|_| "3000".to_owned())
                 .parse()
                 .context("Invalid PORT")?,
 
@@ -1645,7 +1645,7 @@ Google Cloud Console’da:
 5. Authorized redirect URI ekle:
 
 ```text
-http://localhost:8080/auth/google/callback
+http://localhost:3000/auth/google/callback
 ```
 
 6. Client ID ve secret’ı `.env` içine koy.
@@ -1702,7 +1702,7 @@ Rust:
 ## 13.4 Health kontrolü
 
 ```bash
-curl http://localhost:8080/health/ready
+curl http://localhost:3000/health/ready
 ```
 
 Beklenen:
@@ -1719,13 +1719,13 @@ Beklenen:
 Tarayıcıda:
 
 ```text
-http://localhost:8080/auth/google
+http://localhost:3000/auth/google
 ```
 
 Başarılı girişten sonra:
 
 ```text
-http://localhost:8080/auth/me
+http://localhost:3000/auth/me
 ```
 
 Örnek cevap:
