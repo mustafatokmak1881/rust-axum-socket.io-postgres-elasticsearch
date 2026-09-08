@@ -1,31 +1,186 @@
-mod middlewares;
-mod routes;
+mod auth;
+mod config;
+mod error;
+mod jobs;
+mod middleware;
+mod security;
+mod state;
 
-use axum::{Router, middleware};
-use dotenvy::dotenv;
-use middlewares::middlewares::logger_middleware;
-use std::env;
+use axum::{
+    Json,
+    Router,
+    extract::State,
+    middleware::from_fn,
+    routing::{get, post},
+};
+
+use config::Config;
+use error::AppError;
+
+use openidconnect::{
+    ClientId,
+    ClientSecret,
+    IssuerUrl,
+    RedirectUrl,
+    core::{CoreClient, CoreProviderMetadata},
+    reqwest::async_http_client,
+};
+
+use serde_json::{Value, json};
+use sqlx::postgres::PgPoolOptions;
+use state::{AppState, SharedState};
+
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() {
-    dotenv().ok();
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
 
-    let host: String = env::var("HOST").expect("HOST is not set in the .env file!");
-    let port: String = env::var("PORT").expect("PORT is not set in the .env file!");
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 
-    let full_url: String = format!("{}:{}", &host, &port);
-    let listener: TcpListener = TcpListener::bind(&full_url).await.unwrap();
+    let config = Config::from_env()?;
 
-    let auth_routes: Router = routes::auth::new().await;
-    let user_routes: Router = routes::user::new().await;
+    let db = PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await?;
 
-    // KRİTİK DÜZELTME: Fonksiyonların sonundaki parantezleri () sildik.
+    // Migration dosyaları binary içine gömülür.
+    // Ayrı sqlx CLI kurmak zorunlu değildir.
+    sqlx::migrate!("./migrations")
+        .run(&db)
+        .await?;
+
+    tracing::info!("Database migrations applied");
+
+    let google_metadata = CoreProviderMetadata::discover_async(
+        IssuerUrl::new("https://accounts.google.com".to_owned())?,
+        async_http_client,
+    )
+    .await?;
+
+    let google = CoreClient::from_provider_metadata(
+        google_metadata,
+        ClientId::new(config.google_client_id.clone()),
+        Some(ClientSecret::new(config.google_client_secret.clone())),
+    )
+    .set_redirect_uri(
+        RedirectUrl::new(config.google_redirect_url())?,
+    );
+
+    let bind_address = format!("{}:{}", config.host, config.port);
+
+    let state: SharedState = Arc::new(AppState {
+        config,
+        db,
+        google,
+    });
+
     let app = Router::new()
-        .nest("/auth", auth_routes)
-        .nest("/user", user_routes)
-        .layer(middleware::from_fn(logger_middleware));
+        .route("/health/live", get(live))
+        .route("/health/ready", get(ready))
+        .route("/auth/google", get(auth::handlers::google_login))
+        .route(
+            "/auth/google/callback",
+            get(auth::handlers::google_callback),
+        )
+        .route("/auth/me", get(auth::handlers::me))
+        .route("/auth/logout", post(auth::handlers::logout))
+        .route(
+            "/internal/jobs/{job_id}/execute",
+            post(jobs::handlers::execute),
+        )
+        .layer(from_fn(middleware::request_logger))
+        .with_state(state.clone());
 
-    println!("Full_url: {}", &full_url);
-    axum::serve(listener, app).await.unwrap();
+    let cleanup_db = state.db.clone();
+
+    let cleanup_task = tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(Duration::from_secs(15 * 60));
+
+        loop {
+            interval.tick().await;
+
+            if let Err(error) =
+                auth::repository::cleanup_expired(&cleanup_db).await
+            {
+                tracing::error!(
+                    %error,
+                    "Expired authentication records cleanup failed"
+                );
+            }
+        }
+    });
+
+    let listener = TcpListener::bind(&bind_address).await?;
+
+    tracing::info!(
+        address = %bind_address,
+        "Rust API started"
+    );
+
+    let result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await;
+
+    cleanup_task.abort();
+    state.db.close().await;
+
+    result?;
+
+    Ok(())
+}
+
+async fn live() -> Json<Value> {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn ready(
+    State(state): State<SharedState>,
+) -> Result<Json<Value>, AppError> {
+    sqlx::query("SELECT 1")
+        .execute(&state.db)
+        .await?;
+
+    Ok(Json(json!({
+        "status": "ok",
+        "postgres": "connected"
+    })))
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::terminate(),
+        )
+        .expect("Failed to install terminate handler")
+        .recv()
+        .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("Shutdown requested");
 }

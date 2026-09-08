@@ -1,0 +1,13 @@
+{
+  "name": "umaykut-bullmq",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "bullmq": "^5.58.0",
+    "pg": "^8.16.0"
+  }
+}
