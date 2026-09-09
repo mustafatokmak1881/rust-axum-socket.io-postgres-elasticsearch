@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="tr">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -40,28 +41,12 @@
       <form id="coordinate-form" class="coordinate-form">
         <label>
           X
-          <input
-            id="coordinate-x"
-            type="number"
-            min="0"
-            max="999"
-            value="500"
-            required
-            aria-label="Hedef X koordinatı"
-          >
+          <input id="coordinate-x" type="number" min="0" max="999" value="500" required aria-label="Hedef X koordinatı">
         </label>
         <span>|</span>
         <label>
           Y
-          <input
-            id="coordinate-y"
-            type="number"
-            min="0"
-            max="999"
-            value="500"
-            required
-            aria-label="Hedef Y koordinatı"
-          >
+          <input id="coordinate-y" type="number" min="0" max="999" value="500" required aria-label="Hedef Y koordinatı">
         </label>
         <button type="submit">Konuma git →</button>
       </form>
@@ -80,13 +65,24 @@
         </div>
 
         <div class="map-stage" id="map-stage">
-          <canvas
-            id="map"
-            tabindex="0"
-            aria-label="Dünya haritası. Ok tuşlarıyla hareket edebilirsiniz."
-          >
+          <canvas id="map" tabindex="0" aria-label="Dünya haritası. Ok tuşlarıyla hareket edebilirsiniz.">
             Harita için Canvas destekleyen bir tarayıcı gerekir.
           </canvas>
+
+          <div id="village-actions" class="village-actions" role="group" aria-label="Seçili köye verilecek komutlar"
+            hidden>
+            <button type="button" data-command="attack">
+              ⚔ Saldır
+            </button>
+
+            <button type="button" data-command="support">
+              ⚑ Destek
+            </button>
+
+            <button type="button" data-command="resources">
+              ▰ Hammadde
+            </button>
+          </div>
 
           <div class="map-controls">
             <button id="zoom-in" type="button" aria-label="Yakınlaştır">+</button>
@@ -142,12 +138,7 @@
             </div>
           </dl>
 
-          <button
-            id="center-selected"
-            class="primary-button"
-            type="button"
-            disabled
-          >
+          <button id="center-selected" class="primary-button" type="button" disabled>
             Haritada merkeze al
           </button>
 
@@ -166,12 +157,8 @@
             <span>1.000 × 1.000</span>
           </div>
 
-          <canvas
-            id="overview"
-            width="240"
-            height="150"
-            aria-label="Dünya sınırları, kendi köyün ve görünen alan"
-          ></canvas>
+          <canvas id="overview" width="240" height="150"
+            aria-label="Dünya sınırları, kendi köyün ve görünen alan"></canvas>
 
           <p>Altın nokta köyünü, çerçeve görüntülediğin alanı gösterir.</p>
         </section>
@@ -191,5 +178,34 @@
       Dünya hazırlanıyor…
     </p>
   </main>
+
+  <dialog id="command-dialog" class="command-dialog" aria-labelledby="command-title">
+    <div class="command-heading">
+      <h2 id="command-title">Komut ver</h2>
+
+      <button id="command-close" class="command-close" type="button" aria-label="Pencereyi kapat">×</button>
+    </div>
+
+    <div class="command-body">
+      <div class="command-target">
+        <strong id="command-target-name"></strong>
+        <span id="command-target-location"></span>
+        <span id="command-distance"></span>
+      </div>
+
+      <div id="command-information" class="command-information"></div>
+
+      <p class="command-note">
+        Bu pencere şu anda komut arayüzüdür.
+        Henüz asker veya kaynak hareketi oluşturmaz.
+      </p>
+
+      <button id="command-submit" class="command-submit" type="button" disabled>
+        Komut altyapısı hazırlanıyor
+      </button>
+    </div>
+  </dialog>
+
 </body>
+
 </html>

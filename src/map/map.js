@@ -17,7 +17,7 @@
         selected: null,
 
         camera: { x: 500.5, y: 500.5 },
-        scale: 42,
+        scale: 52,
 
         width: 1,
         height: 1,
@@ -521,13 +521,85 @@
                 drawTile(x, y);
             }
         }
-
         for (const village of state.villages) {
             drawVillage(village);
         }
 
+        drawCoordinateRulers();
         drawOverview();
+        positionVillageActions();
     }
+    const commandDialog = $("command-dialog");
+
+    function openCommand(type) {
+        const target = state.selected;
+
+        if (!state.ready || !target) return;
+
+        if (target.id === state.home.id || target.affiliation === "own") {
+            status("Bu komut kendi köyüne gönderilemez.", true);
+            return;
+        }
+
+        const titles = {
+            attack: "Saldırı emri",
+            support: "Destek gönder",
+            resources: "Hammadde gönder",
+        };
+
+        const descriptions = {
+            attack:
+                "Saldırıda köyündeki kullanılabilir birliklerden seçim yapılacak. " +
+                "Seçilen birlikler yola çıkarken köydeki ordudan düşülecek. " +
+                "Varış süresini ordudaki en yavaş birlik belirleyecek.",
+
+            support:
+                "Destek birlikleri hedef köye ulaştığında orada konuşlanacak. " +
+                "Birliklerin sahibi değişmeyecek. Daha sonra geri çağırma " +
+                "komutuyla kendi köyüne dönebilecekler.",
+
+            resources:
+                "Hammadde gönderiminde gönderilebilir kaynak ve taşıma kapasitesi " +
+                "sunucuda kontrol edilecek. Mevcut oyunda yalnızca odun var; " +
+                "kil, demir ve tüccar sistemi henüz eklenmedi.",
+        };
+
+        if (!titles[type]) return;
+
+        const distance = Math.hypot(
+            target.x - state.home.x,
+            target.y - state.home.y,
+        );
+
+        $("command-title").textContent = titles[type];
+        $("command-target-name").textContent = target.name;
+
+        $("command-target-location").textContent =
+            `${target.x} | ${target.y} · ${continent(target.x, target.y)}`;
+
+        $("command-distance").textContent =
+            `Mesafe: ${distance.toLocaleString("tr-TR", {
+                maximumFractionDigits: 2,
+            })} kare`;
+
+        $("command-information").textContent = descriptions[type];
+
+        if (!commandDialog.open) {
+            commandDialog.showModal();
+        }
+    }
+
+    $("village-actions").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-command]");
+
+        if (!button || button.disabled) return;
+
+        openCommand(button.dataset.command);
+    });
+
+    $("command-close").addEventListener("click", () => {
+        commandDialog.close();
+    });
 
     function selectVillage(village) {
         state.selected = village;
@@ -674,7 +746,25 @@
                 (item) => item.x === x && item.y === y,
             );
 
-            if (village) selectVillage(village);
+            if (village) {
+                selectVillage(village);
+            } else {
+                state.selected = null;
+                $("village-actions").hidden = true;
+                $("center-selected").disabled = true;
+                $("open-village").hidden = true;
+
+                $("selected-name").textContent = "Bir köy seç";
+                $("selected-coordinate").textContent =
+                    "Haritadaki bir yerleşime tıkla.";
+
+                $("selected-owner").textContent = "—";
+                $("selected-points").textContent = "—";
+                $("selected-distance").textContent = "—";
+                $("village-type").textContent = "—";
+
+                scheduleDraw();
+            }
         }
 
         state.drag = null;
@@ -684,6 +774,70 @@
             canvas.releasePointerCapture(event.pointerId);
         }
     });
+
+    function drawCoordinateRulers() {
+        const size = state.scale;
+
+        const startX = Math.max(
+            0,
+            Math.floor(state.camera.x - state.width / (2 * size)),
+        );
+
+        const endX = Math.min(
+            state.world.width - 1,
+            Math.ceil(state.camera.x + state.width / (2 * size)),
+        );
+
+        const startY = Math.max(
+            0,
+            Math.floor(state.camera.y - state.height / (2 * size)),
+        );
+
+        const endY = Math.min(
+            state.world.height - 1,
+            Math.ceil(state.camera.y + state.height / (2 * size)),
+        );
+
+        const step = Math.max(1, Math.ceil(35 / size));
+
+        ctx.save();
+
+        ctx.fillStyle = "#3f501fcc";
+        ctx.fillRect(0, 0, 30, state.height);
+        ctx.fillRect(0, state.height - 20, state.width, 20);
+
+        ctx.fillStyle = "#f3edc8";
+        ctx.font = "10px Arial";
+        ctx.textBaseline = "middle";
+
+        ctx.textAlign = "center";
+
+        for (let x = startX; x <= endX; x++) {
+            if (x % step !== 0) continue;
+
+            const point = toScreen(x + 0.5, state.camera.y);
+
+            if (point.x > 36 && point.x < state.width - 10) {
+                ctx.fillText(
+                    String(x),
+                    point.x,
+                    state.height - 10,
+                );
+            }
+        }
+
+        for (let y = startY; y <= endY; y++) {
+            if (y % step !== 0) continue;
+
+            const point = toScreen(state.camera.x, y + 0.5);
+
+            if (point.y > 8 && point.y < state.height - 25) {
+                ctx.fillText(String(y), 15, point.y);
+            }
+        }
+
+        ctx.restore();
+    }
 
     function cancelDrag() {
         state.drag = null;
@@ -764,6 +918,68 @@
 
         centerOn(x, y);
     });
+
+    function positionVillageActions() {
+        const menu = $("village-actions");
+        const village = state.selected;
+
+        if (!state.ready || !village) {
+            menu.hidden = true;
+            return;
+        }
+
+        const point = toScreen(
+            village.x + 0.5,
+            village.y + 0.5,
+        );
+
+        const visible =
+            point.x >= 0 &&
+            point.y >= 0 &&
+            point.x <= state.width &&
+            point.y <= state.height;
+
+        if (!visible) {
+            menu.hidden = true;
+            return;
+        }
+
+        menu.hidden = false;
+
+        const ownVillage = village.affiliation === "own";
+
+        menu.querySelectorAll("[data-command]").forEach((button) => {
+            // İlk sürümde oyuncunun tek köyü var.
+            button.disabled = ownVillage;
+            button.title = ownVillage
+                ? "Bu komut kendi köyüne gönderilemez."
+                : "";
+        });
+
+        const width = menu.offsetWidth;
+        const height = menu.offsetHeight;
+
+        const left = clamp(
+            point.x - width / 2,
+            6,
+            Math.max(6, state.width - width - 6),
+        );
+
+        let top = point.y - state.scale * 0.6 - height;
+
+        if (top < 6) {
+            top = point.y + state.scale * 0.45;
+        }
+
+        top = clamp(
+            top,
+            6,
+            Math.max(6, state.height - height - 6),
+        );
+
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+    }
 
     async function start() {
         try {
