@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1c2c24">
+  <title>Umaykut — Dünya Haritası</title>
+  <link rel="stylesheet" href="/assets/map.css">
+  <script src="/assets/map.js" defer></script>
+</head>
+
+<body>
+  <header class="header">
+    <a href="/game" class="brand">
+      <span class="brand-mark">ᛟ</span>
+      <span>UMAYKUT<small>BİR BOYUN YÜKSELİŞİ</small></span>
+    </a>
+
+    <nav aria-label="Oyun menüsü">
+      <a href="/game">Köy merkezi</a>
+      <a href="/map" class="active" aria-current="page">
+        Dünya haritası
+      </a>
+    </nav>
+
+    <span class="world-indicator">
+      <i></i>
+      <span id="world-name">Dünya yükleniyor</span>
+    </span>
+  </header>
+
+  <main>
+    <section class="heading">
+      <div>
+        <span class="eyebrow">UFUKLARIN ÖTESİNDE</span>
+        <h1>Dünya haritası</h1>
+        <p>Obanı bul. Komşularını tanı. Bozkırdaki yerini al.</p>
+      </div>
+
+      <form id="coordinate-form" class="coordinate-form">
+        <label>
+          X
+          <input
+            id="coordinate-x"
+            type="number"
+            min="0"
+            max="999"
+            value="500"
+            required
+            aria-label="Hedef X koordinatı"
+          >
+        </label>
+        <span>|</span>
+        <label>
+          Y
+          <input
+            id="coordinate-y"
+            type="number"
+            min="0"
+            max="999"
+            value="500"
+            required
+            aria-label="Hedef Y koordinatı"
+          >
+        </label>
+        <button type="submit">Konuma git →</button>
+      </form>
+    </section>
+
+    <div class="layout">
+      <section class="map-panel">
+        <div class="map-toolbar">
+          <div>
+            <span class="live-dot"></span>
+            <strong id="continent">K55</strong>
+            <span class="toolbar-divider">/</span>
+            <span id="center-label">500 | 500</span>
+          </div>
+          <span class="map-hint">Sürükle · Yakınlaştır · Köy seç</span>
+        </div>
+
+        <div class="map-stage" id="map-stage">
+          <canvas
+            id="map"
+            tabindex="0"
+            aria-label="Dünya haritası. Ok tuşlarıyla hareket edebilirsiniz."
+          >
+            Harita için Canvas destekleyen bir tarayıcı gerekir.
+          </canvas>
+
+          <div class="map-controls">
+            <button id="zoom-in" type="button" aria-label="Yakınlaştır">+</button>
+            <button id="zoom-out" type="button" aria-label="Uzaklaştır">−</button>
+            <button id="go-home" type="button" aria-label="Köyüme dön">⌂</button>
+          </div>
+
+          <div class="compass" aria-hidden="true">
+            <small>K</small>
+            ✧
+          </div>
+
+          <div class="map-position" id="hover-coordinate">
+            BOZKIR
+          </div>
+        </div>
+
+        <div class="map-bottom">
+          <div class="legend">
+            <span><i class="own"></i> Senin köyün</span>
+            <span><i class="player"></i> Oyuncu</span>
+            <span><i class="barbarian"></i> Barbar</span>
+          </div>
+          <span id="village-count">—</span>
+        </div>
+      </section>
+
+      <aside class="details">
+        <section class="village-card">
+          <div class="card-top">
+            <span class="eyebrow">SEÇİLİ YERLEŞİM</span>
+            <span id="village-type" class="type-badge">—</span>
+          </div>
+
+          <div class="village-emblem" aria-hidden="true">⌂</div>
+
+          <h2 id="selected-name">Bir köy seç</h2>
+          <p id="selected-coordinate" class="selected-coordinate">
+            Haritadaki bir yerleşime tıkla.
+          </p>
+
+          <dl class="village-stats">
+            <div>
+              <dt>Bağlılık</dt>
+              <dd id="selected-owner">—</dd>
+            </div>
+            <div>
+              <dt>Köy puanı</dt>
+              <dd id="selected-points">—</dd>
+            </div>
+            <div>
+              <dt>Köyüne mesafe</dt>
+              <dd id="selected-distance">—</dd>
+            </div>
+          </dl>
+
+          <button
+            id="center-selected"
+            class="primary-button"
+            type="button"
+            disabled
+          >
+            Haritada merkeze al
+          </button>
+
+          <a id="open-village" href="/game" class="secondary-button" hidden>
+            Köy merkezine git →
+          </a>
+
+          <p class="development-note">
+            Saldırı, destek ve keşif emirleri sonraki aşamada eklenecek.
+          </p>
+        </section>
+
+        <section class="overview-card">
+          <div class="overview-heading">
+            <h3>Dünyadaki konumun</h3>
+            <span>1.000 × 1.000</span>
+          </div>
+
+          <canvas
+            id="overview"
+            width="240"
+            height="150"
+            aria-label="Dünya sınırları, kendi köyün ve görünen alan"
+          ></canvas>
+
+          <p>Altın nokta köyünü, çerçeve görüntülediğin alanı gösterir.</p>
+        </section>
+
+        <div class="world-note">
+          <span>☼</span>
+          <p>
+            <strong>Her büyük destan bir oba ile başlar.</strong>
+            Orman ve tepeler şimdilik görseldir;
+            hareket süresini değiştirmez.
+          </p>
+        </div>
+      </aside>
+    </div>
+
+    <p id="status" class="status" role="status" aria-live="polite">
+      Dünya hazırlanıyor…
+    </p>
+  </main>
+</body>
+</html>
