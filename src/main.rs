@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod jobs;
+mod map;
 mod middleware;
 mod security;
 mod state;
@@ -72,6 +73,12 @@ async fn main() -> anyhow::Result<()> {
     let state: SharedState = Arc::new(AppState { config, db, google });
 
     let app = Router::new()
+        .route("/map", get(map::page))
+        .route("/assets/map.css", get(map::stylesheet))
+        .route("/assets/map.js", get(map::javascript))
+        .route("/api/map/bootstrap", get(map::bootstrap))
+        .route("/api/map/join", post(map::join))
+        .route("/api/map/area", get(map::area))
         .route("/", get(web::index))
         .route("/game", get(web::game))
         .route("/assets/game.css", get(web::stylesheet))
