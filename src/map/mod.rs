@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Query, State},
-    http::{HeaderMap, header},
+    http::header,
     response::{Html, IntoResponse, Redirect, Response},
 };
 
@@ -123,7 +123,7 @@ pub async fn javascript() -> impl IntoResponse {
 pub async fn bootstrap(
     State(state): State<SharedState>,
     jar: CookieJar,
-) -> Result<Json<Bootstrap>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     let user = current_user(&state, &jar).await?;
 
     let world = sqlx::query_as::<_, World>(
@@ -139,11 +139,18 @@ pub async fn bootstrap(
 
     let village = sqlx::query_as::<_, Village>(
         r#"
-        SELECT id, name, x, y, points
-        FROM villages
-        WHERE world_id = $1 AND owner_id = $2
-        ORDER BY created_at, id
-        LIMIT 1
+        SELECT
+            v.id,
+            v.name,
+            v.x,
+            v.y,
+            COALESCE(SUM(b.level), 0)::INTEGER AS points
+        FROM villages v
+        LEFT JOIN village_buildings b
+            ON b.village_id = v.id
+        WHERE v.world_id = $1
+          AND v.owner_id = $2
+        GROUP BY v.id, v.name, v.x, v.y
         "#,
     )
     .bind(world_id())
@@ -151,121 +158,19 @@ pub async fn bootstrap(
     .fetch_optional(&state.db)
     .await?;
 
-    Ok(Json(Bootstrap { world, village }))
-}
-
-// İlk köy oluşturma durum değiştirir: GET yerine POST.
-// Cookie oturumu + Origin kontrolü uygulanır.
-pub async fn join(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-    jar: CookieJar,
-) -> Result<Json<Village>, AppError> {
-    let origin = headers
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok());
-
-    if origin != Some(state.config.app_origin.as_str()) {
-        return Err(AppError::Forbidden);
-    }
-
-    let user = current_user(&state, &jar).await?;
-    let mut transaction = state.db.begin().await?;
-
-    // İlk sürümde köy yerleştirmelerini sıraya alır.
-    // Aynı anda iki sekme açılması veya farklı Rust instance'ları
-    // aynı kullanıcı için iki başlangıç köyü oluşturmaz.
-    sqlx::query("SELECT pg_advisory_xact_lock(731001::bigint)")
-        .execute(&mut *transaction)
-        .await?;
-
-    let existing = sqlx::query_as::<_, Village>(
-        r#"
-        SELECT id, name, x, y, points
-        FROM villages
-        WHERE world_id = $1 AND owner_id = $2
-        ORDER BY created_at, id
-        LIMIT 1
-        "#,
-    )
-    .bind(world_id())
-    .bind(user.id)
-    .fetch_optional(&mut *transaction)
-    .await?;
-
-    if let Some(village) = existing {
-        transaction.commit().await?;
-        return Ok(Json(village));
-    }
-
-    // Başlangıç oyuncuları merkez çevresinde yerleşir.
-    // Bu geliştirme sürümünde başlangıç alanı 100 x 100 kare.
-    let position = sqlx::query_as::<_, (i32, i32)>(
-        r#"
-        SELECT gx.x, gy.y
-        FROM generate_series(450, 549) AS gx(x)
-        CROSS JOIN generate_series(450, 549) AS gy(y)
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM villages v
-            WHERE v.world_id = $1
-              AND v.x = gx.x
-              AND v.y = gy.y
-        )
-        ORDER BY md5(
-            gx.x::text || ':' ||
-            gy.y::text || ':' ||
-            $2::text
-        )
-        LIMIT 1
-        "#,
-    )
-    .bind(world_id())
-    .bind(user.id.to_string())
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AppError::BadRequest(
-        "Starting area is full",
-    ))?;
-
-    let village = sqlx::query_as::<_, Village>(
-        r#"
-        INSERT INTO villages (
-            id,
-            world_id,
-            owner_id,
-            name,
-            x,
-            y,
-            points
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, 0)
-        RETURNING id, name, x, y, points
-        "#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(world_id())
-    .bind(user.id)
-    .bind("Yeni Oba")
-    .bind(position.0)
-    .bind(position.1)
-    .fetch_one(&mut *transaction)
-    .await?;
-
-    transaction.commit().await?;
-
-    Ok(Json(village))
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(Bootstrap { world, village }),
+    ))
 }
 
 pub async fn area(
     State(state): State<SharedState>,
     jar: CookieJar,
     Query(bounds): Query<MapBounds>,
-) -> Result<Json<MapResponse>, AppError> {
+) -> Result<impl IntoResponse, AppError> {
     let user = current_user(&state, &jar).await?;
 
-    // Önce sınırlar, ardından genişlik kontrol edilir.
-    // Böylece kontrolsüz büyük sorgular ve aritmetik taşma önlenir.
     if bounds.min_x < 0
         || bounds.min_y < 0
         || bounds.max_x > 999
@@ -287,21 +192,23 @@ pub async fn area(
     let villages = sqlx::query_as::<_, MapVillage>(
         r#"
         SELECT
-            id,
-            name,
-            x,
-            y,
-            points,
+            v.id,
+            v.name,
+            v.x,
+            v.y,
+            COALESCE(SUM(b.level), 0)::INTEGER AS points,
             CASE
-                WHEN owner_id = $2 THEN 'own'
-                WHEN owner_id IS NULL THEN 'barbarian'
+                WHEN v.owner_id = $2 THEN 'own'
                 ELSE 'player'
             END AS affiliation
-        FROM villages
-        WHERE world_id = $1
-          AND x BETWEEN $3 AND $4
-          AND y BETWEEN $5 AND $6
-        ORDER BY y, x
+        FROM villages v
+        LEFT JOIN village_buildings b
+            ON b.village_id = v.id
+        WHERE v.world_id = $1
+          AND v.x BETWEEN $3 AND $4
+          AND v.y BETWEEN $5 AND $6
+        GROUP BY v.id, v.name, v.x, v.y, v.owner_id
+        ORDER BY v.y, v.x
         "#,
     )
     .bind(world_id())
@@ -313,5 +220,8 @@ pub async fn area(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(MapResponse { villages }))
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(MapResponse { villages }),
+    ))
 }

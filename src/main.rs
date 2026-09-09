@@ -77,7 +77,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/assets/map.css", get(map::stylesheet))
         .route("/assets/map.js", get(map::javascript))
         .route("/api/map/bootstrap", get(map::bootstrap))
-        .route("/api/map/join", post(map::join))
         .route("/api/map/area", get(map::area))
         .route("/", get(web::index))
         .route("/game", get(web::game))
