@@ -169,29 +169,29 @@ pub async fn create_village(
     let village_id = if let Some(id) = existing_id {
         id
     } else {
-        // İlk sürümün oyuncu yerleştirme bölgesi: 450–549.
         let position = sqlx::query_as::<_, (i32, i32)>(
             r#"
-            SELECT gx.x, gy.y
-            FROM generate_series(450, 549) AS gx(x)
-            CROSS JOIN generate_series(450, 549) AS gy(y)
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM villages v
-                WHERE v.world_id = $1
-                  AND v.x = gx.x
-                  AND v.y = gy.y
-            )
-            ORDER BY md5(
-                gx.x::text || ':' ||
-                gy.y::text || ':' ||
-                $2::text
-            )
-            LIMIT 1
-            "#,
+    SELECT gx.x, gy.y
+    FROM generate_series(460, 540, 4) AS gx(x)
+    CROSS JOIN generate_series(460, 540, 4) AS gy(y)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM villages v
+        WHERE v.world_id = $1
+          AND (
+              (v.x - gx.x) * (v.x - gx.x)
+              + (v.y - gy.y) * (v.y - gy.y)
+          ) < 16
+    )
+    ORDER BY
+        (gx.x - 500) * (gx.x - 500)
+        + (gy.y - 500) * (gy.y - 500),
+        gy.y,
+        gx.x
+    LIMIT 1
+    "#,
         )
         .bind(world_id)
-        .bind(user.id.to_string())
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(AppError::BadRequest("Starting area is full"))?;
