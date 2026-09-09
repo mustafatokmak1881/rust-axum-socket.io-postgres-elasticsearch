@@ -1,13 +1,14 @@
 mod auth;
 mod config;
+mod economy;
 mod error;
 mod jobs;
 mod map;
 mod middleware;
+mod military;
 mod security;
 mod state;
 mod web;
-mod economy;
 
 use axum::{
     Json, Router,
@@ -74,6 +75,8 @@ async fn main() -> anyhow::Result<()> {
     let state: SharedState = Arc::new(AppState { config, db, google });
 
     let app = Router::new()
+        .route("/api/military", get(military::bootstrap))
+        .route("/api/military/attacks", post(military::send_attack))
         .route(
             "/assets/building-headquarters.svg",
             get(web::headquarters_art),

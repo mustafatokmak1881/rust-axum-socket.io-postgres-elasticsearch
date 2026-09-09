@@ -335,6 +335,17 @@ pub async fn create_village(
         .await?;
     }
 
+    sqlx::query(
+        r#"
+    INSERT INTO village_armies (village_id, spears)
+    VALUES ($1, 50)
+    ON CONFLICT (village_id) DO NOTHING
+    "#,
+    )
+    .bind(village_id)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
