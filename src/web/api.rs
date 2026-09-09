@@ -1,3 +1,5 @@
+use crate::economy;
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -28,6 +30,23 @@ struct Village {
 struct Building {
     kind: String,
     level: i32,
+}
+
+#[derive(Serialize)]
+struct BuildingOffer {
+    kind: String,
+    level: i32,
+    max_level: i32,
+
+    cost_wood: Option<i64>,
+    duration_seconds: Option<i32>,
+
+    production_per_hour: Option<i64>,
+    next_production_per_hour: Option<i64>,
+
+    requirements: Vec<economy::Requirement>,
+    can_upgrade: bool,
+    blocked_reason: Option<String>,
 }
 
 #[derive(Serialize, FromRow)]
@@ -72,23 +91,36 @@ pub async fn bootstrap(
     jar: CookieJar,
 ) -> Result<Json<Value>, AppError> {
     let user = current_user(&state, &jar).await?;
-
     let mut tx = state.db.begin().await?;
 
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut village = sqlx::query_as::<_, Village>(
+        r#"
+        SELECT id, name, wood
+        FROM villages
+        WHERE owner_id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(user.id)
+    .fetch_optional(&mut *tx)
+    .await?;
 
-    let village =
-        sqlx::query_as::<_, Village>("SELECT id, name, wood FROM villages WHERE owner_id = $1")
-            .bind(user.id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    // Köy kilidi alındıktan sonra zamanı al.
+    let server_time: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
 
     let mut buildings: Vec<Building> = Vec::new();
     let mut upgrades: Vec<Upgrade> = Vec::new();
+    let mut offers: Vec<BuildingOffer> = Vec::new();
+    let mut economy_snapshot = None;
 
-    if let Some(village) = &village {
+    if let Some(village) = village.as_mut() {
+        let resources = economy::settle(&mut *tx, village.id, server_time).await?;
+
+        village.wood = resources.wood;
+        economy_snapshot = Some(resources);
+
         buildings = sqlx::query_as::<_, Building>(
             r#"
             SELECT kind, level
@@ -122,11 +154,75 @@ pub async fn bootstrap(
         .bind(village.id)
         .fetch_all(&mut *tx)
         .await?;
-    }
 
-    let server_time: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut *tx)
-        .await?;
+        let pending = upgrades.iter().any(|u| u.completed_at.is_none());
+
+        for building in &buildings {
+            let max_level = economy::max_level(&building.kind).ok_or_else(|| {
+                AppError::Internal(anyhow::anyhow!("Unknown building kind: {}", building.kind))
+            })?;
+
+            let maxed = building.level >= max_level;
+            let target = building.level + 1;
+
+            let cost = if maxed {
+                None
+            } else {
+                Some(economy::upgrade_cost(target))
+            };
+
+            let seconds = if maxed {
+                None
+            } else {
+                Some(economy::upgrade_seconds(target))
+            };
+
+            let requirements =
+                economy::requirement_status(&mut *tx, village.id, &building.kind).await?;
+
+            let missing = requirements.iter().find(|r| !r.met);
+
+            let blocked_reason = if maxed {
+                Some("En yüksek seviye".to_owned())
+            } else if let Some(requirement) = missing {
+                Some(format!(
+                    "{} seviye {} gerekli",
+                    requirement.name, requirement.required_level,
+                ))
+            } else if pending {
+                Some("İnşaat sürüyor".to_owned())
+            } else if village.wood < cost.unwrap_or(0) {
+                Some("Odun yetersiz".to_owned())
+            } else {
+                None
+            };
+
+            let production = if building.kind == "timber" {
+                Some(economy::timber_production(building.level)?)
+            } else {
+                None
+            };
+
+            let next_production = if building.kind == "timber" && !maxed {
+                Some(economy::timber_production(target)?)
+            } else {
+                None
+            };
+
+            offers.push(BuildingOffer {
+                kind: building.kind.clone(),
+                level: building.level,
+                max_level,
+                cost_wood: cost,
+                duration_seconds: seconds,
+                production_per_hour: production,
+                next_production_per_hour: next_production,
+                requirements,
+                can_upgrade: blocked_reason.is_none(),
+                blocked_reason,
+            });
+        }
+    }
 
     tx.commit().await?;
 
@@ -135,7 +231,12 @@ pub async fn bootstrap(
         "village": village,
         "buildings": buildings,
         "upgrades": upgrades,
+        "offers": offers,
+        "economy": economy_snapshot,
         "server_time": server_time,
+
+        // Eski istemci alanlarını geçiş için koruyoruz.
+        // Yeni frontend teklifler için offers alanını kullanacak.
         "rules": {
             "max_level": 20,
             "wood_per_target_level": 100,
@@ -298,6 +399,12 @@ pub async fn start_upgrade(
     .await?
     .ok_or(AppError::NotFound)?;
 
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
+
+    let resources = economy::settle(&mut *tx, village.id, now).await?;
+
     let pending: bool = sqlx::query_scalar(
         r#"
         SELECT EXISTS (
@@ -331,15 +438,19 @@ pub async fn start_upgrade(
     .fetch_one(&mut *tx)
     .await?;
 
-    if level >= 20 {
+    let max_level = economy::max_level(&kind).ok_or(AppError::BadRequest("Geçersiz bina."))?;
+
+    if level >= max_level {
         return Err(AppError::BadRequest("Bina en yüksek seviyede."));
     }
 
-    let target_level = level + 1;
-    let cost = i64::from(target_level) * 100;
-    let duration_seconds = target_level * 15;
+    economy::ensure_requirements(&mut *tx, village.id, &kind).await?;
 
-    if village.wood < cost {
+    let target_level = level + 1;
+    let cost = economy::upgrade_cost(target_level);
+    let duration_seconds = economy::upgrade_seconds(target_level);
+
+    if resources.wood < cost {
         return Err(AppError::BadRequest("Yeterli odun yok."));
     }
 
@@ -358,7 +469,7 @@ pub async fn start_upgrade(
             $1,
             'building.upgrade.v1',
             '{}'::jsonb,
-            NOW() + ($2::integer * INTERVAL '1 second')
+            clock_timestamp() + ($2::integer * INTERVAL '1 second')
         )
         RETURNING run_at
         "#,
@@ -398,15 +509,18 @@ pub async fn start_upgrade(
     ))
 }
 
-// Worker endpoint'i tarafından mevcut transaction içinde çağrılır.
-// İstemciden seviye, maliyet veya village_id kabul etmez.
 pub async fn complete_upgrade(connection: &mut PgConnection, job_id: Uuid) -> Result<(), AppError> {
-    let upgrade = sqlx::query_as::<_, (Uuid, String, i32)>(
+    let upgrade = sqlx::query_as::<_, (Uuid, String, i32, DateTime<Utc>)>(
         r#"
-        SELECT village_id, building_kind, target_level
-        FROM building_upgrades
-        WHERE job_id = $1
-          AND completed_at IS NULL
+        SELECT
+            u.village_id,
+            u.building_kind,
+            u.target_level,
+            j.run_at
+        FROM building_upgrades u
+        JOIN scheduled_jobs j ON j.id = u.job_id
+        WHERE u.job_id = $1
+          AND u.completed_at IS NULL
         "#,
     )
     .bind(job_id)
@@ -414,13 +528,25 @@ pub async fn complete_upgrade(connection: &mut PgConnection, job_id: Uuid) -> Re
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let (village_id, building_kind, target_level) = upgrade;
+    let (village_id, building_kind, target_level, run_at) = upgrade;
 
     sqlx::query("SELECT id FROM villages WHERE id = $1 FOR UPDATE")
         .bind(village_id)
         .fetch_one(&mut *connection)
         .await?;
 
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *connection)
+        .await?;
+
+    if now < run_at {
+        return Err(AppError::BadRequest("Job is not due yet"));
+    }
+
+    // 1. İnşaatın hedef bitişine kadar eski seviye üretimi.
+    economy::settle(&mut *connection, village_id, run_at).await?;
+
+    // 2. Bina seviyesini yükselt.
     let result = sqlx::query(
         r#"
         UPDATE village_buildings
@@ -432,7 +558,7 @@ pub async fn complete_upgrade(connection: &mut PgConnection, job_id: Uuid) -> Re
     )
     .bind(target_level)
     .bind(village_id)
-    .bind(building_kind)
+    .bind(&building_kind)
     .execute(&mut *connection)
     .await?;
 
@@ -442,16 +568,21 @@ pub async fn complete_upgrade(connection: &mut PgConnection, job_id: Uuid) -> Re
         )));
     }
 
+    // 3. Bekleyen üretim sınırını kaldır.
     sqlx::query(
         r#"
         UPDATE building_upgrades
-        SET completed_at = NOW()
+        SET completed_at = $2
         WHERE job_id = $1
         "#,
     )
     .bind(job_id)
+    .bind(now)
     .execute(&mut *connection)
     .await?;
+
+    // 4. Worker geç çalıştıysa run_at -> now arası yeni hızla üret.
+    economy::settle(&mut *connection, village_id, now).await?;
 
     Ok(())
 }

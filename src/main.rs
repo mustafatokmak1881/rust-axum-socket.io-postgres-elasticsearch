@@ -7,6 +7,7 @@ mod middleware;
 mod security;
 mod state;
 mod web;
+mod economy;
 
 use axum::{
     Json, Router,

@@ -239,48 +239,74 @@ function render() {
     nameInput.dataset.villageId = village.id;
   }
 
-  $("#building-rows").innerHTML = buildings.map((building) => {
-    const definition = definitions[building.kind];
+  $("#building-rows").innerHTML = (snapshot.offers || []).map((offer) => {
+    const definition = definitions[offer.kind];
     if (!definition) return "";
 
-    const maxed = building.level >= rules.max_level;
-    const target = building.level + 1;
-    const cost = target * rules.wood_per_target_level;
-    const seconds = target * rules.seconds_per_target_level;
+    const maxed = offer.level >= offer.max_level;
 
-    let reason = "";
+    const reason = mutating
+      ? "İşleniyor…"
+      : offer.blocked_reason || "";
 
-    if (maxed) reason = "En yüksek seviye";
-    else if (active) reason = "İnşaat sürüyor";
-    else if (village.wood < cost) reason = "Odun yetersiz";
-    else if (mutating) reason = "İşleniyor…";
+    const requirements = offer.requirements.map((requirement) => `
+    <span class="${requirement.met ? "requirement-met" : "requirement-missing"}">
+      ${requirement.met ? "✓" : "✗"}
+      ${escapeHtml(requirement.name)}
+      ${requirement.required_level}
+    </span>
+  `).join(" · ");
+
+    const production = offer.production_per_hour !== null
+      ? `
+      <small class="production-description">
+        ${number(offer.production_per_hour)} odun/saat
+        ${offer.next_production_per_hour !== null
+        ? ` → ${number(offer.next_production_per_hour)} odun/saat`
+        : ""}
+      </small>
+    `
+      : "";
 
     return `
-      <tr>
-        <td>
-          <div class="building-cell">
-            <span class="building-icon">${definition.icon}</span>
-            <div>
-              <strong>${definition.name}</strong>
-              <small>${definition.description}</small>
-            </div>
+    <tr>
+      <td>
+        <div class="building-cell">
+          <span class="building-icon">${definition.icon}</span>
+
+          <div>
+            <strong>${escapeHtml(definition.name)}</strong>
+            <small>${escapeHtml(definition.description)}</small>
+            ${production}
+            ${requirements
+        ? `<small class="building-requirements">${requirements}</small>`
+        : ""}
           </div>
-        </td>
-        <td><b>${building.level}</b></td>
-        <td>${maxed ? "—" : number(cost)}</td>
-        <td>${maxed ? "—" : duration(seconds)}</td>
-        <td>
-          <button
-            class="button small-button"
-            type="button"
-            data-upgrade="${building.kind}"
-            ${reason ? "disabled" : ""}
-          >
-            ${reason || `Seviye ${target} yükselt`}
-          </button>
-        </td>
-      </tr>
-    `;
+        </div>
+      </td>
+
+      <td><b>${offer.level}</b> / ${offer.max_level}</td>
+
+      <td>
+        ${maxed ? "—" : number(offer.cost_wood)}
+      </td>
+
+      <td>
+        ${maxed ? "—" : duration(offer.duration_seconds)}
+      </td>
+
+      <td>
+        <button
+          class="button small-button"
+          type="button"
+          data-upgrade="${escapeHtml(offer.kind)}"
+          ${mutating || !offer.can_upgrade ? "disabled" : ""}
+        >
+          ${escapeHtml(reason || `Seviye ${offer.level + 1} yükselt`)}
+        </button>
+      </td>
+    </tr>
+  `;
   }).join("");
 
   buildings.forEach((building) => {
@@ -325,7 +351,41 @@ function render() {
   `;
 
   updateCountdowns();
+  updateLiveResources();
   applyTab();
+}
+
+function updateLiveResources() {
+  if (!snapshot?.village || !snapshot.economy) return;
+
+  const economy = snapshot.economy;
+  const updatedAt = Date.parse(economy.resources_updated_at);
+
+  let displayTime = Date.now() + serverOffset;
+
+  // İnşaatın bitişinden sonra eski üretim hızıyla tahmin yapma.
+  if (economy.production_valid_until) {
+    displayTime = Math.min(
+      displayTime,
+      Date.parse(economy.production_valid_until),
+    );
+  }
+
+  const elapsedMs = Math.max(0, displayTime - updatedAt);
+
+  const projectedWood = Math.floor(
+    economy.wood
+    + economy.wood_remainder / 3_600_000_000
+    + elapsedMs * economy.wood_per_hour / 3_600_000,
+  );
+
+  $("#wood").textContent = number(projectedWood);
+
+  const rate = $("#wood-rate");
+
+  if (rate) {
+    rate.textContent = `+${number(economy.wood_per_hour)}/saat`;
+  }
 }
 
 function updateCountdowns() {
@@ -495,10 +555,9 @@ setInterval(() => {
   void refresh();
 }, 250);
 
-// Bu interval API çağrısı yapmaz; yalnızca yazıyı günceller.
 setInterval(() => {
-  if (!document.hidden) {
-    updateCountdowns();
+  if (!document.hidden && !sessionExpired) {
+    updateLiveResources();
   }
 }, 250);
 

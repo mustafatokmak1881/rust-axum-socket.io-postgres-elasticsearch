@@ -1613,3 +1613,30 @@ input {
     }
   }
 }
+
+.resource-rate {
+  display: block;
+  margin-top: 3px;
+  color: #526d2d;
+  font-size: 10px;
+}
+
+.building-cell .production-description {
+  display: block;
+  color: #49652a;
+  margin-top: 4px;
+}
+
+.building-cell .building-requirements {
+  display: block;
+  margin-top: 4px;
+  font-size: 9px;
+}
+
+.requirement-met {
+  color: #657645;
+}
+
+.requirement-missing {
+  color: #a03e2e;
+}
