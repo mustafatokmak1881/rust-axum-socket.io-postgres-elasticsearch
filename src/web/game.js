@@ -135,6 +135,80 @@ function applyTab() {
   });
 }
 
+function activeUpgradeMarkup(upgrade) {
+  const definition = definitions[upgrade.building_kind];
+  const name = definition?.name || upgrade.building_kind;
+
+  // icon yalnızca kod içinde tanımladığımız sabit görsellerden gelir.
+  const icon = definition?.icon || "";
+
+  return `
+    <div class="table-scroll live-construction">
+      <table>
+        <thead>
+          <tr>
+            <th>İnşaat</th>
+            <th>Kalan süre</th>
+            <th>Planlanan tamamlanma</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <tr>
+            <td>
+              <div class="building-cell">
+                <span class="building-icon">${icon}</span>
+
+                <div>
+                  <strong>${escapeHtml(name)}</strong>
+                  <small>Seviye ${escapeHtml(upgrade.target_level)}</small>
+                </div>
+              </div>
+            </td>
+
+            <td>
+              <strong
+                class="construction-countdown"
+                data-countdown="${escapeHtml(upgrade.run_at)}"
+              ></strong>
+            </td>
+
+            <td>
+              <time datetime="${escapeHtml(upgrade.run_at)}">
+                ${escapeHtml(date(upgrade.run_at))}
+              </time>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderActiveConstruction(active) {
+  const overviewQueue = $("#active-upgrade");
+  const buildingsWrapper = $("#buildings-active-queue");
+  const buildingsQueue = $("#buildings-active-upgrade");
+
+  if (active) {
+    const markup = activeUpgradeMarkup(active);
+
+    overviewQueue.innerHTML = markup;
+    buildingsQueue.innerHTML = markup;
+    buildingsWrapper.hidden = false;
+    return;
+  }
+
+  // Tamamlanan inşaat, binalar ekranından tamamen kaldırılır.
+  buildingsQueue.innerHTML = "";
+  buildingsWrapper.hidden = true;
+
+  overviewQueue.innerHTML = `
+    <p class="muted">Devam eden inşaat yok.</p>
+    <a class="button" href="#buildings">Binaları geliştir</a>
+  `;
+}
+
 function render() {
   if (!snapshot) return;
 
@@ -217,43 +291,38 @@ function render() {
     }
   });
 
-  $("#active-upgrade").innerHTML = active
-    ? `
-      <div class="active-build">
-        <div>
-          <strong>${escapeHtml(
-      definitions[active.building_kind]?.name || active.building_kind,
-    )}</strong>
-          <span> → Seviye ${active.target_level}</span>
-        </div>
-        <b data-countdown="${escapeHtml(active.run_at)}"></b>
-      </div>
-      <p class="muted small">
-        Hedef bitiş: ${escapeHtml(date(active.run_at))}
-      </p>
-    `
-    : `
-      <p>Şu anda devam eden inşaat yok.</p>
-      <a class="button" href="#buildings">Binaları geliştir</a>
-    `;
+  renderActiveConstruction(active);
 
-  $("#job-rows").innerHTML = upgrades.length
-    ? upgrades.map((upgrade) => `
-      <tr>
-        <td>${escapeHtml(
+  const pendingUpgrades = upgrades.filter(
+    (upgrade) => !upgrade.completed_at,
+  );
+
+  $("#job-rows").innerHTML = pendingUpgrades.length
+    ? pendingUpgrades.map((upgrade) => `
+    <tr>
+      <td>${escapeHtml(
       definitions[upgrade.building_kind]?.name || upgrade.building_kind,
     )}</td>
-        <td>${upgrade.target_level}</td>
-        <td>${escapeHtml(date(upgrade.run_at))}</td>
-        <td>
-          ${upgrade.completed_at
-        ? `<span class="completed">✓ Tamamlandı</span>`
-        : `<span data-countdown="${escapeHtml(upgrade.run_at)}"></span>`
-      }
-        </td>
-      </tr>
-    `).join("")
-    : '<tr><td colspan="4" class="empty">Henüz inşaat kaydı yok.</td></tr>';
+
+      <td>${escapeHtml(upgrade.target_level)}</td>
+
+      <td>${escapeHtml(date(upgrade.run_at))}</td>
+
+      <td>
+        <span
+          class="construction-countdown"
+          data-countdown="${escapeHtml(upgrade.run_at)}"
+        ></span>
+      </td>
+    </tr>
+  `).join("")
+    : `
+    <tr>
+      <td colspan="4" class="empty">
+        Devam eden inşaat bulunmuyor.
+      </td>
+    </tr>
+  `;
 
   updateCountdowns();
   applyTab();
@@ -263,11 +332,31 @@ function updateCountdowns() {
   const now = Date.now() + serverOffset;
 
   document.querySelectorAll("[data-countdown]").forEach((element) => {
-    const remaining = new Date(element.dataset.countdown).getTime() - now;
+    const end = Date.parse(element.dataset.countdown);
 
-    element.textContent = remaining > 0
-      ? duration(remaining / 1000)
-      : "Sunucu sonucu bekleniyor…";
+    if (!Number.isFinite(end)) {
+      element.textContent = "Süre alınamadı";
+      element.classList.remove("awaiting-completion");
+      return;
+    }
+
+    const remaining = end - now;
+    const waiting = remaining <= 0;
+
+    element.classList.toggle("awaiting-completion", waiting);
+
+    const text = waiting
+      ? "Tamamlanıyor…"
+      : duration(remaining / 1000);
+
+    // Aynı metni tekrar tekrar DOM'a yazma.
+    if (element.textContent !== text) {
+      element.textContent = text;
+    }
+
+    element.title = waiting
+      ? "Sunucunun inşaat sonucunu kaydetmesi bekleniyor."
+      : `Planlanan bitiş: ${date(element.dataset.countdown)}`;
   });
 }
 
