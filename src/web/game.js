@@ -6,17 +6,29 @@ const definitions = {
   headquarters: {
     name: "Bey otağı",
     description: "Obanın yönetim merkezi",
-    icon: "⌂",
+    icon: `<img
+      src="/assets/buildings.svg#headquarters"
+      alt=""
+      class="building-art"
+    >`,
   },
   timber: {
     name: "Oduncu",
     description: "Odun işçiliğinin merkezi",
-    icon: "⚒",
+    icon: `<img
+      src="/assets/buildings.svg#timber"
+      alt=""
+      class="building-art"
+    >`,
   },
   warehouse: {
     name: "Ambar",
     description: "Obanın kaynak deposu",
-    icon: "▤",
+    icon: `<img
+      src="/assets/buildings.svg#warehouse"
+      alt=""
+      class="building-art"
+    >`,
   },
 };
 
@@ -210,8 +222,8 @@ function render() {
       <div class="active-build">
         <div>
           <strong>${escapeHtml(
-            definitions[active.building_kind]?.name || active.building_kind,
-          )}</strong>
+      definitions[active.building_kind]?.name || active.building_kind,
+    )}</strong>
           <span> → Seviye ${active.target_level}</span>
         </div>
         <b data-countdown="${escapeHtml(active.run_at)}"></b>
@@ -229,15 +241,15 @@ function render() {
     ? upgrades.map((upgrade) => `
       <tr>
         <td>${escapeHtml(
-          definitions[upgrade.building_kind]?.name || upgrade.building_kind,
-        )}</td>
+      definitions[upgrade.building_kind]?.name || upgrade.building_kind,
+    )}</td>
         <td>${upgrade.target_level}</td>
         <td>${escapeHtml(date(upgrade.run_at))}</td>
         <td>
           ${upgrade.completed_at
-            ? `<span class="completed">✓ Tamamlandı</span>`
-            : `<span data-countdown="${escapeHtml(upgrade.run_at)}"></span>`
-          }
+        ? `<span class="completed">✓ Tamamlandı</span>`
+        : `<span data-countdown="${escapeHtml(upgrade.run_at)}"></span>`
+      }
         </td>
       </tr>
     `).join("")

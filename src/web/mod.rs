@@ -58,3 +58,13 @@ pub async fn javascript() -> impl IntoResponse {
         include_str!("game.js"),
     )
 }
+
+pub async fn building_art() -> impl axum::response::IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "image/svg+xml; charset=utf-8",
+        )],
+        include_str!("buildings.svg"),
+    )
+}
