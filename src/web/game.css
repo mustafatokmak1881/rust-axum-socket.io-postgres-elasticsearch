@@ -1549,3 +1549,67 @@ input {
     display: none;
   }
 }
+
+/* Canlı inşaat kuyruğu */
+
+#buildings-active-queue {
+  margin-bottom: 18px;
+}
+
+#buildings-active-queue .section-title {
+  margin-top: 0;
+}
+
+.live-construction {
+  border: 1px solid #b89a60;
+  background: #fff2cd;
+}
+
+.live-construction table {
+  margin: 0;
+}
+
+.live-construction tbody td {
+  background: #fff3d0;
+}
+
+.live-construction tbody tr:hover td {
+  background: #fff3d0;
+}
+
+.live-construction time {
+  color: #624718;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.construction-countdown {
+  display: inline-block;
+  min-width: 78px;
+  color: #45300d;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.construction-countdown.awaiting-completion {
+  color: #986019;
+}
+
+#active-upgrade:has(.live-construction) {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .awaiting-completion {
+    animation: construction-pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes construction-pulse {
+    50% {
+      opacity: .55;
+    }
+  }
+}

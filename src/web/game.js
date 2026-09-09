@@ -394,6 +394,11 @@ async function mutate(button, path, options, message) {
   mutating = true;
   button.disabled = true;
 
+  // Sunucu yanıtı beklenirken diğer yükseltme düğmelerini de kilitle.
+  document.querySelectorAll("[data-upgrade]").forEach((element) => {
+    element.disabled = true;
+  });
+
   try {
     await api(path, options);
     showMessage(message);
@@ -470,11 +475,32 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void refresh();
 });
 
-setInterval(() => {
-  if (!document.hidden) void refresh();
-}, 3000);
+let nextPollAt = 0;
 
-setInterval(updateCountdowns, 1000);
+setInterval(() => {
+  if (document.hidden || sessionExpired) return;
+  if (refreshing || mutating) return;
+
+  const now = Date.now();
+
+  if (now < nextPollAt) return;
+
+  const hasActiveConstruction = Boolean(
+    snapshot?.upgrades?.some((upgrade) => !upgrade.completed_at),
+  );
+
+  // İnşaat varsa 1 saniye, yoksa 5 saniye.
+  nextPollAt = now + (hasActiveConstruction ? 1000 : 5000);
+
+  void refresh();
+}, 250);
+
+// Bu interval API çağrısı yapmaz; yalnızca yazıyı günceller.
+setInterval(() => {
+  if (!document.hidden) {
+    updateCountdowns();
+  }
+}, 250);
 
 applyTab();
 void refresh();
