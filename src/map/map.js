@@ -531,15 +531,35 @@
     }
     const commandDialog = $("command-dialog");
 
-    function openCommand(type) {
-        const target = state.selected;
+    async function openCommand(type) {
+        if (attackSending) return;
 
-        if (!state.ready || !target) return;
+        const selected = state.selected;
 
-        if (target.id === state.home.id || target.affiliation === "own") {
-            status("Bu komut kendi köyüne gönderilemez.", true);
+        if (!state.ready || !selected) return;
+
+        if (selected.affiliation === "own") {
+            status("Kendi köyüne saldıramazsın.", true);
             return;
         }
+
+        // Son gönderimde ağ hatası olduysa önce o isteği sonuçlandır.
+        if (
+            pendingAttack &&
+            (
+                type !== "attack" ||
+                selected.id !== pendingAttack.target_id
+            )
+        ) {
+            status(
+                "Önce son saldırının hedefini seçip gönderimi tekrar dene. " +
+                "Aynı istek ikinci bir saldırı oluşturmaz.",
+                true,
+            );
+            return;
+        }
+
+        attackTarget = { ...selected };
 
         const titles = {
             attack: "Saldırı emri",
@@ -547,45 +567,68 @@
             resources: "Hammadde gönder",
         };
 
-        const descriptions = {
-            attack:
-                "Saldırıda köyündeki kullanılabilir birliklerden seçim yapılacak. " +
-                "Seçilen birlikler yola çıkarken köydeki ordudan düşülecek. " +
-                "Varış süresini ordudaki en yavaş birlik belirleyecek.",
-
-            support:
-                "Destek birlikleri hedef köye ulaştığında orada konuşlanacak. " +
-                "Birliklerin sahibi değişmeyecek. Daha sonra geri çağırma " +
-                "komutuyla kendi köyüne dönebilecekler.",
-
-            resources:
-                "Hammadde gönderiminde gönderilebilir kaynak ve taşıma kapasitesi " +
-                "sunucuda kontrol edilecek. Mevcut oyunda yalnızca odun var; " +
-                "kil, demir ve tüccar sistemi henüz eklenmedi.",
-        };
-
         if (!titles[type]) return;
 
-        const distance = Math.hypot(
-            target.x - state.home.x,
-            target.y - state.home.y,
-        );
-
         $("command-title").textContent = titles[type];
-        $("command-target-name").textContent = target.name;
+        $("command-target-name").textContent = attackTarget.name;
 
         $("command-target-location").textContent =
-            `${target.x} | ${target.y} · ${continent(target.x, target.y)}`;
+            `${attackTarget.x} | ${attackTarget.y} · ` +
+            continent(attackTarget.x, attackTarget.y);
+
+        const distance = Math.hypot(
+            attackTarget.x - state.home.x,
+            attackTarget.y - state.home.y,
+        );
 
         $("command-distance").textContent =
             `Mesafe: ${distance.toLocaleString("tr-TR", {
                 maximumFractionDigits: 2,
             })} kare`;
 
-        $("command-information").textContent = descriptions[type];
+        $("attack-result").textContent = "";
+        $("attack-fields").hidden = type !== "attack";
+        $("command-submit").disabled = true;
 
-        if (!commandDialog.open) {
-            commandDialog.showModal();
+        if (!$("command-dialog").open) {
+            $("command-dialog").showModal();
+        }
+
+        if (type !== "attack") {
+            $("command-information").textContent =
+                "Bu komut henüz kullanılabilir değil.";
+
+            $("command-submit").textContent = "Henüz kapalı";
+            return;
+        }
+
+        $("command-information").textContent =
+            "Göndereceğin mızrakçı sayısını seç. " +
+            "Birlikler köyünden hemen ayrılır ve savaşta kaybedilebilir.";
+
+        $("command-submit").textContent = pendingAttack
+            ? "Aynı gönderimi tekrar dene"
+            : "Saldırıyı gönder";
+
+        $("attack-spears").readOnly = Boolean(pendingAttack);
+
+        if (pendingAttack) {
+            $("attack-spears").value = pendingAttack.spears;
+            $("attack-all").disabled = true;
+            $("command-submit").disabled = false;
+            return;
+        }
+
+        $("attack-spears").value = "1";
+
+        await refreshMilitary();
+
+        // Pencere başka komuta geçmiş olabilir.
+        if (
+            $("command-dialog").open &&
+            !$("attack-fields").hidden
+        ) {
+            updateAttackFields();
         }
     }
 
@@ -594,11 +637,103 @@
 
         if (!button || button.disabled) return;
 
-        openCommand(button.dataset.command);
+        void openCommand(button.dataset.command);
     });
 
     $("command-close").addEventListener("click", () => {
         commandDialog.close();
+    });
+
+    $("attack-spears").addEventListener("input", () => {
+        if (!pendingAttack) updateAttackFields();
+    });
+
+    $("attack-all").addEventListener("click", () => {
+        if (!militarySnapshot || pendingAttack) return;
+
+        $("attack-spears").value = militarySnapshot.spears;
+        updateAttackFields();
+    });
+
+    $("command-submit").addEventListener("click", async () => {
+        if (
+            attackSending ||
+            $("attack-fields").hidden ||
+            !attackTarget
+        ) {
+            return;
+        }
+
+        if (!pendingAttack) {
+            const spears = Number($("attack-spears").value);
+
+            if (
+                !Number.isInteger(spears) ||
+                spears < 1 ||
+                spears > (militarySnapshot?.spears ?? 0)
+            ) {
+                $("attack-result").textContent =
+                    "Geçerli bir asker sayısı seç.";
+                return;
+            }
+
+            pendingAttack = {
+                request_id: crypto.randomUUID(),
+                target_id: attackTarget.id,
+                spears,
+            };
+        }
+
+        attackSending = true;
+
+        $("command-submit").disabled = true;
+        $("attack-spears").readOnly = true;
+        $("attack-all").disabled = true;
+
+        $("attack-result").textContent = "Saldırı gönderiliyor…";
+
+        try {
+            const result = await militaryApi("/api/military/attacks", {
+                method: "POST",
+                body: JSON.stringify(pendingAttack),
+            });
+
+            pendingAttack = null;
+
+            $("attack-result").textContent =
+                `Ordu yola çıktı. Varış: ${militaryDate(result.arrives_at)}`;
+
+            $("command-dialog").close();
+
+            status(
+                `Saldırı gönderildi. Varış: ${militaryDate(result.arrives_at)}`,
+            );
+        } catch (error) {
+            // Kesin doğrulama hatasında yeni seçim yapılabilir.
+            // Ağ/5xx hatasında aynı request_id korunur.
+            if (error.status >= 400 && error.status < 500) {
+                pendingAttack = null;
+            }
+
+            $("attack-result").textContent = pendingAttack
+                ? `${error.message}. Aynı gönderimi tekrar deneyebilirsin.`
+                : error.message;
+        } finally {
+            attackSending = false;
+
+            $("attack-spears").readOnly = Boolean(pendingAttack);
+
+            await refreshMilitary();
+
+            if (pendingAttack) {
+                $("command-submit").textContent = "Aynı gönderimi tekrar dene";
+                $("command-submit").disabled = false;
+                $("attack-all").disabled = true;
+            } else {
+                $("command-submit").textContent = "Saldırıyı gönder";
+                updateAttackFields();
+            }
+        }
     });
 
     function selectVillage(village) {
@@ -980,6 +1115,167 @@
         menu.style.left = `${left}px`;
         menu.style.top = `${top}px`;
     }
+    let militarySnapshot = null;
+    let militaryRefreshing = false;
+
+    let attackTarget = null;
+    let attackSending = false;
+
+    // Ağ hatasında aynı isteği aynı kimlikle tekrar göndermek için.
+    let pendingAttack = null;
+
+    function escapeMilitaryHtml(value) {
+        return String(value).replace(/[&<>"']/g, (character) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+        })[character]);
+    }
+
+    async function militaryApi(path, options = {}) {
+        const response = await fetch(path, {
+            credentials: "same-origin",
+            cache: "no-store",
+            ...options,
+            headers: {
+                ...(options.body ? { "Content-Type": "application/json" } : {}),
+                ...(options.headers || {}),
+            },
+        });
+
+        const body = await response.json().catch(() => null);
+
+        if (!response.ok) {
+            const error = new Error(
+                body?.error || `İstek başarısız: HTTP ${response.status}`,
+            );
+
+            error.status = response.status;
+            throw error;
+        }
+
+        return body;
+    }
+
+    function militaryDate(value) {
+        return new Date(value).toLocaleString("tr-TR");
+    }
+
+    async function refreshMilitary() {
+        if (!state.ready || militaryRefreshing) return;
+
+        militaryRefreshing = true;
+
+        try {
+            militarySnapshot = await militaryApi("/api/military");
+
+            $("army-home-count").textContent =
+                `· Köyde ${militarySnapshot.spears} mızrakçı`;
+
+            const statusNames = {
+                outbound: "Hedefe gidiyor",
+                returning: "Köye dönüyor",
+                completed: "Tamamlandı",
+            };
+
+            $("army-orders").innerHTML = militarySnapshot.attacks.length
+                ? militarySnapshot.attacks.map((attack) => {
+                    const resolved = attack.resolved_at !== null;
+
+                    return `
+            <article class="army-order">
+              <div>
+                <strong>
+                  ${escapeMilitaryHtml(attack.target_name)}
+                  (${attack.target_x}|${attack.target_y})
+                </strong>
+
+                <span>
+                  ${escapeMilitaryHtml(statusNames[attack.status])}
+                </span>
+              </div>
+
+              <p>
+                Gönderilen: ${attack.sent_spears} mızrakçı
+                · Varış:
+                ${escapeMilitaryHtml(militaryDate(attack.arrives_at))}
+              </p>
+
+              ${resolved ? `
+                <p class="army-report">
+                  Sağ kalan: ${attack.surviving_spears}
+                  · Kaybedilen:
+                  ${attack.sent_spears - attack.surviving_spears}
+                  · Savunmacı:
+                  ${attack.defender_before} → ${attack.defender_after}
+                </p>
+              ` : ""}
+
+              ${attack.returns_at ? `
+                <p>
+                  Dönüş:
+                  ${escapeMilitaryHtml(militaryDate(attack.returns_at))}
+                  ${attack.returned_at ? " · Köye ulaştı" : ""}
+                </p>
+              ` : ""}
+            </article>
+          `;
+                }).join("")
+                : "<p>Henüz saldırı göndermedin.</p>";
+
+            if (
+                $("command-dialog").open &&
+                !$("attack-fields").hidden &&
+                !attackSending &&
+                !pendingAttack
+            ) {
+                updateAttackFields();
+            }
+        } catch (error) {
+            $("army-home-count").textContent =
+                `· ${error.message}`;
+        } finally {
+            militaryRefreshing = false;
+        }
+    }
+
+    function updateAttackFields() {
+        if (!militarySnapshot) return;
+
+        const count = militarySnapshot.spears;
+        const input = $("attack-spears");
+
+        $("available-spears").textContent = count;
+        input.max = String(Math.max(1, count));
+
+        const selectedCount = Number(input.value);
+
+        $("command-submit").disabled =
+            attackSending ||
+            !Number.isInteger(selectedCount) ||
+            selectedCount < 1 ||
+            selectedCount > count;
+
+        $("attack-all").disabled = attackSending || count === 0;
+
+        if (attackTarget) {
+            const distance = Math.hypot(
+                attackTarget.x - state.home.x,
+                attackTarget.y - state.home.y,
+            );
+
+            const seconds = Math.max(
+                1,
+                Math.ceil(distance * militarySnapshot.seconds_per_tile),
+            );
+
+            $("attack-travel").textContent =
+                `Tahmini yolculuk: ${seconds} saniye. ` +
+                "Kesin varış zamanı gönderimde sunucu tarafından belirlenir.";
+        }
+    }
 
     async function start() {
         try {
@@ -998,6 +1294,7 @@
             state.camera.x = state.home.x + 0.5;
             state.camera.y = state.home.y + 0.5;
             state.ready = true;
+            void refreshMilitary();
 
             state.villages = [{
                 ...state.home,

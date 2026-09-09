@@ -999,3 +999,83 @@ main {
   left: 37px;
   bottom: 27px;
 }
+
+.attack-unit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
+  background: #f8edcb;
+  border: 1px solid #c1a367;
+}
+
+.attack-unit-row input {
+  width: 90px;
+  padding: 6px;
+  background: #fff8e5;
+  border: 1px solid #a98950;
+}
+
+.attack-unit-row button {
+  padding: 6px 10px;
+  background: #e7d5a7;
+  border: 1px solid #ae8d54;
+  color: #5d421c;
+}
+
+.command-submit:not(:disabled) {
+  background: linear-gradient(#a57b40, #6c451d);
+  color: #fff3d0;
+  cursor: pointer;
+}
+
+#attack-result {
+  line-height: 1.6;
+  color: #835319;
+}
+
+.army-panel {
+  margin-top: 18px;
+  border: 1px solid #a88950;
+  background: #f4e7c2;
+}
+
+.army-panel > h3 {
+  padding: 9px;
+  margin: 0;
+  background: linear-gradient(#e1c98e, #c7a76a);
+  font: bold 14px Georgia, serif;
+}
+
+.army-panel > h3 small {
+  font: normal 11px Arial, sans-serif;
+}
+
+#army-orders {
+  padding: 10px;
+}
+
+.army-order {
+  padding: 10px;
+  margin-bottom: 8px;
+  background: #fff2d0;
+  border: 1px solid #d4bb86;
+}
+
+.army-order > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.army-order p {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.army-report {
+  color: #766039;
+}

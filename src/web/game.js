@@ -561,5 +561,11 @@ setInterval(() => {
   }
 }, 250);
 
+setInterval(() => {
+  if (!document.hidden && state.ready) {
+    void refreshMilitary();
+  }
+}, 3000);
+
 applyTab();
 void refresh();
