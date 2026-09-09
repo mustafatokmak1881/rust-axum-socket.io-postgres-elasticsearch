@@ -1,12 +1,12 @@
 use axum::{
-    extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
     Json,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode, header},
 };
 use axum_extra::extract::CookieJar;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
@@ -44,10 +44,7 @@ pub struct RenameRequest {
     name: String,
 }
 
-async fn current_user(
-    state: &SharedState,
-    jar: &CookieJar,
-) -> Result<CurrentUser, AppError> {
+async fn current_user(state: &SharedState, jar: &CookieJar) -> Result<CurrentUser, AppError> {
     let token = jar
         .get(state.config.session_cookie_name())
         .ok_or(AppError::Unauthorized)?
@@ -58,10 +55,7 @@ async fn current_user(
         .ok_or(AppError::Unauthorized)
 }
 
-fn check_origin(
-    state: &SharedState,
-    headers: &HeaderMap,
-) -> Result<(), AppError> {
+fn check_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), AppError> {
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok());
@@ -81,18 +75,15 @@ pub async fn bootstrap(
 
     let mut tx = state.db.begin().await?;
 
-    sqlx::query(
-        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
-    )
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
 
-    let village = sqlx::query_as::<_, Village>(
-        "SELECT id, name, wood FROM villages WHERE owner_id = $1",
-    )
-    .bind(user.id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let village =
+        sqlx::query_as::<_, Village>("SELECT id, name, wood FROM villages WHERE owner_id = $1")
+            .bind(user.id)
+            .fetch_optional(&mut *tx)
+            .await?;
 
     let mut buildings: Vec<Building> = Vec::new();
     let mut upgrades: Vec<Upgrade> = Vec::new();
@@ -133,10 +124,9 @@ pub async fn bootstrap(
         .await?;
     }
 
-    let server_time: DateTime<Utc> =
-        sqlx::query_scalar("SELECT clock_timestamp()")
-            .fetch_one(&mut *tx)
-            .await?;
+    let server_time: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
@@ -162,22 +152,74 @@ pub async fn create_village(
     check_origin(&state, &headers)?;
     let user = current_user(&state, &jar).await?;
 
+    let world_id = Uuid::from_u128(1);
     let mut tx = state.db.begin().await?;
 
-    let village_id: Uuid = sqlx::query_scalar(
-        r#"
-        INSERT INTO villages (id, owner_id)
-        VALUES ($1, $2)
-        ON CONFLICT (owner_id)
-        DO UPDATE SET owner_id = EXCLUDED.owner_id
-        RETURNING id
-        "#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(user.id)
-    .fetch_one(&mut *tx)
-    .await?;
+    // Başlangıç köyü oluşturma işlemlerini sıraya al.
+    // Aynı anda açılan iki sekme ikinci bir köy oluşturamaz.
+    sqlx::query("SELECT pg_advisory_xact_lock(731001::bigint)")
+        .execute(&mut *tx)
+        .await?;
 
+    let existing_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM villages WHERE owner_id = $1")
+        .bind(user.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+    let village_id = if let Some(id) = existing_id {
+        id
+    } else {
+        // İlk sürümün oyuncu yerleştirme bölgesi: 450–549.
+        let position = sqlx::query_as::<_, (i32, i32)>(
+            r#"
+            SELECT gx.x, gy.y
+            FROM generate_series(450, 549) AS gx(x)
+            CROSS JOIN generate_series(450, 549) AS gy(y)
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM villages v
+                WHERE v.world_id = $1
+                  AND v.x = gx.x
+                  AND v.y = gy.y
+            )
+            ORDER BY md5(
+                gx.x::text || ':' ||
+                gy.y::text || ':' ||
+                $2::text
+            )
+            LIMIT 1
+            "#,
+        )
+        .bind(world_id)
+        .bind(user.id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::BadRequest("Starting area is full"))?;
+
+        sqlx::query_scalar::<_, Uuid>(
+            r#"
+            INSERT INTO villages (
+                id,
+                owner_id,
+                world_id,
+                x,
+                y
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+            "#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(user.id)
+        .bind(world_id)
+        .bind(position.0)
+        .bind(position.1)
+        .fetch_one(&mut *tx)
+        .await?
+    };
+
+    // Başlangıç kaynakları villages tablosunun default'undan gelir.
+    // Binalar da aynı transaction içinde oluşturulur.
     for kind in ["headquarters", "timber", "warehouse"] {
         sqlx::query(
             r#"
@@ -208,21 +250,17 @@ pub async fn rename_village(
 
     let name = input.name.trim();
 
-    if !(3..=32).contains(&name.chars().count())
-        || name.chars().any(char::is_control)
-    {
+    if !(3..=32).contains(&name.chars().count()) || name.chars().any(char::is_control) {
         return Err(AppError::BadRequest(
             "Köy adı 3–32 karakter olmalı ve kontrol karakteri içermemeli.",
         ));
     }
 
-    let result = sqlx::query(
-        "UPDATE villages SET name = $1 WHERE owner_id = $2",
-    )
-    .bind(name)
-    .bind(user.id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("UPDATE villages SET name = $1 WHERE owner_id = $2")
+        .bind(name)
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
@@ -240,10 +278,7 @@ pub async fn start_upgrade(
     check_origin(&state, &headers)?;
     let user = current_user(&state, &jar).await?;
 
-    if !matches!(
-        kind.as_str(),
-        "headquarters" | "timber" | "warehouse"
-    ) {
+    if !matches!(kind.as_str(), "headquarters" | "timber" | "warehouse") {
         return Err(AppError::BadRequest("Geçersiz bina."));
     }
 
@@ -297,9 +332,7 @@ pub async fn start_upgrade(
     .await?;
 
     if level >= 20 {
-        return Err(AppError::BadRequest(
-            "Bina en yüksek seviyede.",
-        ));
+        return Err(AppError::BadRequest("Bina en yüksek seviyede."));
     }
 
     let target_level = level + 1;
@@ -310,13 +343,11 @@ pub async fn start_upgrade(
         return Err(AppError::BadRequest("Yeterli odun yok."));
     }
 
-    sqlx::query(
-        "UPDATE villages SET wood = wood - $1 WHERE id = $2",
-    )
-    .bind(cost)
-    .bind(village.id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE villages SET wood = wood - $1 WHERE id = $2")
+        .bind(cost)
+        .bind(village.id)
+        .execute(&mut *tx)
+        .await?;
 
     let job_id = Uuid::new_v4();
 
@@ -369,10 +400,7 @@ pub async fn start_upgrade(
 
 // Worker endpoint'i tarafından mevcut transaction içinde çağrılır.
 // İstemciden seviye, maliyet veya village_id kabul etmez.
-pub async fn complete_upgrade(
-    connection: &mut PgConnection,
-    job_id: Uuid,
-) -> Result<(), AppError> {
+pub async fn complete_upgrade(connection: &mut PgConnection, job_id: Uuid) -> Result<(), AppError> {
     let upgrade = sqlx::query_as::<_, (Uuid, String, i32)>(
         r#"
         SELECT village_id, building_kind, target_level
