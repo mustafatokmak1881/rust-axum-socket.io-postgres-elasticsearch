@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="140" viewBox="0 0 160 140">
+  <defs>
+    <pattern id="thatch" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#a98442" />
+      <path d="M1 0v8M5 0v8" stroke="#d3b36a" stroke-width="2" />
+      <path d="M0 6h8" stroke="#77582f" stroke-width="1" />
+    </pattern>
+    <pattern id="stone" width="18" height="12" patternUnits="userSpaceOnUse">
+      <rect width="18" height="12" fill="#9b9b88" />
+      <path d="M0 0h18M0 12h18M9 0v6M0 6h18M3 6v6" stroke="#666d61" fill="none" />
+    </pattern>
+    <pattern id="wood" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#9b7849" />
+      <path d="M0 2h12M0 8h12" stroke="#685134" stroke-width="2" />
+    </pattern>
+  </defs>
+  <!-- Bey otağı -->
+  <!-- Oduncu -->
+  <!-- Ambar -->
+  <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
+    <ellipse cx="80" cy="119" rx="63" ry="13" fill="#273c25" opacity=".25" stroke="none" />
+    <path d="M24 67L83 45L137 69L77 96Z" fill="#d5c395" />
+    <path d="M24 67V105L77 128V96Z" fill="#ad9463" />
+    <path d="M77 96L137 69V106L77 128Z" fill="#d2bc84" />
+    <path d="M14 71L48 27L79 41L77 98Z" fill="url(#thatch)" />
+    <path d="M48 27L146 65L77 98L79 41Z" fill="url(#thatch)" />
+    <path d="M48 27L146 65M14 71L77 98" fill="none" stroke="#694e2b" stroke-width="3" />
+    <path d="M33 81V109M56 92V119M84 96V124M124 78V111" stroke="#5d4d32" stroke-width="4" />
+    <path d="M26 97L76 117M80 112L135 93" stroke="#5d4d32" stroke-width="3" />
+    <path d="M92 121V98L115 88V113Z" fill="url(#wood)" />
+    <path d="M103 94V117" stroke="#4e412c" stroke-width="2" />
+    <ellipse cx="21" cy="115" rx="9" ry="12" fill="#c5ae75" />
+    <ellipse cx="35" cy="120" rx="8" ry="10" fill="#bfa36c" />
+    <path d="M16 110H26M31 116H39" stroke="#7d673e" />
+  </g>
+</svg>

@@ -7,7 +7,7 @@ const definitions = {
     name: "Bey otağı",
     description: "Obanın yönetim merkezi",
     icon: `<img
-      src="/assets/buildings.svg#headquarters"
+      src="/assets/building-headquarters.svg"
       alt=""
       class="building-art"
     >`,
@@ -16,7 +16,7 @@ const definitions = {
     name: "Oduncu",
     description: "Odun işçiliğinin merkezi",
     icon: `<img
-      src="/assets/buildings.svg#timber"
+      src="/assets/building-timber.svg"
       alt=""
       class="building-art"
     >`,
@@ -25,7 +25,7 @@ const definitions = {
     name: "Ambar",
     description: "Obanın kaynak deposu",
     icon: `<img
-      src="/assets/buildings.svg#warehouse"
+      src="/assets/building-warehouse.svg"
       alt=""
       class="building-art"
     >`,

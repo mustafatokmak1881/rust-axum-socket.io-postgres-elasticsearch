@@ -73,6 +73,12 @@ async fn main() -> anyhow::Result<()> {
     let state: SharedState = Arc::new(AppState { config, db, google });
 
     let app = Router::new()
+        .route(
+            "/assets/building-headquarters.svg",
+            get(web::headquarters_art),
+        )
+        .route("/assets/building-timber.svg", get(web::timber_art))
+        .route("/assets/building-warehouse.svg", get(web::warehouse_art))
         .route("/assets/buildings.svg", get(web::building_art))
         .route("/map", get(map::page))
         .route("/assets/map.css", get(map::stylesheet))
