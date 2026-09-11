@@ -76,6 +76,11 @@
             <span>⌂</span>
             <div><small>BİNA PUANI</small><strong id="points">0</strong></div>
           </div>
+          <a id="incoming-badge" class="incoming-badge" href="#incoming" hidden>
+            <span class="incoming-badge-icon" aria-hidden="true">⚔</span>
+            <span id="incoming-badge-count">0</span>
+            <span class="incoming-badge-label">Gelen saldırı</span>
+          </a>
         </div>
 
         <div class="game-layout">
@@ -130,6 +135,17 @@
 
                 <h3 class="section-title">Devam eden inşaat</h3>
                 <div id="active-upgrade" class="queue-box"></div>
+
+                <section id="incoming" class="incoming-panel">
+                  <h3 class="section-title">
+                    <span class="army-section-icon incoming" aria-hidden="true">⚔</span>
+                    Gelen saldırılar
+                    <small id="incoming-section-count"></small>
+                  </h3>
+                  <div id="army-incoming-list" class="army-incoming-list">
+                    <p class="army-empty">Gelen saldırı yok.</p>
+                  </div>
+                </section>
 
                 <p class="muted small">
                   Bina seviyeleri ve kaynaklar PostgreSQL’den alınır.

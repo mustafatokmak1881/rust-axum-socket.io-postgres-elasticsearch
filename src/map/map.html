@@ -24,10 +24,20 @@
       </a>
     </nav>
 
-    <span class="world-indicator">
-      <i></i>
-      <span id="world-name">Dünya yükleniyor</span>
-    </span>
+    <div class="header-end">
+      <div class="header-alerts" aria-live="polite">
+        <a id="incoming-badge" class="incoming-badge" href="#army-incoming" hidden>
+          <span class="incoming-badge-icon" aria-hidden="true">⚔</span>
+          <span id="incoming-badge-count">0</span>
+          <span class="incoming-badge-label">Gelen saldırı</span>
+        </a>
+      </div>
+
+      <span class="world-indicator">
+        <i></i>
+        <span id="world-name">Dünya yükleniyor</span>
+      </span>
+    </div>
   </header>
 
   <main>
@@ -174,14 +184,33 @@
       </aside>
     </div>
 
-    <section class="army-panel">
+    <section class="army-panel" id="army-panel">
       <h3>
         Ordu hareketleri
         <small id="army-home-count"></small>
       </h3>
 
-      <div id="army-orders">
-        Ordu bilgileri yükleniyor…
+      <div class="army-sections">
+        <section id="army-incoming" class="army-section">
+          <h4>
+            <span class="army-section-icon incoming" aria-hidden="true">⚔</span>
+            Gelen saldırılar
+            <small id="incoming-section-count"></small>
+          </h4>
+          <div id="army-incoming-list">
+            Gelen saldırı yok.
+          </div>
+        </section>
+
+        <section class="army-section">
+          <h4>
+            <span class="army-section-icon outgoing" aria-hidden="true">➔</span>
+            Giden emirler
+          </h4>
+          <div id="army-orders">
+            Ordu bilgileri yükleniyor…
+          </div>
+        </section>
       </div>
     </section>
 

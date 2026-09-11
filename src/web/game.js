@@ -37,6 +37,10 @@ let serverOffset = 0;
 let refreshing = false;
 let mutating = false;
 let sessionExpired = false;
+let militarySnapshot = null;
+let militaryRefreshing = false;
+let hasVillage = false;
+const baseDocumentTitle = document.title;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -216,7 +220,13 @@ function render() {
   $("#onboarding").hidden = Boolean(snapshot.village);
   $("#game-content").hidden = !snapshot.village;
 
-  if (!snapshot.village) return;
+  const villageJustAppeared = !hasVillage && Boolean(snapshot.village);
+  hasVillage = Boolean(snapshot.village);
+
+  if (!snapshot.village) {
+    updateIncomingBadge(0);
+    return;
+  }
 
   const { village, buildings, upgrades, user, rules } = snapshot;
   const active = upgrades.find((upgrade) => !upgrade.completed_at);
@@ -353,6 +363,112 @@ function render() {
   updateCountdowns();
   updateLiveResources();
   applyTab();
+
+  if (villageJustAppeared) {
+    void refreshMilitary();
+  }
+}
+
+function formatCountdown(targetIso) {
+  const remainingMs = new Date(targetIso).getTime() - Date.now();
+
+  if (remainingMs <= 0) {
+    return "Varıyor…";
+  }
+
+  const total = Math.ceil(remainingMs / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+
+  if (hours > 0) {
+    return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+  }
+
+  return `${minutes}:${pad(seconds)}`;
+}
+
+function updateIncomingBadge(count) {
+  const badge = $("#incoming-badge");
+  const countEl = $("#incoming-badge-count");
+  const sectionCount = $("#incoming-section-count");
+
+  if (!badge || !countEl) return;
+
+  countEl.textContent = String(count);
+
+  if (sectionCount) {
+    sectionCount.textContent = count > 0 ? `(${count})` : "";
+  }
+
+  badge.hidden = count === 0;
+  badge.title = count > 0 ? `${count} gelen saldırı` : "";
+
+  document.title = count > 0
+    ? `(⚔${count}) ${baseDocumentTitle}`
+    : baseDocumentTitle;
+}
+
+function renderIncoming(incoming) {
+  const list = $("#army-incoming-list");
+  if (!list) return;
+
+  updateIncomingBadge(incoming.length);
+
+  if (!incoming.length) {
+    list.innerHTML = `<p class="army-empty">Gelen saldırı yok.</p>`;
+    return;
+  }
+
+  list.innerHTML = incoming.map((attack) => `
+    <article class="army-order" data-arrives-at="${escapeHtml(attack.arrives_at)}">
+      <div>
+        <strong>
+          ${escapeHtml(attack.source_name)}
+          (${attack.source_x}|${attack.source_y})
+        </strong>
+        <span>Saldırı</span>
+      </div>
+      <p>
+        Ordu: <strong>${attack.sent_spears}</strong> mızrakçı
+        · Varış: ${escapeHtml(date(attack.arrives_at))}
+        · Kalan:
+        <span class="army-countdown">${escapeHtml(formatCountdown(attack.arrives_at))}</span>
+      </p>
+    </article>
+  `).join("");
+}
+
+function tickMilitaryCountdowns() {
+  document.querySelectorAll("[data-arrives-at] .army-countdown").forEach((el) => {
+    const article = el.closest("[data-arrives-at]");
+    if (!article) return;
+    el.textContent = formatCountdown(article.dataset.arrivesAt);
+  });
+}
+
+async function refreshMilitary() {
+  if (!hasVillage || militaryRefreshing || sessionExpired) return;
+
+  militaryRefreshing = true;
+
+  try {
+    militarySnapshot = await api("/api/military");
+    const incoming = Array.isArray(militarySnapshot.incoming)
+      ? militarySnapshot.incoming
+      : [];
+    renderIncoming(incoming);
+  } catch (error) {
+    if (sessionExpired) return;
+    const list = $("#army-incoming-list");
+    if (list && !militarySnapshot) {
+      list.innerHTML =
+        `<p class="army-empty">${escapeHtml(error.message)}</p>`;
+    }
+  } finally {
+    militaryRefreshing = false;
+  }
 }
 
 function updateLiveResources() {
@@ -562,10 +678,16 @@ setInterval(() => {
 }, 250);
 
 setInterval(() => {
-  if (!document.hidden && state.ready) {
+  if (!document.hidden && !sessionExpired && hasVillage) {
     void refreshMilitary();
   }
-}, 3000);
+}, 2000);
+
+setInterval(() => {
+  if (!document.hidden && !sessionExpired && hasVillage) {
+    tickMilitaryCountdowns();
+  }
+}, 250);
 
 applyTab();
 void refresh();

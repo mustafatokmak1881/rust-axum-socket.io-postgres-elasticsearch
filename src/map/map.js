@@ -1163,6 +1163,82 @@
         return new Date(value).toLocaleString("tr-TR");
     }
 
+    function formatCountdown(targetIso) {
+        const remainingMs = new Date(targetIso).getTime() - Date.now();
+
+        if (remainingMs <= 0) {
+            return "Varıyor…";
+        }
+
+        const total = Math.ceil(remainingMs / 1000);
+        const hours = Math.floor(total / 3600);
+        const minutes = Math.floor((total % 3600) / 60);
+        const seconds = total % 60;
+        const pad = (n) => String(n).padStart(2, "0");
+
+        if (hours > 0) {
+            return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+        }
+
+        return `${minutes}:${pad(seconds)}`;
+    }
+
+    function updateIncomingBadge(count) {
+        const badge = $("incoming-badge");
+        const countEl = $("incoming-badge-count");
+        const sectionCount = $("incoming-section-count");
+        const baseTitle = "Umaykut — Dünya Haritası";
+
+        countEl.textContent = String(count);
+        sectionCount.textContent = count > 0 ? `(${count})` : "";
+        badge.hidden = count === 0;
+        badge.title = count > 0
+            ? `${count} gelen saldırı`
+            : "";
+
+        document.title = count > 0
+            ? `(⚔${count}) ${baseTitle}`
+            : baseTitle;
+    }
+
+    function renderIncoming(incoming) {
+        const list = $("army-incoming-list");
+
+        updateIncomingBadge(incoming.length);
+
+        if (!incoming.length) {
+            list.innerHTML = `<p class="army-empty">Gelen saldırı yok.</p>`;
+            return;
+        }
+
+        list.innerHTML = incoming.map((attack) => `
+            <article class="army-order incoming" data-arrives-at="${escapeMilitaryHtml(attack.arrives_at)}">
+              <div>
+                <strong>
+                  ${escapeMilitaryHtml(attack.source_name)}
+                  (${attack.source_x}|${attack.source_y})
+                </strong>
+                <span>Saldırı</span>
+              </div>
+              <p>
+                Ordu: <strong>${attack.sent_spears}</strong> mızrakçı
+                · Varış:
+                ${escapeMilitaryHtml(militaryDate(attack.arrives_at))}
+                · Kalan:
+                <span class="army-countdown">${escapeMilitaryHtml(formatCountdown(attack.arrives_at))}</span>
+              </p>
+            </article>
+          `).join("");
+    }
+
+    function tickMilitaryCountdowns() {
+        document.querySelectorAll("[data-arrives-at] .army-countdown").forEach((el) => {
+            const article = el.closest("[data-arrives-at]");
+            if (!article) return;
+            el.textContent = formatCountdown(article.dataset.arrivesAt);
+        });
+    }
+
     async function refreshMilitary() {
         if (!state.ready || militaryRefreshing) return;
 
@@ -1180,12 +1256,25 @@
                 completed: "Tamamlandı",
             };
 
+            const incoming = Array.isArray(militarySnapshot.incoming)
+                ? militarySnapshot.incoming
+                : [];
+
+            renderIncoming(incoming);
+
             $("army-orders").innerHTML = militarySnapshot.attacks.length
                 ? militarySnapshot.attacks.map((attack) => {
                     const resolved = attack.resolved_at !== null;
+                    const showCountdown = attack.status === "outbound"
+                        || attack.status === "returning";
+                    const countdownAt = attack.status === "returning"
+                        ? attack.returns_at
+                        : attack.arrives_at;
 
                     return `
-            <article class="army-order">
+            <article class="army-order"${showCountdown && countdownAt
+                            ? ` data-arrives-at="${escapeMilitaryHtml(countdownAt)}"`
+                            : ""}>
               <div>
                 <strong>
                   ${escapeMilitaryHtml(attack.target_name)}
@@ -1201,6 +1290,10 @@
                 Gönderilen: ${attack.sent_spears} mızrakçı
                 · Varış:
                 ${escapeMilitaryHtml(militaryDate(attack.arrives_at))}
+                ${showCountdown && countdownAt ? `
+                  · Kalan:
+                  <span class="army-countdown">${escapeMilitaryHtml(formatCountdown(countdownAt))}</span>
+                ` : ""}
               </p>
 
               ${resolved ? `
@@ -1223,7 +1316,7 @@
             </article>
           `;
                 }).join("")
-                : "<p>Henüz saldırı göndermedin.</p>";
+                : `<p class="army-empty">Henüz saldırı göndermedin.</p>`;
 
             if (
                 $("command-dialog").open &&
@@ -1317,4 +1410,16 @@
 
     resize();
     void start();
+
+    setInterval(() => {
+        if (!document.hidden && state.ready) {
+            void refreshMilitary();
+        }
+    }, 2000);
+
+    setInterval(() => {
+        if (!document.hidden && state.ready) {
+            tickMilitaryCountdowns();
+        }
+    }, 250);
 })();

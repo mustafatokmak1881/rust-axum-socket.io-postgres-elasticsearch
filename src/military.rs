@@ -90,8 +90,9 @@ fn check_origin(
     Ok(())
 }
 
-/// Oyuncunun köydeki askerleri ve son 20 saldırısı.
-/// Başka oyuncuların köydeki askerlerini paylaşmaz.
+/// Oyuncunun köydeki askerleri, giden emirleri ve gelen saldırıları.
+/// Başka oyuncuların köydeki (evde bekleyen) askerlerini paylaşmaz;
+/// gelen saldırılarda yalnızca yoldaki birlik sayısı görünür.
 pub async fn bootstrap(
     State(state): State<SharedState>,
     jar: CookieJar,
@@ -139,6 +140,31 @@ pub async fn bootstrap(
     .fetch_all(&state.db)
     .await?;
 
+    // Hedefi oyuncunun köyü olan ve henüz çarpışmamış saldırılar.
+    let incoming: Vec<Value> = sqlx::query_scalar(
+        r#"
+        SELECT jsonb_build_object(
+            'id', a.id,
+            'source_name', s.name,
+            'source_x', s.x,
+            'source_y', s.y,
+            'sent_spears', a.sent_spears,
+            'arrives_at', a.arrives_at,
+            'departed_at', a.departed_at
+        )
+        FROM army_attacks a
+        JOIN villages t ON t.id = a.target_id
+        JOIN villages s ON s.id = a.source_id
+        WHERE t.owner_id = $1
+          AND a.status = 'outbound'
+        ORDER BY a.arrives_at ASC, a.id ASC
+        LIMIT 50
+        "#,
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await?;
+
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(json!({
@@ -146,6 +172,7 @@ pub async fn bootstrap(
             "spears": army.1,
             "seconds_per_tile":
                 SPEAR_SECONDS_PER_TILE / MOVEMENT_SPEED,
+            "incoming": incoming,
             "attacks": attacks
         })),
     ))

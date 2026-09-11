@@ -126,6 +126,66 @@ button:disabled {
   font-size: 10px;
 }
 
+.header-end {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+
+.header-alerts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.incoming-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid #8a1f14;
+  border-radius: 2px;
+  background: linear-gradient(#c0392b, #7a1610);
+  color: #fff4d8;
+  text-decoration: none;
+  font: bold 12px Georgia, serif;
+  box-shadow: inset 0 1px 0 #e07060, 0 1px 0 #1a1008;
+  animation: incoming-pulse 1.6s ease-in-out infinite;
+}
+
+.incoming-badge[hidden] {
+  display: none !important;
+}
+
+.incoming-badge-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+#incoming-badge-count {
+  min-width: 1.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.incoming-badge-label {
+  font: 10px system-ui, sans-serif;
+  letter-spacing: 0.4px;
+  opacity: 0.92;
+}
+
+@keyframes incoming-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+
+  50% {
+    filter: brightness(1.12);
+  }
+}
+
 .world-indicator i,
 .live-dot {
   display: inline-block;
@@ -1053,7 +1113,54 @@ main {
   font: normal 11px Arial, sans-serif;
 }
 
-#army-orders {
+.army-sections {
+  display: grid;
+  gap: 0;
+}
+
+.army-section {
+  border-top: 1px solid #c9ae78;
+}
+
+.army-section > h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  background: linear-gradient(#efe0b8, #dfc894);
+  font: bold 12px Georgia, serif;
+  color: #5c3d16;
+}
+
+.army-section > h4 small {
+  margin-left: auto;
+  font: bold 11px Arial, sans-serif;
+  color: #8a1f14;
+}
+
+.army-section-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 2px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.army-section-icon.incoming {
+  background: #8a1f14;
+  color: #ffe7c2;
+}
+
+.army-section-icon.outgoing {
+  background: #355c2f;
+  color: #e8f5d8;
+}
+
+#army-orders,
+#army-incoming-list {
   padding: 10px;
 }
 
@@ -1062,6 +1169,12 @@ main {
   margin-bottom: 8px;
   background: #fff2d0;
   border: 1px solid #d4bb86;
+}
+
+.army-order.incoming {
+  background: #ffe8d6;
+  border-color: #c9896a;
+  border-left: 4px solid #a3261b;
 }
 
 .army-order > div {
@@ -1074,6 +1187,22 @@ main {
   margin: 7px 0 0;
   font-size: 11px;
   line-height: 1.6;
+}
+
+.army-order .army-countdown {
+  font-weight: bold;
+  color: #8a1f14;
+  font-variant-numeric: tabular-nums;
+}
+
+.army-order.incoming .army-countdown {
+  color: #6d140e;
+}
+
+.army-empty {
+  margin: 0;
+  font-size: 12px;
+  color: #766039;
 }
 
 .army-report {
