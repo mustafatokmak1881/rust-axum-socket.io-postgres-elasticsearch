@@ -28,6 +28,9 @@ const SPEAR_SECONDS_PER_TILE: f64 = 18.0 * 60.0;
 /// Klanlar.org mızrakçı taşıma kapasitesi.
 const SPEAR_CARRY_CAPACITY: i64 = 25;
 
+/// Yeni köy başlangıç ordusu (erken yağma/savunma için).
+pub const STARTING_SPEARS: i64 = 100;
+
 #[derive(Deserialize)]
 pub struct AttackRequest {
     pub request_id: Uuid,
@@ -315,7 +318,7 @@ async fn away_spears(
                 WHEN status = 'returning' THEN surviving_spears
                 ELSE 0
             END
-        ), 0)
+        ), 0)::bigint
         FROM army_attacks
         WHERE source_id = $1
           AND status IN ('outbound', 'returning')
@@ -332,7 +335,7 @@ async fn training_spears(
 ) -> Result<i64, AppError> {
     Ok(sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT COALESCE(SUM(count), 0)
+        SELECT COALESCE(SUM(count), 0)::bigint
         FROM army_recruits
         WHERE village_id = $1
           AND completed_at IS NULL

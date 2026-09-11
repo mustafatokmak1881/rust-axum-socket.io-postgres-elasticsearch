@@ -397,11 +397,12 @@ pub async fn create_village(
     sqlx::query(
         r#"
     INSERT INTO village_armies (village_id, spears)
-    VALUES ($1, 50)
+    VALUES ($1, $2)
     ON CONFLICT (village_id) DO NOTHING
     "#,
     )
     .bind(village_id)
+    .bind(crate::military::STARTING_SPEARS)
     .execute(&mut *tx)
     .await?;
 
