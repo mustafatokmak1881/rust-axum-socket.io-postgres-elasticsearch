@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::repository::{self, CurrentUser},
+    economy,
     error::AppError,
     security::hash_token,
     state::SharedState,
@@ -23,6 +24,9 @@ use crate::{
 // Normal referans hareket için bunu 1.0 yap.
 const MOVEMENT_SPEED: f64 = 540.0;
 const SPEAR_SECONDS_PER_TILE: f64 = 18.0 * 60.0;
+
+/// Klanlar.org mızrakçı taşıma kapasitesi.
+const SPEAR_CARRY_CAPACITY: i64 = 25;
 
 #[derive(Deserialize)]
 pub struct AttackRequest {
@@ -52,6 +56,7 @@ struct Attack {
 
     sent_spears: i64,
     surviving_spears: Option<i64>,
+    loot_wood: Option<i64>,
 
     travel_seconds: i32,
     arrives_at: DateTime<Utc>,
@@ -121,6 +126,7 @@ pub async fn bootstrap(
             'target_y', v.y,
             'sent_spears', a.sent_spears,
             'surviving_spears', a.surviving_spears,
+            'loot_wood', a.loot_wood,
             'defender_before', a.defender_before,
             'defender_after', a.defender_after,
             'status', a.status,
@@ -470,6 +476,50 @@ pub async fn execute_job(
         .execute(&mut *connection)
         .await?;
 
+        // Ganimet yalnızca saldırı kazanınca (sağ kalan > 0).
+        // Hedef köyün birikmiş odunundan alınır; gizli depo korunur.
+        let loot_wood = if survivors > 0 {
+            let target_economy =
+                economy::settle(&mut *connection, attack.target_id, now)
+                    .await?;
+
+            let hiding_level = sqlx::query_scalar::<_, i32>(
+                r#"
+                SELECT level
+                FROM village_buildings
+                WHERE village_id = $1 AND kind = 'hiding_place'
+                "#,
+            )
+            .bind(attack.target_id)
+            .fetch_optional(&mut *connection)
+            .await?
+            .unwrap_or(0);
+
+            let hidden = economy::hiding_capacity(hiding_level)?;
+            let available = (target_economy.wood - hidden).max(0);
+            let capacity = survivors.saturating_mul(SPEAR_CARRY_CAPACITY);
+            let loot = available.min(capacity);
+
+            if loot > 0 {
+                sqlx::query(
+                    r#"
+                    UPDATE villages
+                    SET wood = wood - $2
+                    WHERE id = $1
+                      AND wood >= $2
+                    "#,
+                )
+                .bind(attack.target_id)
+                .bind(loot)
+                .execute(&mut *connection)
+                .await?;
+            }
+
+            loot
+        } else {
+            0
+        };
+
         let mut return_job_id = None;
         let mut returns_at = None;
 
@@ -509,10 +559,11 @@ pub async fn execute_job(
             SET surviving_spears = $2,
                 defender_before = $3,
                 defender_after = $4,
-                resolved_at = $5,
-                return_job_id = $6,
-                returns_at = $7,
-                status = $8
+                loot_wood = $5,
+                resolved_at = $6,
+                return_job_id = $7,
+                returns_at = $8,
+                status = $9
             WHERE id = $1
             "#,
         )
@@ -520,6 +571,7 @@ pub async fn execute_job(
         .bind(survivors)
         .bind(defenders)
         .bind(defenders_after)
+        .bind(loot_wood)
         .bind(now)
         .bind(return_job_id)
         .bind(returns_at)
@@ -553,6 +605,8 @@ pub async fn execute_job(
             ))
         })?;
 
+        let loot_wood = attack.loot_wood.unwrap_or(0);
+
         sqlx::query(
             r#"
             UPDATE village_armies
@@ -564,6 +618,23 @@ pub async fn execute_job(
         .bind(survivors)
         .execute(&mut *connection)
         .await?;
+
+        if loot_wood > 0 {
+            // Kaynak üretimi ganimetten önce güncellenir; taşma olmaz.
+            economy::settle(&mut *connection, attack.source_id, now).await?;
+
+            sqlx::query(
+                r#"
+                UPDATE villages
+                SET wood = wood + $2
+                WHERE id = $1
+                "#,
+            )
+            .bind(attack.source_id)
+            .bind(loot_wood)
+            .execute(&mut *connection)
+            .await?;
+        }
 
         sqlx::query(
             r#"

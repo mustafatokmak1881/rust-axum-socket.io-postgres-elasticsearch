@@ -126,6 +126,21 @@ pub fn starting_level(kind: &str) -> i32 {
         .unwrap_or(0)
 }
 
+/// Klanlar.org gizli depo kapasitesi (1× dünya).
+const HIDING_CAPACITY: [i64; 11] = [
+    0, 150, 200, 274, 354, 456, 584, 747, 956, 1222, 1560,
+];
+
+pub fn hiding_capacity(level: i32) -> Result<i64, AppError> {
+    if !(0..=10).contains(&level) {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Invalid hiding place level: {level}"
+        )));
+    }
+
+    Ok(HIDING_CAPACITY[level as usize])
+}
+
 #[derive(Serialize)]
 pub struct Requirement {
     pub kind: String,

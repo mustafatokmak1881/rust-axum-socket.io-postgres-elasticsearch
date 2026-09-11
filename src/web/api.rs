@@ -86,6 +86,29 @@ fn check_origin(state: &SharedState, headers: &HeaderMap) -> Result<(), AppError
     Ok(())
 }
 
+/// İlk köy adı hesap e-postasının yerel kısmından türetilir.
+fn village_name_from_account(email: &str) -> String {
+    let local = email.split('@').next().unwrap_or(email);
+    let cleaned: String = local
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(32)
+        .collect();
+
+    let char_count = cleaned.chars().count();
+
+    if char_count >= 3 {
+        cleaned
+    } else if cleaned.is_empty() {
+        "Yeni Oba".to_owned()
+    } else {
+        format!("{cleaned}oba").chars().take(32).collect()
+    }
+}
+
 pub async fn bootstrap(
     State(state): State<SharedState>,
     jar: CookieJar,
@@ -310,9 +333,10 @@ pub async fn create_village(
                 owner_id,
                 world_id,
                 x,
-                y
+                y,
+                name
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id
             "#,
         )
@@ -321,6 +345,7 @@ pub async fn create_village(
         .bind(world_id)
         .bind(position.0)
         .bind(position.1)
+        .bind(village_name_from_account(&user.email))
         .fetch_one(&mut *tx)
         .await?
     };
