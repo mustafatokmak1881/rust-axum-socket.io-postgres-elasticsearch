@@ -16,6 +16,7 @@
     <nav class="menu" aria-label="Oyun menüsü">
       <a href="#overview" data-tab="overview">Köy merkezi</a>
       <a href="/map">Dünya haritası</a>
+      <a href="#army" data-tab="army">Ordu</a>
       <a href="#buildings" data-tab="buildings">Binalar</a>
       <a href="#jobs" data-tab="jobs">Görevler</a>
       <a href="#account" data-tab="account">Hesabım</a>
@@ -49,7 +50,7 @@
           <span class="onboarding-symbol">⚑</span>
           <h3>Destanın ilk obanla başlasın.</h3>
           <p>
-            Obanı kurarak 1.500 odun ve üç başlangıç binasıyla
+            Obanı kurarak 1.500 odun, kil ve demirle
             gelişmeye başlayabilirsin.
           </p>
           <button id="create-village" class="button large" type="button">
@@ -65,11 +66,27 @@
             <strong id="village-name"></strong>
           </div>
           <div class="resource">
-            <span class="wood-icon">▰</span>
+            <span class="resource-icon wood" aria-hidden="true"></span>
             <div>
               <small>ODUN</small>
               <strong id="wood">0</strong>
               <span id="wood-rate" class="resource-rate"></span>
+            </div>
+          </div>
+          <div class="resource">
+            <span class="resource-icon clay" aria-hidden="true"></span>
+            <div>
+              <small>KİL</small>
+              <strong id="clay">0</strong>
+              <span id="clay-rate" class="resource-rate"></span>
+            </div>
+          </div>
+          <div class="resource">
+            <span class="resource-icon iron" aria-hidden="true"></span>
+            <div>
+              <small>DEMİR</small>
+              <strong id="iron">0</strong>
+              <span id="iron-rate" class="resource-rate"></span>
             </div>
           </div>
           <div class="resource">
@@ -88,6 +105,7 @@
             <h3>Köy yönetimi</h3>
             <a href="/map">» Dünya haritası</a>
             <a href="#overview">» Genel bakış</a>
+            <a href="#army">» Ordu ve kışla</a>
             <a href="#buildings">» Bina yükseltmeleri</a>
             <a href="#jobs">» İnşaat geçmişi</a>
             <a href="#account">» Köy adı ve hesap</a>
@@ -95,9 +113,8 @@
             <div class="side-note">
               <strong>Üretim</strong>
               <p>
-                Oduncu seviyene göre odun üretilir.
-                Sayfa kapalıyken de üretim devam eder.
-                Depo kapasitesi bu sürümde henüz uygulanmıyor.
+                Oduncu, kil ocağı ve demir madeni seviyene göre
+                üç hammadde üretilir. Sayfa kapalıyken de devam eder.
               </p>
             </div>
           </aside>
@@ -138,6 +155,94 @@
               </div>
             </section>
 
+            <section class="panel screen" data-screen="army" hidden>
+              <h2>Ordu</h2>
+              <div class="panel-body">
+                <div class="army-summary">
+                  <div>
+                    <small>ÇİFTLİK</small>
+                    <strong id="army-farm-usage">—</strong>
+                  </div>
+                  <div>
+                    <small>KIŞLA</small>
+                    <strong id="army-barracks-level">—</strong>
+                  </div>
+                  <div>
+                    <small>KÖYDE</small>
+                    <strong id="army-home-total">—</strong>
+                  </div>
+                </div>
+
+                <h3 class="section-title">Birlikler</h3>
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Birlik</th>
+                        <th>Köyde</th>
+                        <th>Dışarıda</th>
+                        <th>Eğitimde</th>
+                        <th>Toplam</th>
+                      </tr>
+                    </thead>
+                    <tbody id="army-unit-rows">
+                      <tr>
+                        <td colspan="5" class="muted">Yükleniyor…</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <h3 class="section-title">Kışla — eğitim</h3>
+                <div id="army-recruit-queue" class="queue-box" hidden></div>
+
+                <div id="army-recruit-panel" class="recruit-panel">
+                  <p id="army-recruit-hint" class="muted small"></p>
+
+                  <form id="recruit-form" class="recruit-form">
+                    <label>
+                      Mızrakçı
+                      <input
+                        id="recruit-spears"
+                        type="number"
+                        min="1"
+                        max="10000"
+                        value="1"
+                        required
+                      >
+                    </label>
+
+                    <div class="recruit-meta">
+                      <span id="recruit-cost">Maliyet: —</span>
+                      <span id="recruit-duration">Süre: —</span>
+                      <span id="recruit-pop">Nüfus: —</span>
+                    </div>
+
+                    <div class="recruit-actions">
+                      <button type="button" class="button ghost" id="recruit-max">
+                        Maksimum
+                      </button>
+                      <button type="submit" class="button" id="recruit-submit">
+                        Eğit
+                      </button>
+                    </div>
+                  </form>
+
+                  <p id="recruit-result" class="muted small" role="status"></p>
+                </div>
+
+                <h3 class="section-title">Giden emirler</h3>
+                <div id="army-orders-list" class="army-incoming-list">
+                  <p class="army-empty">Henüz saldırı göndermedin.</p>
+                </div>
+
+                <p class="muted small">
+                  Saldırı göndermek için dünya haritasını kullan.
+                  Mızrakçı: 50 odun / 30 kil / 10 demir / 1 nüfus.
+                </p>
+              </div>
+            </section>
+
             <section class="panel screen" data-screen="buildings" hidden>
               <h2>Binalar</h2>
 
@@ -158,7 +263,7 @@
                       <tr>
                         <th>Bina</th>
                         <th>Seviye</th>
-                        <th>Odun</th>
+                        <th>Maliyet</th>
                         <th>Süre</th>
                         <th>İşlem</th>
                       </tr>
@@ -168,10 +273,9 @@
                 </div>
 
                 <div class="info-box">
-                  Oduncu yükseltmeleri saatlik üretimi artırır.
+                  Kaynak binaları saatlik üretimi artırır.
                   Bina koşulları Klanlar.org kurallarına göre kontrol edilir.
-                  Maliyetler ve inşa süreleri hâlâ geliştirme değerleridir.
-                  Kil, demir, nüfus ve depo kapasitesi henüz ekonomiye bağlı değil.
+                  Maliyetler üç hammadde (odun / kil / demir) olarak alınır.
                 </div>
               </div>
             </section>

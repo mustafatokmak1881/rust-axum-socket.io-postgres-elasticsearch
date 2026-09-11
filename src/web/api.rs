@@ -24,6 +24,8 @@ struct Village {
     id: Uuid,
     name: String,
     wood: i64,
+    clay: i64,
+    iron: i64,
 }
 
 #[derive(Serialize, FromRow)]
@@ -39,6 +41,8 @@ struct BuildingOffer {
     max_level: i32,
 
     cost_wood: Option<i64>,
+    cost_clay: Option<i64>,
+    cost_iron: Option<i64>,
     duration_seconds: Option<i32>,
 
     production_per_hour: Option<i64>,
@@ -118,7 +122,7 @@ pub async fn bootstrap(
 
     let mut village = sqlx::query_as::<_, Village>(
         r#"
-        SELECT id, name, wood
+        SELECT id, name, wood, clay, iron
         FROM villages
         WHERE owner_id = $1
         FOR UPDATE
@@ -142,6 +146,8 @@ pub async fn bootstrap(
         let resources = economy::settle(&mut *tx, village.id, server_time).await?;
 
         village.wood = resources.wood;
+        village.clay = resources.clay;
+        village.iron = resources.iron;
         economy_snapshot = Some(resources);
 
         buildings = sqlx::query_as::<_, Building>(
@@ -220,29 +226,55 @@ pub async fn bootstrap(
                 ))
             } else if pending {
                 Some("İnşaat sürüyor".to_owned())
-            } else if village.wood < cost.unwrap_or(0) {
-                Some("Odun yetersiz".to_owned())
+            } else if let Some(cost) = cost {
+                if village.wood < cost.wood {
+                    Some("Odun yetersiz".to_owned())
+                } else if village.clay < cost.clay {
+                    Some("Kil yetersiz".to_owned())
+                } else if village.iron < cost.iron {
+                    Some("Demir yetersiz".to_owned())
+                } else {
+                    None
+                }
             } else {
                 None
             };
 
-            let production = if kind == "timber" {
-                Some(economy::timber_production(level)?)
-            } else {
-                None
-            };
-
-            let next_production = if kind == "timber" && !maxed {
-                Some(economy::timber_production(target)?)
-            } else {
-                None
+            let (production, next_production) = match kind {
+                "timber" => (
+                    Some(economy::timber_production(level)?),
+                    if maxed {
+                        None
+                    } else {
+                        Some(economy::timber_production(target)?)
+                    },
+                ),
+                "clay" => (
+                    Some(economy::clay_production(level)?),
+                    if maxed {
+                        None
+                    } else {
+                        Some(economy::clay_production(target)?)
+                    },
+                ),
+                "iron" => (
+                    Some(economy::iron_production(level)?),
+                    if maxed {
+                        None
+                    } else {
+                        Some(economy::iron_production(target)?)
+                    },
+                ),
+                _ => (None, None),
             };
 
             offers.push(BuildingOffer {
                 kind: kind.to_owned(),
                 level,
                 max_level,
-                cost_wood: cost,
+                cost_wood: cost.map(|c| c.wood),
+                cost_clay: cost.map(|c| c.clay),
+                cost_iron: cost.map(|c| c.iron),
                 duration_seconds: seconds,
                 production_per_hour: production,
                 next_production_per_hour: next_production,
@@ -263,12 +295,7 @@ pub async fn bootstrap(
         "offers": offers,
         "economy": economy_snapshot,
         "server_time": server_time,
-
-        // Eski istemci alanlarını geçiş için koruyoruz.
-        // Yeni frontend teklifler için offers alanını kullanacak.
         "rules": {
-            "max_level": 20,
-            "wood_per_target_level": 100,
             "seconds_per_target_level": 15
         }
     })))
@@ -431,7 +458,7 @@ pub async fn start_upgrade(
     // Kaynak harcaması ve kuyruk kontrolünü aynı köy kilidiyle koru.
     let village = sqlx::query_as::<_, Village>(
         r#"
-        SELECT id, name, wood
+        SELECT id, name, wood, clay, iron
         FROM villages
         WHERE owner_id = $1
         FOR UPDATE
@@ -493,15 +520,31 @@ pub async fn start_upgrade(
     let cost = economy::upgrade_cost(target_level);
     let duration_seconds = economy::upgrade_seconds(target_level);
 
-    if resources.wood < cost {
+    if resources.wood < cost.wood {
         return Err(AppError::BadRequest("Yeterli odun yok."));
     }
+    if resources.clay < cost.clay {
+        return Err(AppError::BadRequest("Yeterli kil yok."));
+    }
+    if resources.iron < cost.iron {
+        return Err(AppError::BadRequest("Yeterli demir yok."));
+    }
 
-    sqlx::query("UPDATE villages SET wood = wood - $1 WHERE id = $2")
-        .bind(cost)
-        .bind(village.id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        r#"
+        UPDATE villages
+        SET wood = wood - $2,
+            clay = clay - $3,
+            iron = iron - $4
+        WHERE id = $1
+        "#,
+    )
+    .bind(village.id)
+    .bind(cost.wood)
+    .bind(cost.clay)
+    .bind(cost.iron)
+    .execute(&mut *tx)
+    .await?;
 
     let job_id = Uuid::new_v4();
 

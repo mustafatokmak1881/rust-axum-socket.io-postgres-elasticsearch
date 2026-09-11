@@ -1303,6 +1303,11 @@
                   ${attack.sent_spears - attack.surviving_spears}
                   · Savunmacı:
                   ${attack.defender_before} → ${attack.defender_after}
+                  ${(attack.loot_wood > 0 || attack.loot_clay > 0 || attack.loot_iron > 0) ? `
+                    · Ganimet: ${attack.loot_wood || 0} / ${attack.loot_clay || 0} / ${attack.loot_iron || 0}
+                  ` : attack.surviving_spears > 0 ? `
+                    · Ganimet: yok
+                  ` : ""}
                 </p>
               ` : ""}
 
@@ -1310,7 +1315,13 @@
                 <p>
                   Dönüş:
                   ${escapeMilitaryHtml(militaryDate(attack.returns_at))}
-                  ${attack.returned_at ? " · Köye ulaştı" : ""}
+                  ${attack.returned_at
+                    ? ` · Köye ulaştı${(attack.loot_wood > 0 || attack.loot_clay > 0 || attack.loot_iron > 0)
+                        ? ` (+${attack.loot_wood || 0}/${attack.loot_clay || 0}/${attack.loot_iron || 0})`
+                        : ""}`
+                    : (attack.loot_wood > 0 || attack.loot_clay > 0 || attack.loot_iron > 0)
+                        ? ` · Ganimet yolda (${attack.loot_wood || 0}/${attack.loot_clay || 0}/${attack.loot_iron || 0})`
+                        : ""}
                 </p>
               ` : ""}
             </article>

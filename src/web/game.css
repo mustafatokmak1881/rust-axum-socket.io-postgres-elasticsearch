@@ -417,8 +417,25 @@ footer {
   font-variant-numeric: tabular-nums;
 }
 
-.wood-icon {
-  transform: rotate(-20deg);
+.resource-icon {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #5a4828;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px #fff6d455;
+}
+
+.resource-icon.wood {
+  background: linear-gradient(135deg, #8b5a2b, #c4a066);
+}
+
+.resource-icon.clay {
+  background: linear-gradient(135deg, #a65d3b, #d4a07a);
+}
+
+.resource-icon.iron {
+  background: linear-gradient(135deg, #6a7178, #b8c0c8);
 }
 
 /* Sol klasik menü */
@@ -1643,8 +1660,85 @@ input {
 
 /* Canlı inşaat kuyruğu */
 
-#buildings-active-queue {
+.army-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
   margin-bottom: 18px;
+}
+
+.army-summary > div {
+  padding: 10px 12px;
+  background: #f7efd4;
+  border: 1px solid #c9b27a;
+}
+
+.army-summary small {
+  display: block;
+  color: #7a6438;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.army-summary strong {
+  display: block;
+  margin-top: 4px;
+  color: #3f331c;
+  font-size: 14px;
+}
+
+.recruit-panel {
+  margin-bottom: 22px;
+  padding: 12px;
+  border: 1px solid #c9b27a;
+  background: #fff8e4;
+}
+
+.recruit-form {
+  display: grid;
+  gap: 10px;
+  max-width: 420px;
+}
+
+.recruit-form label {
+  display: grid;
+  gap: 4px;
+  color: #5a4524;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.recruit-form input {
+  width: 120px;
+  padding: 6px 8px;
+  border: 1px solid #b89a60;
+  background: #fffdf4;
+  color: #3f331c;
+}
+
+.recruit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #6b5530;
+  font-size: 12px;
+}
+
+.recruit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.button.ghost {
+  background: transparent;
+  border: 1px solid #b89a60;
+  color: #5a4524;
+}
+
+@media (max-width: 760px) {
+  .army-summary {
+    grid-template-columns: 1fr;
+  }
 }
 
 #buildings-active-queue .section-title {

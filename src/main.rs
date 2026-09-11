@@ -77,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/api/military", get(military::bootstrap))
         .route("/api/military/attacks", post(military::send_attack))
+        .route("/api/military/recruit", post(military::start_recruit))
         .route(
             "/assets/building-headquarters.svg",
             get(web::headquarters_art),

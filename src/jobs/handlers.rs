@@ -81,7 +81,7 @@ pub async fn execute(
             crate::web::api::complete_upgrade(&mut *transaction, job_id).await?;
         }
 
-        "army.attack.arrive.v1" | "army.attack.return.v1" => {
+        "army.attack.arrive.v1" | "army.attack.return.v1" | "army.recruit.complete.v1" => {
             crate::military::execute_job(&mut *transaction, job_id).await?;
         }
 

@@ -35,6 +35,19 @@ pub struct AttackRequest {
     pub spears: i64,
 }
 
+#[derive(Deserialize)]
+pub struct RecruitRequest {
+    pub count: i64,
+}
+
+#[derive(FromRow)]
+struct Recruit {
+    job_id: Uuid,
+    village_id: Uuid,
+    unit_kind: String,
+    count: i64,
+}
+
 #[derive(FromRow)]
 struct MapVillage {
     id: Uuid,
@@ -57,6 +70,8 @@ struct Attack {
     sent_spears: i64,
     surviving_spears: Option<i64>,
     loot_wood: Option<i64>,
+    loot_clay: Option<i64>,
+    loot_iron: Option<i64>,
 
     travel_seconds: i32,
     arrives_at: DateTime<Utc>,
@@ -104,18 +119,53 @@ pub async fn bootstrap(
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let user = current_user(&state, &jar).await?;
 
+    let mut tx = state.db.begin().await?;
+
     let army = sqlx::query_as::<_, (Uuid, i64)>(
         r#"
         SELECT v.id, a.spears
         FROM villages v
         JOIN village_armies a ON a.village_id = v.id
         WHERE v.owner_id = $1
+        FOR UPDATE OF v
         "#,
     )
     .bind(user.id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    let village_id = army.0;
+    let home_spears = army.1;
+
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
+
+    let economy_snapshot = economy::settle(&mut *tx, village_id, now).await?;
+
+    let barracks_level = building_level(&mut *tx, village_id, "barracks").await?;
+    let farm_level = building_level(&mut *tx, village_id, "farm").await?;
+    let farm_capacity = economy::farm_capacity(farm_level)?;
+
+    let away_spears = away_spears(&mut *tx, village_id).await?;
+    let training_spears = training_spears(&mut *tx, village_id).await?;
+    let population_used =
+        home_spears + away_spears + training_spears;
+    let farm_free = (farm_capacity - population_used).max(0);
+
+    let recruit = sqlx::query_as::<_, (Uuid, String, i64, DateTime<Utc>)>(
+        r#"
+        SELECT r.job_id, r.unit_kind, r.count, j.run_at
+        FROM army_recruits r
+        JOIN scheduled_jobs j ON j.id = r.job_id
+        WHERE r.village_id = $1
+          AND r.completed_at IS NULL
+        "#,
+    )
+    .bind(village_id)
+    .fetch_optional(&mut *tx)
+    .await?;
 
     let attacks: Vec<Value> = sqlx::query_scalar(
         r#"
@@ -127,6 +177,8 @@ pub async fn bootstrap(
             'sent_spears', a.sent_spears,
             'surviving_spears', a.surviving_spears,
             'loot_wood', a.loot_wood,
+            'loot_clay', a.loot_clay,
+            'loot_iron', a.loot_iron,
             'defender_before', a.defender_before,
             'defender_after', a.defender_after,
             'status', a.status,
@@ -143,7 +195,7 @@ pub async fn bootstrap(
         "#,
     )
     .bind(user.id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await?;
 
     // Hedefi oyuncunun köyü olan ve henüz çarpışmamış saldırılar.
@@ -168,18 +220,298 @@ pub async fn bootstrap(
         "#,
     )
     .bind(user.id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await?;
+
+    tx.commit().await?;
+
+    let recruit_json = recruit.map(|(job_id, unit_kind, count, finishes_at)| {
+        json!({
+            "job_id": job_id,
+            "unit": unit_kind,
+            "count": count,
+            "finishes_at": finishes_at
+        })
+    });
 
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(json!({
-            "source_id": army.0,
-            "spears": army.1,
+            "source_id": village_id,
+            "spears": home_spears,
+            "army": {
+                "home": {
+                    "spear": home_spears
+                },
+                "away": {
+                    "spear": away_spears
+                },
+                "training": {
+                    "spear": training_spears
+                },
+                "total": {
+                    "spear": home_spears + away_spears + training_spears
+                }
+            },
+            "barracks_level": barracks_level,
+            "farm": {
+                "level": farm_level,
+                "capacity": farm_capacity,
+                "used": population_used,
+                "free": farm_free
+            },
+            "units": {
+                "spear": {
+                    "name": "Mızrakçı",
+                    "wood_cost": economy::SPEAR_WOOD_COST,
+                    "clay_cost": economy::SPEAR_CLAY_COST,
+                    "iron_cost": economy::SPEAR_IRON_COST,
+                    "population": economy::SPEAR_POPULATION,
+                    "carry": SPEAR_CARRY_CAPACITY,
+                    "requires_barracks": 1,
+                    "available": barracks_level >= 1
+                }
+            },
+            "recruit": recruit_json,
+            "wood": economy_snapshot.wood,
+            "clay": economy_snapshot.clay,
+            "iron": economy_snapshot.iron,
             "seconds_per_tile":
                 SPEAR_SECONDS_PER_TILE / MOVEMENT_SPEED,
             "incoming": incoming,
             "attacks": attacks
+        })),
+    ))
+}
+
+async fn building_level(
+    connection: &mut PgConnection,
+    village_id: Uuid,
+    kind: &str,
+) -> Result<i32, AppError> {
+    Ok(sqlx::query_scalar::<_, i32>(
+        r#"
+        SELECT level
+        FROM village_buildings
+        WHERE village_id = $1 AND kind = $2
+        "#,
+    )
+    .bind(village_id)
+    .bind(kind)
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or(0))
+}
+
+async fn away_spears(
+    connection: &mut PgConnection,
+    village_id: Uuid,
+) -> Result<i64, AppError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COALESCE(SUM(
+            CASE
+                WHEN status = 'outbound' THEN sent_spears
+                WHEN status = 'returning' THEN surviving_spears
+                ELSE 0
+            END
+        ), 0)
+        FROM army_attacks
+        WHERE source_id = $1
+          AND status IN ('outbound', 'returning')
+        "#,
+    )
+    .bind(village_id)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+async fn training_spears(
+    connection: &mut PgConnection,
+    village_id: Uuid,
+) -> Result<i64, AppError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COALESCE(SUM(count), 0)
+        FROM army_recruits
+        WHERE village_id = $1
+          AND completed_at IS NULL
+          AND unit_kind = 'spear'
+        "#,
+    )
+    .bind(village_id)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+/// Kışlada mızrakçı eğitir. Aynı anda tek eğitim kuyruğu.
+pub async fn start_recruit(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(input): Json<RecruitRequest>,
+) -> Result<(StatusCode, Json<Value>), AppError> {
+    check_origin(&state, &headers)?;
+    let user = current_user(&state, &jar).await?;
+
+    if !(1..=10_000).contains(&input.count) {
+        return Err(AppError::BadRequest(
+            "Eğitilecek birlik sayısı 1–10.000 arasında olmalı.",
+        ));
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    let village = sqlx::query_as::<_, (Uuid,)>(
+        r#"
+        SELECT id
+        FROM villages
+        WHERE owner_id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(user.id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let village_id = village.0;
+
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
+
+    let resources = economy::settle(&mut *tx, village_id, now).await?;
+
+    let barracks_level = building_level(&mut *tx, village_id, "barracks").await?;
+
+    if barracks_level < 1 {
+        return Err(AppError::BadRequest(
+            "Mızrakçı eğitmek için kışla gerekli (Bey otağı 3).",
+        ));
+    }
+
+    let pending: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM army_recruits
+            WHERE village_id = $1
+              AND completed_at IS NULL
+        )
+        "#,
+    )
+    .bind(village_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if pending {
+        return Err(AppError::BadRequest(
+            "Köyünde zaten devam eden bir eğitim var.",
+        ));
+    }
+
+    let farm_level = building_level(&mut *tx, village_id, "farm").await?;
+    let farm_capacity = economy::farm_capacity(farm_level)?;
+
+    let home_spears: i64 = sqlx::query_scalar(
+        r#"
+        SELECT spears
+        FROM village_armies
+        WHERE village_id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(village_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let away = away_spears(&mut *tx, village_id).await?;
+    let population_needed = input.count.saturating_mul(economy::SPEAR_POPULATION);
+    let population_used = home_spears + away;
+    let farm_free = (farm_capacity - population_used).max(0);
+
+    if population_needed > farm_free {
+        return Err(AppError::BadRequest(
+            "Çiftlikte yeterli nüfus alanı yok.",
+        ));
+    }
+
+    let cost = economy::spear_cost(input.count)?;
+
+    if resources.wood < cost.wood {
+        return Err(AppError::BadRequest("Yeterli odun yok."));
+    }
+    if resources.clay < cost.clay {
+        return Err(AppError::BadRequest("Yeterli kil yok."));
+    }
+    if resources.iron < cost.iron {
+        return Err(AppError::BadRequest("Yeterli demir yok."));
+    }
+
+    let duration_seconds =
+        economy::spear_recruit_seconds(input.count, barracks_level)?;
+
+    sqlx::query(
+        r#"
+        UPDATE villages
+        SET wood = wood - $2,
+            clay = clay - $3,
+            iron = iron - $4
+        WHERE id = $1
+        "#,
+    )
+    .bind(village_id)
+    .bind(cost.wood)
+    .bind(cost.clay)
+    .bind(cost.iron)
+    .execute(&mut *tx)
+    .await?;
+
+    let job_id = Uuid::new_v4();
+
+    let finishes_at: DateTime<Utc> = sqlx::query_scalar(
+        r#"
+        INSERT INTO scheduled_jobs (id, kind, payload, run_at)
+        VALUES (
+            $1,
+            'army.recruit.complete.v1',
+            '{}'::jsonb,
+            clock_timestamp() + ($2::integer * INTERVAL '1 second')
+        )
+        RETURNING run_at
+        "#,
+    )
+    .bind(job_id)
+    .bind(duration_seconds)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO army_recruits (job_id, village_id, unit_kind, count)
+        VALUES ($1, $2, 'spear', $3)
+        "#,
+    )
+    .bind(job_id)
+    .bind(village_id)
+    .bind(input.count)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "job_id": job_id,
+            "unit": "spear",
+            "count": input.count,
+            "finishes_at": finishes_at,
+            "wood_cost": cost.wood,
+            "clay_cost": cost.clay,
+            "iron_cost": cost.iron,
+            "duration_seconds": duration_seconds
         })),
     ))
 }
@@ -406,6 +738,22 @@ pub async fn execute_job(
     connection: &mut PgConnection,
     job_id: Uuid,
 ) -> Result<(), AppError> {
+    if let Some(recruit) = sqlx::query_as::<_, Recruit>(
+        r#"
+        SELECT job_id, village_id, unit_kind, count
+        FROM army_recruits
+        WHERE job_id = $1
+          AND completed_at IS NULL
+        FOR UPDATE
+        "#,
+    )
+    .bind(job_id)
+    .fetch_optional(&mut *connection)
+    .await?
+    {
+        return complete_recruit(connection, recruit).await;
+    }
+
     let attack = sqlx::query_as::<_, Attack>(
         r#"
         SELECT *
@@ -477,8 +825,8 @@ pub async fn execute_job(
         .await?;
 
         // Ganimet yalnızca saldırı kazanınca (sağ kalan > 0).
-        // Hedef köyün birikmiş odunundan alınır; gizli depo korunur.
-        let loot_wood = if survivors > 0 {
+        // Üç hammadde orantılı alınır; gizli depo her birinden korunur.
+        let loot = if survivors > 0 {
             let target_economy =
                 economy::settle(&mut *connection, attack.target_id, now)
                     .await?;
@@ -496,28 +844,39 @@ pub async fn execute_job(
             .unwrap_or(0);
 
             let hidden = economy::hiding_capacity(hiding_level)?;
-            let available = (target_economy.wood - hidden).max(0);
             let capacity = survivors.saturating_mul(SPEAR_CARRY_CAPACITY);
-            let loot = available.min(capacity);
+            let loot = economy::split_loot(
+                capacity,
+                (target_economy.wood - hidden).max(0),
+                (target_economy.clay - hidden).max(0),
+                (target_economy.iron - hidden).max(0),
+            );
 
-            if loot > 0 {
+            if loot.wood > 0 || loot.clay > 0 || loot.iron > 0 {
                 sqlx::query(
                     r#"
                     UPDATE villages
-                    SET wood = wood - $2
+                    SET wood = $2,
+                        clay = $3,
+                        iron = $4
                     WHERE id = $1
-                      AND wood >= $2
                     "#,
                 )
                 .bind(attack.target_id)
-                .bind(loot)
+                .bind(target_economy.wood - loot.wood)
+                .bind(target_economy.clay - loot.clay)
+                .bind(target_economy.iron - loot.iron)
                 .execute(&mut *connection)
                 .await?;
             }
 
             loot
         } else {
-            0
+            economy::ResourceCost {
+                wood: 0,
+                clay: 0,
+                iron: 0,
+            }
         };
 
         let mut return_job_id = None;
@@ -560,10 +919,12 @@ pub async fn execute_job(
                 defender_before = $3,
                 defender_after = $4,
                 loot_wood = $5,
-                resolved_at = $6,
-                return_job_id = $7,
-                returns_at = $8,
-                status = $9
+                loot_clay = $6,
+                loot_iron = $7,
+                resolved_at = $8,
+                return_job_id = $9,
+                returns_at = $10,
+                status = $11
             WHERE id = $1
             "#,
         )
@@ -571,7 +932,9 @@ pub async fn execute_job(
         .bind(survivors)
         .bind(defenders)
         .bind(defenders_after)
-        .bind(loot_wood)
+        .bind(loot.wood)
+        .bind(loot.clay)
+        .bind(loot.iron)
         .bind(now)
         .bind(return_job_id)
         .bind(returns_at)
@@ -606,6 +969,8 @@ pub async fn execute_job(
         })?;
 
         let loot_wood = attack.loot_wood.unwrap_or(0);
+        let loot_clay = attack.loot_clay.unwrap_or(0);
+        let loot_iron = attack.loot_iron.unwrap_or(0);
 
         sqlx::query(
             r#"
@@ -619,19 +984,22 @@ pub async fn execute_job(
         .execute(&mut *connection)
         .await?;
 
-        if loot_wood > 0 {
-            // Kaynak üretimi ganimetten önce güncellenir; taşma olmaz.
+        if loot_wood > 0 || loot_clay > 0 || loot_iron > 0 {
             economy::settle(&mut *connection, attack.source_id, now).await?;
 
             sqlx::query(
                 r#"
                 UPDATE villages
-                SET wood = wood + $2
+                SET wood = wood + $2,
+                    clay = clay + $3,
+                    iron = iron + $4
                 WHERE id = $1
                 "#,
             )
             .bind(attack.source_id)
             .bind(loot_wood)
+            .bind(loot_clay)
+            .bind(loot_iron)
             .execute(&mut *connection)
             .await?;
         }
@@ -649,6 +1017,68 @@ pub async fn execute_job(
         .execute(&mut *connection)
         .await?;
     }
+
+    Ok(())
+}
+
+async fn complete_recruit(
+    connection: &mut PgConnection,
+    recruit: Recruit,
+) -> Result<(), AppError> {
+    let run_at: DateTime<Utc> = sqlx::query_scalar(
+        r#"
+        SELECT run_at
+        FROM scheduled_jobs
+        WHERE id = $1
+        "#,
+    )
+    .bind(recruit.job_id)
+    .fetch_one(&mut *connection)
+    .await?;
+
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *connection)
+        .await?;
+
+    if now < run_at {
+        return Err(AppError::BadRequest("Job is not due yet"));
+    }
+
+    sqlx::query("SELECT id FROM villages WHERE id = $1 FOR UPDATE")
+        .bind(recruit.village_id)
+        .fetch_one(&mut *connection)
+        .await?;
+
+    if recruit.unit_kind != "spear" {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Unknown recruit unit {}",
+            recruit.unit_kind
+        )));
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE village_armies
+        SET spears = spears + $2
+        WHERE village_id = $1
+        "#,
+    )
+    .bind(recruit.village_id)
+    .bind(recruit.count)
+    .execute(&mut *connection)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE army_recruits
+        SET completed_at = $2
+        WHERE job_id = $1
+        "#,
+    )
+    .bind(recruit.job_id)
+    .bind(now)
+    .execute(&mut *connection)
+    .await?;
 
     Ok(())
 }

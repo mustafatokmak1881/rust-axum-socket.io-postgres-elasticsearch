@@ -14,6 +14,7 @@ const definitions = {
     description: "Piyade birliklerinin eğitildiği yer",
     icon: `/assets/building-generic.svg`,
     map: { left: "78%", top: "42%" },
+    href: "#army",
   },
   stable: {
     name: "Ahır",
@@ -44,6 +45,7 @@ const definitions = {
     description: "Orduların toplandığı komuta noktası",
     icon: `/assets/building-generic.svg`,
     map: { left: "50%", top: "55%" },
+    href: "#army",
   },
   statue: {
     name: "Heykel",
@@ -192,7 +194,7 @@ async function api(path, options = {}) {
 function currentTab() {
   const tab = location.hash.slice(1);
 
-  return ["overview", "buildings", "jobs", "account"].includes(tab)
+  return ["overview", "army", "buildings", "jobs", "account"].includes(tab)
     ? tab
     : "overview";
 }
@@ -308,6 +310,8 @@ function render() {
 
   $("#village-name").textContent = village.name;
   $("#wood").textContent = number(village.wood);
+  $("#clay").textContent = number(village.clay);
+  $("#iron").textContent = number(village.iron);
 
   $("#points").textContent = number(
     buildings.reduce((sum, building) => sum + building.level, 0),
@@ -345,13 +349,23 @@ function render() {
     const production = offer.production_per_hour !== null
       ? `
       <small class="production-description">
-        ${number(offer.production_per_hour)} odun/saat
+        ${number(offer.production_per_hour)}/${
+        offer.kind === "clay"
+          ? "kil"
+          : offer.kind === "iron"
+            ? "demir"
+            : "odun"
+      }/saat
         ${offer.next_production_per_hour !== null
-        ? ` → ${number(offer.next_production_per_hour)} odun/saat`
+        ? ` → ${number(offer.next_production_per_hour)}`
         : ""}
       </small>
     `
       : "";
+
+    const costLabel = maxed
+      ? "—"
+      : `${number(offer.cost_wood)} / ${number(offer.cost_clay)} / ${number(offer.cost_iron)}`;
 
     const actionLabel = offer.level === 0
       ? "İnşa et"
@@ -377,7 +391,7 @@ function render() {
       <td><b>${offer.level}</b> / ${offer.max_level}</td>
 
       <td>
-        ${maxed ? "—" : number(offer.cost_wood)}
+        ${costLabel}
       </td>
 
       <td>
@@ -409,7 +423,7 @@ function render() {
 
         return `
           <a
-            href="#buildings"
+            href="${definition.href || "#buildings"}"
             class="map-building"
             style="left:${left};top:${top}"
             title="${escapeHtml(definition.name)}"
@@ -540,6 +554,240 @@ function renderIncoming(incoming) {
   `).join("");
 }
 
+function spearRecruitSeconds(count, barracksLevel) {
+  const perUnit = Math.max(1, Math.ceil(20 * (0.95 ** (barracksLevel - 1))));
+  return count * perUnit;
+}
+
+function maxRecruitable() {
+  if (!militarySnapshot) return 0;
+
+  const farmFree = militarySnapshot.farm?.free ?? 0;
+  const wood = militarySnapshot.wood ?? snapshot?.village?.wood ?? 0;
+  const clay = militarySnapshot.clay ?? snapshot?.village?.clay ?? 0;
+  const iron = militarySnapshot.iron ?? snapshot?.village?.iron ?? 0;
+  const woodCost = militarySnapshot.units?.spear?.wood_cost ?? 50;
+  const clayCost = militarySnapshot.units?.spear?.clay_cost ?? 30;
+  const ironCost = militarySnapshot.units?.spear?.iron_cost ?? 10;
+
+  if (militarySnapshot.recruit) return 0;
+  if ((militarySnapshot.barracks_level ?? 0) < 1) return 0;
+
+  return Math.max(
+    0,
+    Math.min(
+      farmFree,
+      Math.floor(wood / woodCost),
+      Math.floor(clay / clayCost),
+      Math.floor(iron / ironCost),
+      10000,
+    ),
+  );
+}
+
+function updateRecruitPreview() {
+  const input = $("#recruit-spears");
+  if (!input || !militarySnapshot) return;
+
+  const count = Math.max(0, Number(input.value) || 0);
+  const wood = (militarySnapshot.units?.spear?.wood_cost ?? 50) * count;
+  const clay = (militarySnapshot.units?.spear?.clay_cost ?? 30) * count;
+  const iron = (militarySnapshot.units?.spear?.iron_cost ?? 10) * count;
+  const barracks = militarySnapshot.barracks_level ?? 0;
+  const seconds = barracks >= 1 ? spearRecruitSeconds(count, barracks) : 0;
+
+  $("#recruit-cost").textContent =
+    `Maliyet: ${number(wood)} / ${number(clay)} / ${number(iron)}`;
+  $("#recruit-duration").textContent = count > 0 && barracks >= 1
+    ? `Süre: ${duration(seconds)}`
+    : "Süre: —";
+  $("#recruit-pop").textContent = `Nüfus: ${number(count)}`;
+}
+
+function renderArmyPanel() {
+  if (!militarySnapshot) return;
+
+  const army = militarySnapshot.army || {
+    home: { spear: militarySnapshot.spears || 0 },
+    away: { spear: 0 },
+    training: { spear: 0 },
+    total: { spear: militarySnapshot.spears || 0 },
+  };
+
+  const farm = militarySnapshot.farm || {
+    used: 0,
+    capacity: 0,
+    free: 0,
+    level: 0,
+  };
+
+  const homeEl = $("#army-home-total");
+  const farmEl = $("#army-farm-usage");
+  const barracksEl = $("#army-barracks-level");
+
+  if (homeEl) {
+    homeEl.textContent = `${number(army.home.spear || 0)} mızrakçı`;
+  }
+
+  if (farmEl) {
+    farmEl.textContent =
+      `${number(farm.used)} / ${number(farm.capacity)} (boş ${number(farm.free)})`;
+  }
+
+  if (barracksEl) {
+    barracksEl.textContent = `Seviye ${militarySnapshot.barracks_level ?? 0}`;
+  }
+
+  const rows = $("#army-unit-rows");
+
+  if (rows) {
+    rows.innerHTML = `
+      <tr>
+        <td><strong>Mızrakçı</strong></td>
+        <td>${number(army.home.spear || 0)}</td>
+        <td>${number(army.away.spear || 0)}</td>
+        <td>${number(army.training.spear || 0)}</td>
+        <td><b>${number(army.total.spear || 0)}</b></td>
+      </tr>
+    `;
+  }
+
+  const queue = $("#army-recruit-queue");
+  const panel = $("#army-recruit-panel");
+  const hint = $("#army-recruit-hint");
+  const form = $("#recruit-form");
+  const result = $("#recruit-result");
+
+  if (queue && militarySnapshot.recruit) {
+    const recruit = militarySnapshot.recruit;
+    queue.hidden = false;
+    queue.innerHTML = `
+      <div class="table-scroll live-construction">
+        <table>
+          <thead>
+            <tr>
+              <th>Eğitim</th>
+              <th>Kalan süre</th>
+              <th>Planlanan tamamlanma</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <strong>${number(recruit.count)} mızrakçı</strong>
+              </td>
+              <td>
+                <strong
+                  class="construction-countdown"
+                  data-countdown="${escapeHtml(recruit.finishes_at)}"
+                ></strong>
+              </td>
+              <td>
+                <time datetime="${escapeHtml(recruit.finishes_at)}">
+                  ${escapeHtml(date(recruit.finishes_at))}
+                </time>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+  } else if (queue) {
+    queue.hidden = true;
+    queue.innerHTML = "";
+  }
+
+  const barracksReady = (militarySnapshot.barracks_level ?? 0) >= 1;
+  const training = Boolean(militarySnapshot.recruit);
+
+  if (hint) {
+    if (!barracksReady) {
+      hint.textContent =
+        "Mızrakçı eğitmek için kışla inşa et (Bey otağı seviye 3 gerekir).";
+    } else if (training) {
+      hint.textContent = "Eğitim tamamlanınca yeni emir verebilirsin.";
+    } else {
+      hint.textContent =
+        `Mızrakçı: ${militarySnapshot.units?.spear?.wood_cost ?? 50} / ${militarySnapshot.units?.spear?.clay_cost ?? 30} / ${militarySnapshot.units?.spear?.iron_cost ?? 10} (odun/kil/demir), 1 nüfus.`;
+    }
+  }
+
+  if (form) {
+    form.hidden = !barracksReady || training;
+  }
+
+  if (result && !recruiting) {
+    result.textContent = "";
+  }
+
+  updateRecruitPreview();
+
+  const orders = $("#army-orders-list");
+
+  if (orders) {
+    const attacks = militarySnapshot.attacks || [];
+    const statusNames = {
+      outbound: "Yolda",
+      returning: "Dönüyor",
+      completed: "Tamamlandı",
+    };
+
+    orders.innerHTML = attacks.length
+      ? attacks.map((attack) => {
+        const showCountdown = attack.status === "outbound"
+          || attack.status === "returning";
+        const countdownAt = attack.status === "returning"
+          ? attack.returns_at
+          : attack.arrives_at;
+        const resolved = attack.resolved_at !== null;
+
+        return `
+          <article class="army-order"${showCountdown && countdownAt
+            ? ` data-arrives-at="${escapeHtml(countdownAt)}"`
+            : ""}>
+            <div>
+              <strong>
+                ${escapeHtml(attack.target_name)}
+                (${attack.target_x}|${attack.target_y})
+              </strong>
+              <span>${escapeHtml(statusNames[attack.status] || attack.status)}</span>
+            </div>
+            <p>
+              Gönderilen: ${number(attack.sent_spears)} mızrakçı
+              · Varış: ${escapeHtml(date(attack.arrives_at))}
+              ${showCountdown && countdownAt ? `
+                · Kalan:
+                <span class="army-countdown">${escapeHtml(formatCountdown(countdownAt))}</span>
+              ` : ""}
+            </p>
+            ${resolved ? `
+              <p class="army-report">
+                Sağ kalan: ${attack.surviving_spears}
+                · Savunmacı: ${attack.defender_before} → ${attack.defender_after}
+                ${formatLoot(attack) ? ` · Ganimet: ${formatLoot(attack)}` : ""}
+              </p>
+            ` : ""}
+          </article>
+        `;
+      }).join("")
+      : `<p class="army-empty">Henüz saldırı göndermedin.</p>`;
+  }
+}
+
+function formatLoot(attack) {
+  const wood = attack.loot_wood || 0;
+  const clay = attack.loot_clay || 0;
+  const iron = attack.loot_iron || 0;
+
+  if (wood <= 0 && clay <= 0 && iron <= 0) {
+    return "";
+  }
+
+  return `${number(wood)} / ${number(clay)} / ${number(iron)}`;
+}
+
+let recruiting = false;
+
 function tickMilitaryCountdowns() {
   document.querySelectorAll("[data-arrives-at] .army-countdown").forEach((el) => {
     const article = el.closest("[data-arrives-at]");
@@ -559,6 +807,8 @@ async function refreshMilitary() {
       ? militarySnapshot.incoming
       : [];
     renderIncoming(incoming);
+    renderArmyPanel();
+    updateCountdowns();
   } catch (error) {
     if (sessionExpired) return;
     const list = $("#army-incoming-list");
@@ -588,19 +838,43 @@ function updateLiveResources() {
   }
 
   const elapsedMs = Math.max(0, displayTime - updatedAt);
+  const hourMs = 3_600_000;
+  const remScale = 3_600_000_000;
 
-  const projectedWood = Math.floor(
-    economy.wood
-    + economy.wood_remainder / 3_600_000_000
-    + elapsedMs * economy.wood_per_hour / 3_600_000,
+  const project = (balance, remainder, perHour) => Math.floor(
+    balance
+    + (remainder || 0) / remScale
+    + elapsedMs * (perHour || 0) / hourMs,
   );
 
-  $("#wood").textContent = number(projectedWood);
+  $("#wood").textContent = number(project(
+    economy.wood,
+    economy.wood_remainder,
+    economy.wood_per_hour,
+  ));
+  $("#clay").textContent = number(project(
+    economy.clay,
+    economy.clay_remainder,
+    economy.clay_per_hour,
+  ));
+  $("#iron").textContent = number(project(
+    economy.iron,
+    economy.iron_remainder,
+    economy.iron_per_hour,
+  ));
 
-  const rate = $("#wood-rate");
+  const woodRate = $("#wood-rate");
+  const clayRate = $("#clay-rate");
+  const ironRate = $("#iron-rate");
 
-  if (rate) {
-    rate.textContent = `+${number(economy.wood_per_hour)}/saat`;
+  if (woodRate) {
+    woodRate.textContent = `+${number(economy.wood_per_hour)}/saat`;
+  }
+  if (clayRate) {
+    clayRate.textContent = `+${number(economy.clay_per_hour)}/saat`;
+  }
+  if (ironRate) {
+    ironRate.textContent = `+${number(economy.iron_per_hour)}/saat`;
   }
 }
 
@@ -710,6 +984,53 @@ $("#building-rows").addEventListener("click", (event) => {
   );
 });
 
+$("#recruit-spears")?.addEventListener("input", updateRecruitPreview);
+
+$("#recruit-max")?.addEventListener("click", () => {
+  const max = maxRecruitable();
+  const input = $("#recruit-spears");
+  if (!input) return;
+  input.value = String(Math.max(1, max));
+  updateRecruitPreview();
+});
+
+$("#recruit-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (recruiting || mutating || !militarySnapshot) return;
+
+  const count = Number($("#recruit-spears")?.value);
+  const result = $("#recruit-result");
+  const submit = $("#recruit-submit");
+
+  if (!Number.isInteger(count) || count < 1) {
+    if (result) result.textContent = "Geçerli bir sayı gir.";
+    return;
+  }
+
+  recruiting = true;
+  if (submit) submit.disabled = true;
+  if (result) result.textContent = "Eğitim başlatılıyor…";
+
+  try {
+    await api("/api/military/recruit", {
+      method: "POST",
+      body: JSON.stringify({ count }),
+    });
+
+    if (result) {
+      result.textContent = `${count} mızrakçı eğitimi başladı.`;
+    }
+
+    await refresh();
+    await refreshMilitary();
+  } catch (error) {
+    if (result) result.textContent = error.message;
+  } finally {
+    recruiting = false;
+    if (submit) submit.disabled = false;
+  }
+});
+
 $("#rename-form").addEventListener("submit", (event) => {
   event.preventDefault();
 
@@ -764,9 +1085,10 @@ setInterval(() => {
   const hasActiveConstruction = Boolean(
     snapshot?.upgrades?.some((upgrade) => !upgrade.completed_at),
   );
+  const hasActiveRecruit = Boolean(militarySnapshot?.recruit);
 
-  // İnşaat varsa 1 saniye, yoksa 5 saniye.
-  nextPollAt = now + (hasActiveConstruction ? 1000 : 5000);
+  // İnşaat/eğitim varsa 1 saniye, yoksa 5 saniye.
+  nextPollAt = now + (hasActiveConstruction || hasActiveRecruit ? 1000 : 5000);
 
   void refresh();
 }, 250);
