@@ -6,31 +6,108 @@ const definitions = {
   headquarters: {
     name: "Bey otağı",
     description: "Obanın yönetim merkezi",
-    icon: `<img
-      src="/assets/building-headquarters.svg"
-      alt=""
-      class="building-art"
-    >`,
+    icon: `/assets/building-headquarters.svg`,
+    map: { left: "58%", top: "32%" },
+  },
+  barracks: {
+    name: "Kışla",
+    description: "Piyade birliklerinin eğitildiği yer",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "78%", top: "42%" },
+  },
+  stable: {
+    name: "Ahır",
+    description: "Atlı birliklerin yetiştirildiği yer",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "86%", top: "58%" },
+  },
+  workshop: {
+    name: "Atölye",
+    description: "Kuşatma silahlarının üretildiği yer",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "72%", top: "62%" },
+  },
+  academy: {
+    name: "Akademi",
+    description: "Misyoner eğitimi ve fetih merkezi",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "48%", top: "22%" },
+  },
+  smithy: {
+    name: "Demirci",
+    description: "Silah araştırma ve geliştirme",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "38%", top: "40%" },
+  },
+  rally_point: {
+    name: "İçtima meydanı",
+    description: "Orduların toplandığı komuta noktası",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "50%", top: "55%" },
+  },
+  statue: {
+    name: "Heykel",
+    description: "Şövalye anıtı",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "62%", top: "48%" },
+  },
+  market: {
+    name: "Pazar",
+    description: "Ticaret ve hammadde gönderimi",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "34%", top: "70%" },
   },
   timber: {
     name: "Oduncu",
-    description: "Odun işçiliğinin merkezi",
-    icon: `<img
-      src="/assets/building-timber.svg"
-      alt=""
-      class="building-art"
-    >`,
+    description: "Odun üretimi",
+    icon: `/assets/building-timber.svg`,
+    map: { left: "18%", top: "42%" },
+  },
+  clay: {
+    name: "Kil ocağı",
+    description: "Kil üretimi",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "14%", top: "62%" },
+  },
+  iron: {
+    name: "Demir madeni",
+    description: "Demir üretimi",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "22%", top: "78%" },
+  },
+  farm: {
+    name: "Çiftlik",
+    description: "Nüfus ve birlik beslemesi",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "42%", top: "78%" },
   },
   warehouse: {
     name: "Ambar",
     description: "Obanın kaynak deposu",
-    icon: `<img
-      src="/assets/building-warehouse.svg"
-      alt=""
-      class="building-art"
-    >`,
+    icon: `/assets/building-warehouse.svg`,
+    map: { left: "27%", top: "52%" },
+  },
+  hiding_place: {
+    name: "Gizli depo",
+    description: "Yağmalanamayan gizlenmiş kaynaklar",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "66%", top: "76%" },
+  },
+  wall: {
+    name: "Duvar",
+    description: "Köy savunmasını güçlendirir",
+    icon: `/assets/building-generic.svg`,
+    map: { left: "88%", top: "78%" },
   },
 };
+
+function buildingIcon(definition) {
+  return `<img
+    src="${definition.icon}"
+    alt=""
+    class="building-art"
+  >`;
+}
 
 let snapshot = null;
 let serverOffset = 0;
@@ -142,9 +219,7 @@ function applyTab() {
 function activeUpgradeMarkup(upgrade) {
   const definition = definitions[upgrade.building_kind];
   const name = definition?.name || upgrade.building_kind;
-
-  // icon yalnızca kod içinde tanımladığımız sabit görsellerden gelir.
-  const icon = definition?.icon || "";
+  const icon = definition ? buildingIcon(definition) : "";
 
   return `
     <div class="table-scroll live-construction">
@@ -278,11 +353,15 @@ function render() {
     `
       : "";
 
+    const actionLabel = offer.level === 0
+      ? "İnşa et"
+      : `Seviye ${offer.level + 1} yükselt`;
+
     return `
     <tr>
       <td>
         <div class="building-cell">
-          <span class="building-icon">${definition.icon}</span>
+          <span class="building-icon">${buildingIcon(definition)}</span>
 
           <div>
             <strong>${escapeHtml(definition.name)}</strong>
@@ -312,20 +391,41 @@ function render() {
           data-upgrade="${escapeHtml(offer.kind)}"
           ${mutating || !offer.can_upgrade ? "disabled" : ""}
         >
-          ${escapeHtml(reason || `Seviye ${offer.level + 1} yükselt`)}
+          ${escapeHtml(reason || actionLabel)}
         </button>
       </td>
     </tr>
   `;
   }).join("");
 
-  buildings.forEach((building) => {
-    const element = document.getElementById(`level-${building.kind}`);
+  const mapRoot = $("#village-map-buildings");
 
-    if (element) {
-      element.textContent = `Seviye ${building.level}`;
-    }
-  });
+  if (mapRoot) {
+    mapRoot.innerHTML = (snapshot.offers || [])
+      .filter((offer) => offer.level > 0 && definitions[offer.kind]?.map)
+      .map((offer) => {
+        const definition = definitions[offer.kind];
+        const { left, top } = definition.map;
+
+        return `
+          <a
+            href="#buildings"
+            class="map-building"
+            style="left:${left};top:${top}"
+            title="${escapeHtml(definition.name)}"
+          >
+            <img
+              src="${definition.icon}"
+              alt="${escapeHtml(definition.name)}"
+              class="village-building-art"
+            >
+            <strong>${escapeHtml(definition.name)}</strong>
+            <small>Seviye ${offer.level}</small>
+          </a>
+        `;
+      })
+      .join("");
+  }
 
   renderActiveConstruction(active);
 

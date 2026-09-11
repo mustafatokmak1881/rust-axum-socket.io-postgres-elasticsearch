@@ -7,20 +7,48 @@ use crate::error::AppError;
 
 const MICROS_PER_HOUR: i128 = 3_600_000_000;
 
+/// Klanlar.org / Tribal Wars bina kataloğu (dünya ayarına bağlı
+/// tapınak ve gözetleme kulesi hariç).
+pub const BUILDING_KINDS: &[&str] = &[
+    "headquarters",
+    "barracks",
+    "stable",
+    "workshop",
+    "academy",
+    "smithy",
+    "rally_point",
+    "statue",
+    "market",
+    "timber",
+    "clay",
+    "iron",
+    "farm",
+    "warehouse",
+    "hiding_place",
+    "wall",
+];
+
+/// Yeni köyde seviye 1 başlayan binalar.
+pub const STARTING_BUILDINGS: &[(&str, i32)] = &[
+    ("headquarters", 1),
+    ("timber", 1),
+    ("clay", 1),
+    ("iron", 1),
+    ("farm", 1),
+    ("warehouse", 1),
+    ("rally_point", 1),
+    ("hiding_place", 1),
+];
+
 // 1× dünya için referans değerler.
-// Index 0 kullanılmıyor; mevcut sistemde bütün binalar seviye 1 başlıyor.
+// Index 0 = bina yok / seviye 0.
 const TIMBER_PRODUCTION: [i64; 31] = [
-    0,
-    30, 35, 41, 47, 55,
-    64, 74, 86, 100, 117,
-    136, 158, 184, 214, 249,
-    289, 337, 391, 455, 530,
-    616, 717, 833, 969, 1127,
-    1311, 1525, 1774, 2063, 2400,
+    0, 30, 35, 41, 47, 55, 64, 74, 86, 100, 117, 136, 158, 184, 214, 249, 289,
+    337, 391, 455, 530, 616, 717, 833, 969, 1127, 1311, 1525, 1774, 2063, 2400,
 ];
 
 pub fn timber_production(level: i32) -> Result<i64, AppError> {
-    if !(1..=30).contains(&level) {
+    if !(0..=30).contains(&level) {
         return Err(AppError::Internal(anyhow::anyhow!(
             "Invalid timber level: {level}"
         )));
@@ -29,12 +57,20 @@ pub fn timber_production(level: i32) -> Result<i64, AppError> {
     Ok(TIMBER_PRODUCTION[level as usize])
 }
 
+pub fn is_known_building(kind: &str) -> bool {
+    BUILDING_KINDS.contains(&kind)
+}
+
 pub fn max_level(kind: &str) -> Option<i32> {
-    match kind {
-        "timber" => Some(30),
-        "headquarters" | "warehouse" => Some(20),
-        _ => None,
-    }
+    Some(match kind {
+        "headquarters" | "timber" | "clay" | "iron" | "farm" | "warehouse" => 30,
+        "barracks" | "market" => 25,
+        "stable" | "smithy" | "wall" => 20,
+        "workshop" => 15,
+        "hiding_place" => 10,
+        "academy" | "rally_point" | "statue" => 1,
+        _ => return None,
+    })
 }
 
 // Bunlar mevcut geliştirme maliyetleri.
@@ -49,7 +85,13 @@ pub fn upgrade_seconds(target_level: i32) -> i32 {
 
 fn requirements(kind: &str) -> &'static [(&'static str, i32)] {
     match kind {
-        "timber" | "warehouse" => &[("headquarters", 1)],
+        "barracks" => &[("headquarters", 3)],
+        "market" => &[("headquarters", 3), ("warehouse", 2)],
+        "smithy" => &[("headquarters", 5), ("barracks", 1)],
+        "wall" => &[("barracks", 1)],
+        "stable" => &[("headquarters", 10), ("barracks", 5), ("smithy", 5)],
+        "workshop" => &[("headquarters", 10), ("smithy", 10)],
+        "academy" => &[("headquarters", 20), ("smithy", 20), ("market", 10)],
         _ => &[],
     }
 }
@@ -57,10 +99,31 @@ fn requirements(kind: &str) -> &'static [(&'static str, i32)] {
 pub fn building_name(kind: &str) -> &'static str {
     match kind {
         "headquarters" => "Bey otağı",
+        "barracks" => "Kışla",
+        "stable" => "Ahır",
+        "workshop" => "Atölye",
+        "academy" => "Akademi",
+        "smithy" => "Demirci",
+        "rally_point" => "İçtima meydanı",
+        "statue" => "Heykel",
+        "market" => "Pazar",
         "timber" => "Oduncu",
+        "clay" => "Kil ocağı",
+        "iron" => "Demir madeni",
+        "farm" => "Çiftlik",
         "warehouse" => "Ambar",
+        "hiding_place" => "Gizli depo",
+        "wall" => "Duvar",
         _ => "Bilinmeyen bina",
     }
+}
+
+pub fn starting_level(kind: &str) -> i32 {
+    STARTING_BUILDINGS
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map(|(_, level)| *level)
+        .unwrap_or(0)
 }
 
 #[derive(Serialize)]
@@ -110,8 +173,7 @@ pub async fn ensure_requirements(
     village_id: Uuid,
     kind: &str,
 ) -> Result<(), AppError> {
-    let requirements =
-        requirement_status(connection, village_id, kind).await?;
+    let requirements = requirement_status(connection, village_id, kind).await?;
 
     if requirements.iter().any(|requirement| !requirement.met) {
         return Err(AppError::BadRequest(
@@ -174,8 +236,9 @@ pub async fn settle(
         "#,
     )
     .bind(village_id)
-    .fetch_one(&mut *connection)
-    .await?;
+    .fetch_optional(&mut *connection)
+    .await?
+    .unwrap_or(0);
 
     let wood_per_hour = timber_production(timber_level)?;
 
@@ -212,24 +275,18 @@ pub async fn settle(
         .signed_duration_since(row.resources_updated_at)
         .num_microseconds()
         .ok_or_else(|| {
-            AppError::Internal(anyhow::anyhow!(
-                "Resource time interval is too large"
-            ))
+            AppError::Internal(anyhow::anyhow!("Resource time interval is too large"))
         })?;
 
     let accumulated =
-        i128::from(row.wood_remainder)
-        + i128::from(elapsed_micros) * i128::from(wood_per_hour);
+        i128::from(row.wood_remainder) + i128::from(elapsed_micros) * i128::from(wood_per_hour);
 
     let produced = accumulated / MICROS_PER_HOUR;
     let remainder = (accumulated % MICROS_PER_HOUR) as i64;
 
-    let new_wood = i64::try_from(i128::from(row.wood) + produced)
-        .map_err(|_| {
-            AppError::Internal(anyhow::anyhow!(
-                "Wood balance overflow"
-            ))
-        })?;
+    let new_wood = i64::try_from(i128::from(row.wood) + produced).map_err(|_| {
+        AppError::Internal(anyhow::anyhow!("Wood balance overflow"))
+    })?;
 
     sqlx::query(
         r#"

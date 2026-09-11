@@ -1491,8 +1491,8 @@ input {
   align-items: center;
   justify-content: flex-end;
 
-  width: 145px;
-  height: 156px;
+  width: 92px;
+  height: 108px;
   margin: 0;
   padding: 0;
 
@@ -1509,12 +1509,13 @@ input {
   background: none;
   border: 0;
   transform: translate(-50%, -50%);
+  z-index: 5;
 }
 
 .village-building-art {
   display: block;
-  width: 138px;
-  height: 121px;
+  width: 84px;
+  height: 74px;
   object-fit: contain;
   filter: drop-shadow(5px 8px 3px #26351b66);
 }
@@ -1525,41 +1526,31 @@ input {
 }
 
 .map-building strong {
-  padding: 3px 8px;
+  max-width: 92px;
+  padding: 2px 5px;
   margin-top: -2px;
   background: #344523d9;
   border: 1px solid #c3b57580;
   border-radius: 2px;
   color: #fff1be;
-  font: bold 11px Arial, sans-serif;
+  font: bold 9px Arial, sans-serif;
   text-shadow: 0 1px #253119;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .map-building small {
   position: absolute;
-  top: 9px;
-  right: 5px;
-  padding: 3px 5px;
+  top: 4px;
+  right: 0;
+  padding: 2px 4px;
   color: #fff7ce;
   background: #3d6129;
   border: 1px solid #b3c184;
   border-radius: 3px;
-  font: bold 10px Arial, sans-serif;
-}
-
-.map-building.otaq {
-  left: 58%;
-  top: 35%;
-}
-
-.map-building.timber {
-  left: 76%;
-  top: 75%;
-}
-
-.map-building.warehouse {
-  left: 27%;
-  top: 57%;
+  font: bold 9px Arial, sans-serif;
 }
 
 .map-caption {
@@ -1627,28 +1618,18 @@ input {
   }
 
   .map-building {
-    width: 115px;
-    height: 134px;
+    width: 76px;
+    height: 92px;
   }
 
   .village-building-art {
-    width: 111px;
-    height: 98px;
+    width: 70px;
+    height: 62px;
   }
 
   .map-building strong,
   .map-building small {
-    font-size: 9px;
-  }
-
-  .map-building.timber {
-    left: 75%;
-    top: 76%;
-  }
-
-  .map-building.warehouse {
-    left: 25%;
-    top: 58%;
+    font-size: 8px;
   }
 
   .building-cell {

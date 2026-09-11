@@ -84,3 +84,13 @@ pub async fn warehouse_art() -> impl axum::response::IntoResponse {
         include_str!("building-warehouse.svg"),
     )
 }
+
+pub async fn generic_building_art() -> impl axum::response::IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "image/svg+xml; charset=utf-8",
+        )],
+        include_str!("building-generic.svg"),
+    )
+}

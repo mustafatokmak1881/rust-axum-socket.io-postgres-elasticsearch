@@ -83,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/assets/building-timber.svg", get(web::timber_art))
         .route("/assets/building-warehouse.svg", get(web::warehouse_art))
+        .route("/assets/building-generic.svg", get(web::generic_building_art))
         .route("/assets/buildings.svg", get(web::building_art))
         .route("/map", get(map::page))
         .route("/assets/map.css", get(map::stylesheet))

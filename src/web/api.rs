@@ -157,13 +157,19 @@ pub async fn bootstrap(
 
         let pending = upgrades.iter().any(|u| u.completed_at.is_none());
 
-        for building in &buildings {
-            let max_level = economy::max_level(&building.kind).ok_or_else(|| {
-                AppError::Internal(anyhow::anyhow!("Unknown building kind: {}", building.kind))
+        for &kind in economy::BUILDING_KINDS {
+            let level = buildings
+                .iter()
+                .find(|building| building.kind == kind)
+                .map(|building| building.level)
+                .unwrap_or(0);
+
+            let max_level = economy::max_level(kind).ok_or_else(|| {
+                AppError::Internal(anyhow::anyhow!("Unknown building kind: {kind}"))
             })?;
 
-            let maxed = building.level >= max_level;
-            let target = building.level + 1;
+            let maxed = level >= max_level;
+            let target = level + 1;
 
             let cost = if maxed {
                 None
@@ -178,7 +184,7 @@ pub async fn bootstrap(
             };
 
             let requirements =
-                economy::requirement_status(&mut *tx, village.id, &building.kind).await?;
+                economy::requirement_status(&mut *tx, village.id, kind).await?;
 
             let missing = requirements.iter().find(|r| !r.met);
 
@@ -197,21 +203,21 @@ pub async fn bootstrap(
                 None
             };
 
-            let production = if building.kind == "timber" {
-                Some(economy::timber_production(building.level)?)
+            let production = if kind == "timber" {
+                Some(economy::timber_production(level)?)
             } else {
                 None
             };
 
-            let next_production = if building.kind == "timber" && !maxed {
+            let next_production = if kind == "timber" && !maxed {
                 Some(economy::timber_production(target)?)
             } else {
                 None
             };
 
             offers.push(BuildingOffer {
-                kind: building.kind.clone(),
-                level: building.level,
+                kind: kind.to_owned(),
+                level,
                 max_level,
                 cost_wood: cost,
                 duration_seconds: seconds,
@@ -321,16 +327,17 @@ pub async fn create_village(
 
     // Başlangıç kaynakları villages tablosunun default'undan gelir.
     // Binalar da aynı transaction içinde oluşturulur.
-    for kind in ["headquarters", "timber", "warehouse"] {
+    for &kind in economy::BUILDING_KINDS {
         sqlx::query(
             r#"
-            INSERT INTO village_buildings (village_id, kind)
-            VALUES ($1, $2)
+            INSERT INTO village_buildings (village_id, kind, level)
+            VALUES ($1, $2, $3)
             ON CONFLICT DO NOTHING
             "#,
         )
         .bind(village_id)
         .bind(kind)
+        .bind(economy::starting_level(kind))
         .execute(&mut *tx)
         .await?;
     }
@@ -390,7 +397,7 @@ pub async fn start_upgrade(
     check_origin(&state, &headers)?;
     let user = current_user(&state, &jar).await?;
 
-    if !matches!(kind.as_str(), "headquarters" | "timber" | "warehouse") {
+    if !economy::is_known_building(&kind) {
         return Err(AppError::BadRequest("Geçersiz bina."));
     }
 
