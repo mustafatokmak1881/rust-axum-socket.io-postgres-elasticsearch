@@ -69,11 +69,8 @@ fn building_svg(kind: &str) -> Option<&'static str> {
         "workshop" => include_str!("building-workshop.svg"),
         "academy" => include_str!("building-academy.svg"),
         "smithy" => include_str!("building-smithy.svg"),
-        "rally_point" => include_str!("building-rally_point.svg"),
         "statue" => include_str!("building-statue.svg"),
         "market" => include_str!("building-market.svg"),
-        "iron" => include_str!("building-iron.svg"),
-        "farm" => include_str!("building-farm.svg"),
         "warehouse" => include_str!("building-warehouse.svg"),
         "hiding_place" => include_str!("building-hiding_place.svg"),
         "wall" => include_str!("building-wall.svg"),
@@ -88,6 +85,9 @@ fn building_png(kind: &str) -> Option<&'static [u8]> {
         "barracks" => include_bytes!("kisla.png").as_slice(),
         "clay" => include_bytes!("kil-ocagi.png").as_slice(),
         "timber" => include_bytes!("oduncu.png").as_slice(),
+        "iron" => include_bytes!("demir-madeni.png").as_slice(),
+        "rally_point" => include_bytes!("ictima-meydani.png").as_slice(),
+        "farm" => include_bytes!("ciftlik.png").as_slice(),
         _ => return None,
     })
 }
