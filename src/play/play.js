@@ -626,7 +626,7 @@ $("#build-list").addEventListener("click", (event) => {
   document.querySelectorAll(".build-item").forEach((el) => {
     el.classList.toggle("on", el === btn);
   });
-  $("#build-detail").textContent = `Placing ${btn.dataset.kind} — click a tile near your base`;
+  $("#build-detail").textContent = `Placing ${btn.dataset.kind} — click any empty tile`;
 });
 
 $("#unit-list").addEventListener("click", (event) => {

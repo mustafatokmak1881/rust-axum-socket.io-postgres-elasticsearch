@@ -497,17 +497,6 @@ impl MatchSim {
             return Err("Out of bounds");
         }
 
-        // Must be near an owned completed building (Chebyshev ≤ 3).
-        let near = self.entities.values().any(|e| {
-            e.owner == user_id
-                && e.building
-                && e.build_remaining_ms == 0
-                && (e.x - fx).abs().max((e.y - fy).abs()) <= 3.5
-        });
-        if !near {
-            return Err("Must place within 3 tiles of your base");
-        }
-
         let occupied = self.entities.values().any(|e| {
             e.building && (e.x.floor() as i32) == x && (e.y.floor() as i32) == y
         });
