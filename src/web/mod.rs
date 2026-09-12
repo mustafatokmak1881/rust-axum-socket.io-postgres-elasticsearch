@@ -94,19 +94,3 @@ pub async fn building_kind_art(
     let svg = building_svg(&kind).ok_or(crate::error::AppError::NotFound)?;
     Ok(svg_response(svg))
 }
-
-pub async fn headquarters_art() -> impl axum::response::IntoResponse {
-    svg_response(include_str!("building-headquarters.svg"))
-}
-
-pub async fn timber_art() -> impl axum::response::IntoResponse {
-    svg_response(include_str!("building-timber.svg"))
-}
-
-pub async fn warehouse_art() -> impl axum::response::IntoResponse {
-    svg_response(include_str!("building-warehouse.svg"))
-}
-
-pub async fn generic_building_art() -> impl axum::response::IntoResponse {
-    svg_response(include_str!("building-generic.svg"))
-}
