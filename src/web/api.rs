@@ -35,6 +35,8 @@ struct Village {
 struct Building {
     kind: String,
     level: i32,
+    tile_x: Option<i32>,
+    tile_y: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -44,6 +46,8 @@ struct BuildingOffer {
     description: String,
     level: i32,
     max_level: i32,
+    tile_x: Option<i32>,
+    tile_y: Option<i32>,
 
     cost_wood: Option<i64>,
     cost_clay: Option<i64>,
@@ -75,6 +79,12 @@ pub struct RenameRequest {
 #[derive(Deserialize)]
 pub struct CreateVillageRequest {
     pub faction: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpgradeRequest {
+    pub tile_x: Option<i32>,
+    pub tile_y: Option<i32>,
 }
 
 async fn current_user(state: &SharedState, jar: &CookieJar) -> Result<CurrentUser, AppError> {
@@ -162,7 +172,7 @@ pub async fn bootstrap(
 
         buildings = sqlx::query_as::<_, Building>(
             r#"
-            SELECT kind, level
+            SELECT kind, level, tile_x, tile_y
             FROM village_buildings
             WHERE village_id = $1
             ORDER BY kind
@@ -200,11 +210,10 @@ pub async fn bootstrap(
         let faction = Faction::parse(&village.faction)?;
 
         for &kind in faction::building_kinds(faction) {
-            let level = buildings
-                .iter()
-                .find(|building| building.kind == kind)
-                .map(|building| building.level)
-                .unwrap_or(0);
+            let building = buildings.iter().find(|building| building.kind == kind);
+            let level = building.map(|building| building.level).unwrap_or(0);
+            let tile_x = building.and_then(|building| building.tile_x);
+            let tile_y = building.and_then(|building| building.tile_y);
 
             let max_level = economy::max_level(kind).ok_or_else(|| {
                 AppError::Internal(anyhow::anyhow!("Unknown building kind: {kind}"))
@@ -309,6 +318,8 @@ pub async fn bootstrap(
                 description: faction::building_description(faction, kind).to_owned(),
                 level,
                 max_level,
+                tile_x,
+                tile_y,
                 cost_wood: cost.map(|c| c.wood),
                 cost_clay: cost.map(|c| c.clay),
                 cost_iron: cost.map(|c| c.iron),
@@ -352,7 +363,9 @@ pub async fn bootstrap(
         "rules": {
             "seconds_per_target_level": 15,
             "secondary_base_max_buildings": economy::SECONDARY_BASE_MAX_BUILDINGS,
-            "command_center_capital_only": true
+            "command_center_capital_only": true,
+            "base_grid_size": economy::BASE_GRID_SIZE,
+            "build_max_chebyshev": economy::BUILD_MAX_CHEBYSHEV
         }
     })))
 }
@@ -468,16 +481,26 @@ pub async fn create_village(
             0
         };
 
+        let (tile_x, tile_y) = if level > 0 {
+            economy::starting_tile(kind)
+                .map(|(x, y)| (Some(x), Some(y)))
+                .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
+
         sqlx::query(
             r#"
-            INSERT INTO village_buildings (village_id, kind, level)
-            VALUES ($1, $2, $3)
+            INSERT INTO village_buildings (village_id, kind, level, tile_x, tile_y)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT DO NOTHING
             "#,
         )
         .bind(village_id)
         .bind(kind)
         .bind(level)
+        .bind(tile_x)
+        .bind(tile_y)
         .execute(&mut *tx)
         .await?;
     }
@@ -534,6 +557,7 @@ pub async fn start_upgrade(
     Path(kind): Path<String>,
     headers: HeaderMap,
     jar: CookieJar,
+    Json(input): Json<UpgradeRequest>,
 ) -> Result<(StatusCode, Json<Value>), AppError> {
     check_origin(&state, &headers)?;
     let user = current_user(&state, &jar).await?;
@@ -584,9 +608,9 @@ pub async fn start_upgrade(
         ));
     }
 
-    let level: i32 = sqlx::query_scalar(
+    let building = sqlx::query_as::<_, Building>(
         r#"
-        SELECT level
+        SELECT kind, level, tile_x, tile_y
         FROM village_buildings
         WHERE village_id = $1 AND kind = $2
         FOR UPDATE
@@ -596,6 +620,8 @@ pub async fn start_upgrade(
     .bind(&kind)
     .fetch_one(&mut *tx)
     .await?;
+
+    let level = building.level;
 
     let max_level = economy::max_level(&kind).ok_or(AppError::BadRequest("Geçersiz bina."))?;
 
@@ -628,6 +654,36 @@ pub async fn start_upgrade(
         faction,
     )
     .await?;
+
+    // İlk kurulum: oyuncu kare seçer. Yükseltmede mevcut kare korunur.
+    if level == 0 {
+        let tile_x = input.tile_x.ok_or_else(|| {
+            AppError::BadRequest("Yeni bina için haritada bir kare seçmelisin.")
+        })?;
+        let tile_y = input.tile_y.ok_or_else(|| {
+            AppError::BadRequest("Yeni bina için haritada bir kare seçmelisin.")
+        })?;
+
+        economy::ensure_valid_placement(&mut *tx, village.id, &kind, tile_x, tile_y).await?;
+
+        sqlx::query(
+            r#"
+            UPDATE village_buildings
+            SET tile_x = $3, tile_y = $4
+            WHERE village_id = $1 AND kind = $2
+            "#,
+        )
+        .bind(village.id)
+        .bind(&kind)
+        .bind(tile_x)
+        .bind(tile_y)
+        .execute(&mut *tx)
+        .await?;
+    } else if building.tile_x.is_none() || building.tile_y.is_none() {
+        return Err(AppError::BadRequest(
+            "Bu binanın yerleşim karesi eksik; yeniden kurulmalı.",
+        ));
+    }
 
     let target_level = level + 1;
     let cost = economy::upgrade_cost(target_level);

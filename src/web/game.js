@@ -160,6 +160,342 @@ let selectedFaction = null;
 let hasVillage = false;
 const baseDocumentTitle = document.title;
 
+const BASE_TILE_PX = 56;
+const baseMap = {
+  cameraX: 15.5,
+  cameraY: 15.5,
+  scale: 1,
+  drag: null,
+  moved: false,
+  placementKind: null,
+  hoverTile: null,
+  centeredOnce: false,
+};
+
+function baseGridSize() {
+  return Number(snapshot?.rules?.base_grid_size) || 32;
+}
+
+function buildMaxChebyshev() {
+  return Number(snapshot?.rules?.build_max_chebyshev) || 3;
+}
+
+function chebyshev(ax, ay, bx, by) {
+  return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+}
+
+function occupiedTiles(excludeKind = null) {
+  const tiles = [];
+
+  for (const offer of snapshot?.offers || []) {
+    if (
+      offer.tile_x == null
+      || offer.tile_y == null
+      || (excludeKind && offer.kind === excludeKind)
+    ) {
+      continue;
+    }
+
+    tiles.push({
+      kind: offer.kind,
+      x: offer.tile_x,
+      y: offer.tile_y,
+    });
+  }
+
+  return tiles;
+}
+
+function isValidPlacementTile(x, y, kind) {
+  const size = baseGridSize();
+  if (x < 0 || y < 0 || x >= size || y >= size) return false;
+
+  const occupied = occupiedTiles(kind);
+  if (occupied.some((tile) => tile.x === x && tile.y === y)) return false;
+
+  if (occupied.length === 0) return true;
+
+  const maxDist = buildMaxChebyshev();
+  return occupied.some((tile) => chebyshev(tile.x, tile.y, x, y) <= maxDist);
+}
+
+function applyBaseCamera() {
+  const viewport = $("#base-map-viewport");
+  const world = $("#base-map-world");
+  if (!viewport || !world) return;
+
+  const size = baseGridSize();
+  const tile = BASE_TILE_PX;
+  const worldPx = size * tile;
+
+  world.style.width = `${worldPx}px`;
+  world.style.height = `${worldPx}px`;
+
+  const grid = $("#base-map-grid");
+  if (grid) {
+    grid.style.backgroundSize = `${tile}px ${tile}px`;
+  }
+
+  const vw = viewport.clientWidth;
+  const vh = viewport.clientHeight;
+  const halfW = (vw / baseMap.scale) / (2 * tile);
+  const halfH = (vh / baseMap.scale) / (2 * tile);
+
+  baseMap.cameraX = Math.max(halfW, Math.min(size - halfW, baseMap.cameraX));
+  baseMap.cameraY = Math.max(halfH, Math.min(size - halfH, baseMap.cameraY));
+
+  const originX = vw / 2 - baseMap.cameraX * tile * baseMap.scale;
+  const originY = vh / 2 - baseMap.cameraY * tile * baseMap.scale;
+
+  world.style.transform =
+    `translate(${originX}px, ${originY}px) scale(${baseMap.scale})`;
+
+  drawBaseRadar();
+  updateBaseCaption();
+}
+
+function drawBaseRadar() {
+  const canvas = $("#base-map-radar");
+  const viewport = $("#base-map-viewport");
+  if (!canvas || !viewport) return;
+
+  const ctx = canvas.getContext("2d");
+  const size = baseGridSize();
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#0c140acc";
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = "#3a4a3488";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+
+  for (const tile of occupiedTiles()) {
+    ctx.fillStyle = "#c8a050";
+    ctx.fillRect(
+      (tile.x / size) * w,
+      (tile.y / size) * h,
+      Math.max(2, w / size),
+      Math.max(2, h / size),
+    );
+  }
+
+  const tile = BASE_TILE_PX;
+  const viewW = (viewport.clientWidth / baseMap.scale) / tile;
+  const viewH = (viewport.clientHeight / baseMap.scale) / tile;
+  const left = baseMap.cameraX - viewW / 2;
+  const top = baseMap.cameraY - viewH / 2;
+
+  ctx.strokeStyle = "#e8c547";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(
+    (left / size) * w,
+    (top / size) * h,
+    (viewW / size) * w,
+    (viewH / size) * h,
+  );
+}
+
+function updateBaseCaption() {
+  const caption = $("#base-map-caption");
+  if (!caption) return;
+
+  if (baseMap.placementKind) {
+    const name = definitions[baseMap.placementKind]?.name || baseMap.placementKind;
+    caption.textContent =
+      `Placing ${name} · green tiles are valid (≤${buildMaxChebyshev()} from existing)`;
+    return;
+  }
+
+  const tx = Math.floor(baseMap.cameraX);
+  const ty = Math.floor(baseMap.cameraY);
+  caption.textContent =
+    `Drag to pan · Scroll to zoom · Focus (${tx}, ${ty}) · World map shows matching dots`;
+}
+
+function screenToBaseTile(clientX, clientY) {
+  const viewport = $("#base-map-viewport");
+  if (!viewport) return null;
+
+  const rect = viewport.getBoundingClientRect();
+  const localX = (clientX - rect.left - rect.width / 2) / baseMap.scale;
+  const localY = (clientY - rect.top - rect.height / 2) / baseMap.scale;
+  const tile = BASE_TILE_PX;
+
+  const x = Math.floor(baseMap.cameraX + localX / tile);
+  const y = Math.floor(baseMap.cameraY + localY / tile);
+  const size = baseGridSize();
+
+  if (x < 0 || y < 0 || x >= size || y >= size) return null;
+  return { x, y };
+}
+
+function renderPlacementHighlights() {
+  const root = $("#base-map-highlights");
+  if (!root) return;
+
+  if (!baseMap.placementKind) {
+    root.innerHTML = "";
+    return;
+  }
+
+  const size = baseGridSize();
+  const tile = BASE_TILE_PX;
+  const kind = baseMap.placementKind;
+  const parts = [];
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (!isValidPlacementTile(x, y, kind)) continue;
+
+      const hover = baseMap.hoverTile?.x === x && baseMap.hoverTile?.y === y;
+
+      parts.push(`
+        <div
+          class="base-tile-highlight valid${hover ? " hover" : ""}"
+          style="left:${x * tile}px;top:${y * tile}px;width:${tile}px;height:${tile}px"
+        ></div>
+      `);
+    }
+  }
+
+  root.innerHTML = parts.join("");
+}
+
+function centerBaseOnBuildings() {
+  const tiles = occupiedTiles();
+  if (!tiles.length) {
+    baseMap.cameraX = 15.5;
+    baseMap.cameraY = 15.5;
+    return;
+  }
+
+  const sx = tiles.reduce((sum, tile) => sum + tile.x + 0.5, 0) / tiles.length;
+  const sy = tiles.reduce((sum, tile) => sum + tile.y + 0.5, 0) / tiles.length;
+  baseMap.cameraX = sx;
+  baseMap.cameraY = sy;
+}
+
+function enterPlacementMode(kind) {
+  baseMap.placementKind = kind;
+  baseMap.hoverTile = null;
+
+  const viewport = $("#base-map-viewport");
+  viewport?.classList.add("placing");
+
+  const banner = $("#placement-banner");
+  const text = $("#placement-banner-text");
+  if (banner && text) {
+    const name = definitions[kind]?.name || kind;
+    text.textContent =
+      `Select a tile for ${name}. Must be within ${buildMaxChebyshev()} tiles of an existing building.`;
+    banner.hidden = false;
+  }
+
+  location.hash = "#overview";
+  applyTab();
+  renderPlacementHighlights();
+  applyBaseCamera();
+  viewport?.focus();
+}
+
+function exitPlacementMode() {
+  baseMap.placementKind = null;
+  baseMap.hoverTile = null;
+
+  $("#base-map-viewport")?.classList.remove("placing");
+
+  const banner = $("#placement-banner");
+  if (banner) banner.hidden = true;
+
+  renderPlacementHighlights();
+  updateBaseCaption();
+}
+
+async function confirmPlacement(x, y) {
+  const kind = baseMap.placementKind;
+  if (!kind || mutating) return;
+
+  if (!isValidPlacementTile(x, y, kind)) {
+    showMessage("Bu kareye kurulamaz. Yeşil karelerden birini seç.", true);
+    return;
+  }
+
+  exitPlacementMode();
+
+  mutating = true;
+  document.querySelectorAll("[data-upgrade]").forEach((element) => {
+    element.disabled = true;
+  });
+
+  try {
+    await api(`/api/buildings/${encodeURIComponent(kind)}/upgrade`, {
+      method: "POST",
+      body: JSON.stringify({ tile_x: x, tile_y: y }),
+    });
+    showMessage("İnşaat başladı. Bina seçtiğin karede yükselecek.");
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    mutating = false;
+    await refresh();
+  }
+}
+
+function renderBaseBuildings() {
+  const mapRoot = $("#village-map-buildings");
+  if (!mapRoot) return;
+
+  const tile = BASE_TILE_PX;
+
+  mapRoot.innerHTML = (snapshot.offers || [])
+    .filter((offer) => offer.tile_x != null && offer.tile_y != null)
+    .map((offer) => {
+      const definition = definitions[offer.kind] || {
+        name: offer.kind,
+        icon: buildingIconPath(offer.kind),
+      };
+      const left = (offer.tile_x + 0.5) * tile;
+      const top = (offer.tile_y + 0.5) * tile;
+      const buildingLabel = offer.level > 0
+        ? `Lv ${offer.level}`
+        : "Building…";
+
+      return `
+        <a
+          href="${definition.href || "#buildings"}"
+          class="map-building"
+          style="left:${left}px;top:${top}px"
+          title="${escapeHtml(definition.name)} (${offer.tile_x}, ${offer.tile_y})"
+          data-tile-x="${offer.tile_x}"
+          data-tile-y="${offer.tile_y}"
+        >
+          <img
+            src="${definition.icon}"
+            alt="${escapeHtml(definition.name)}"
+            class="village-building-art"
+            width="64"
+            height="52"
+            loading="lazy"
+          >
+          <strong>${escapeHtml(definition.name)}</strong>
+          <small>${escapeHtml(buildingLabel)}</small>
+        </a>
+      `;
+    })
+    .join("");
+
+  if (!baseMap.centeredOnce && (snapshot.offers || []).some((o) => o.tile_x != null)) {
+    centerBaseOnBuildings();
+    baseMap.centeredOnce = true;
+  }
+
+  applyBaseCamera();
+  renderPlacementHighlights();
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
     "&": "&amp;",
@@ -339,6 +675,10 @@ function render() {
   const villageJustAppeared = !hasVillage && Boolean(snapshot.village);
   hasVillage = Boolean(snapshot.village);
 
+  if (villageJustAppeared) {
+    baseMap.centeredOnce = false;
+  }
+
   if (!snapshot.village) {
     updateIncomingBadge(0);
     if (selectedFaction) {
@@ -470,38 +810,7 @@ function render() {
   `;
   }).join("");
 
-  const mapRoot = $("#village-map-buildings");
-
-  if (mapRoot) {
-    mapRoot.innerHTML = (snapshot.offers || [])
-      .filter((offer) => offer.level > 0 && definitions[offer.kind]?.map)
-      .map((offer) => {
-        const definition = definitions[offer.kind];
-        const { left, top } = definition.map;
-
-        return `
-          <a
-            href="${definition.href || "#buildings"}"
-            class="map-building"
-            style="left:${left};top:${top}"
-            title="${escapeHtml(definition.name)}"
-          >
-            <img
-              src="${definition.icon}"
-              alt="${escapeHtml(definition.name)}"
-              class="village-building-art"
-              width="140"
-              height="100"
-              loading="lazy"
-            >
-            <strong>${escapeHtml(definition.name)}</strong>
-            <small>Seviye ${offer.level}</small>
-          </a>
-        `;
-      })
-      .join("");
-  }
-
+  renderBaseBuildings();
   renderActiveConstruction(active);
 
   const pendingUpgrades = upgrades.filter(
@@ -1050,14 +1359,111 @@ $("#building-rows").addEventListener("click", (event) => {
   if (!button) return;
 
   const kind = button.dataset.upgrade;
+  const offer = (snapshot?.offers || []).find((item) => item.kind === kind);
+
+  if (offer && offer.level === 0) {
+    enterPlacementMode(kind);
+    showMessage("Haritada yeşil bir kareye tıklayarak binayı yerleştir.");
+    return;
+  }
 
   void mutate(
     button,
     `/api/buildings/${encodeURIComponent(kind)}/upgrade`,
-    { method: "POST" },
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
     "İnşaat başladı. Tamamlandığında bina seviyesi güncellenecek.",
   );
 });
+
+$("#placement-cancel")?.addEventListener("click", () => {
+  exitPlacementMode();
+});
+
+(function setupBaseMapControls() {
+  const viewport = $("#base-map-viewport");
+  if (!viewport) return;
+
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+
+    baseMap.drag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      cameraX: baseMap.cameraX,
+      cameraY: baseMap.cameraY,
+    };
+    baseMap.moved = false;
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add("dragging");
+  });
+
+  viewport.addEventListener("pointermove", (event) => {
+    if (baseMap.placementKind) {
+      baseMap.hoverTile = screenToBaseTile(event.clientX, event.clientY);
+      renderPlacementHighlights();
+    }
+
+    if (!baseMap.drag || event.pointerId !== baseMap.drag.pointerId) return;
+
+    const dx = event.clientX - baseMap.drag.startX;
+    const dy = event.clientY - baseMap.drag.startY;
+
+    if (Math.abs(dx) + Math.abs(dy) > 4) {
+      baseMap.moved = true;
+    }
+
+    const tile = BASE_TILE_PX * baseMap.scale;
+    baseMap.cameraX = baseMap.drag.cameraX - dx / tile;
+    baseMap.cameraY = baseMap.drag.cameraY - dy / tile;
+    applyBaseCamera();
+  });
+
+  const endDrag = (event) => {
+    if (!baseMap.drag || event.pointerId !== baseMap.drag.pointerId) return;
+
+    const wasDrag = baseMap.moved;
+    const placing = baseMap.placementKind;
+    const tile = screenToBaseTile(event.clientX, event.clientY);
+
+    baseMap.drag = null;
+    viewport.classList.remove("dragging");
+
+    if (!wasDrag && placing && tile) {
+      void confirmPlacement(tile.x, tile.y);
+    }
+  };
+
+  viewport.addEventListener("pointerup", endDrag);
+  viewport.addEventListener("pointercancel", endDrag);
+
+  viewport.addEventListener("click", (event) => {
+    if (baseMap.moved || baseMap.placementKind) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
+
+  viewport.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    baseMap.scale = Math.max(0.55, Math.min(1.8, baseMap.scale * factor));
+    applyBaseCamera();
+  }, { passive: false });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && baseMap.placementKind) {
+      exitPlacementMode();
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    applyBaseCamera();
+  });
+})();
 
 $("#recruit-spears")?.addEventListener("input", updateRecruitPreview);
 

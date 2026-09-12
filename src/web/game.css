@@ -990,25 +990,131 @@ input {
 
 /* (klasik parşömen teması kaldırıldı — Generals Zero Hour) */
 
-/* Genel bakış: köy arazisi */
+/* Genel bakış: kaydırılabilir Generals tarzı yerel harita */
 
 .village-map {
   position: relative;
-  height: auto;
-  min-height: 360px;
-  aspect-ratio: 1.42;
+  height: 440px;
+  min-height: 440px;
+  aspect-ratio: unset;
   overflow: hidden;
   isolation: isolate;
 
-  background-color: #5f7a35;
-  background-image: url("/assets/village-terrain.jpg");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
+  background-color: #3d5230;
+  background-image: none;
 
   border: 2px ridge #9d8953;
   border-radius: 0;
   box-shadow: inset 0 0 55px #1c2a1440;
+}
+
+.base-map-viewport {
+  position: absolute;
+  inset: 28px 0 22px 0;
+  z-index: 1;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+
+.base-map-viewport.dragging {
+  cursor: grabbing;
+}
+
+.base-map-viewport.placing {
+  cursor: crosshair;
+}
+
+.base-map-viewport.placing .map-building {
+  pointer-events: none;
+}
+
+.base-map-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  background-color: #5f7a35;
+  background-image: url("/assets/village-terrain.jpg");
+  background-size: cover;
+  background-position: center;
+}
+
+.base-map-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.28;
+  background-image:
+    linear-gradient(to right, #c8d8a855 1px, transparent 1px),
+    linear-gradient(to bottom, #c8d8a855 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+#village-map-buildings,
+#base-map-highlights {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.base-tile-highlight {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #e8c54799;
+  background: #e8c54728;
+  pointer-events: none;
+}
+
+.base-tile-highlight.valid {
+  border-color: #8fd46a;
+  background: #5cb84a33;
+}
+
+.base-tile-highlight.hover {
+  border-color: #fff4ce;
+  background: #fff4ce44;
+  z-index: 3;
+}
+
+.base-map-radar {
+  position: absolute;
+  right: 8px;
+  bottom: 28px;
+  z-index: 5;
+  width: 88px;
+  height: 88px;
+  border: 1px solid #4a5a40;
+  background: #0a1008d0;
+  box-shadow: 0 2px 8px #0008;
+  pointer-events: none;
+}
+
+.placement-banner {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  top: 36px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  background: #10160ef2;
+  border: 1px solid #e8c54788;
+  color: #e8f0d0;
+  font-size: 12px;
+}
+
+.placement-banner[hidden] {
+  display: none !important;
+}
+
+.placement-banner p {
+  margin: 0;
 }
 
 .village-map::before {
@@ -1016,7 +1122,7 @@ input {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
+  z-index: 4;
 
   background:
     radial-gradient(ellipse at 50% 55%, transparent 42%, #1a2a1288 100%),
@@ -1026,7 +1132,7 @@ input {
 
 .map-title {
   position: absolute;
-  z-index: 2;
+  z-index: 6;
   top: 0;
   left: 0;
   right: 0;
@@ -1039,6 +1145,7 @@ input {
   background: linear-gradient(#e0cd92, #bda264);
   border-bottom: 1px solid #766333;
   color: #36280e;
+  pointer-events: none;
 }
 
 .map-title span {
@@ -1058,8 +1165,8 @@ input {
   align-items: center;
   justify-content: flex-end;
 
-  width: 160px;
-  height: 140px;
+  width: 72px;
+  height: 72px;
   margin: 0;
   padding: 0;
 
@@ -1070,12 +1177,13 @@ input {
   color: #fff8d8;
   text-decoration: none;
   transform: translate(-50%, -50%);
+  pointer-events: auto;
 }
 
 .map-building:hover {
   background: none;
   border: 0;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -55%);
   z-index: 5;
 }
 
@@ -1083,12 +1191,12 @@ input {
   display: block;
   width: auto;
   height: auto;
-  max-width: 150px;
-  max-height: 110px;
+  max-width: 64px;
+  max-height: 52px;
   flex-shrink: 0;
   object-fit: contain;
   object-position: center bottom;
-  filter: drop-shadow(5px 8px 3px #26351b66);
+  filter: drop-shadow(3px 4px 2px #26351b66);
 }
 
 .map-building:hover .village-building-art {
@@ -1097,14 +1205,14 @@ input {
 }
 
 .map-building strong {
-  max-width: 150px;
-  padding: 2px 5px;
+  max-width: 70px;
+  padding: 2px 4px;
   margin-top: -2px;
   background: #344523d9;
   border: 1px solid #c3b57580;
   border-radius: 2px;
   color: #fff1be;
-  font: bold 9px Arial, sans-serif;
+  font: bold 8px Arial, sans-serif;
   text-shadow: 0 1px #253119;
   text-align: center;
   white-space: nowrap;
@@ -1114,19 +1222,19 @@ input {
 
 .map-building small {
   position: absolute;
-  top: 4px;
-  right: 12px;
-  padding: 2px 4px;
+  top: 2px;
+  right: 2px;
+  padding: 1px 3px;
   color: #fff7ce;
   background: #3d6129;
   border: 1px solid #b3c184;
   border-radius: 3px;
-  font: bold 9px Arial, sans-serif;
+  font: bold 8px Arial, sans-serif;
 }
 
 .map-caption {
   position: absolute;
-  z-index: 4;
+  z-index: 6;
   bottom: 0;
   left: 0;
   right: 0;
@@ -1136,6 +1244,7 @@ input {
   color: #e5e8c0;
   font-size: 9px;
   text-align: center;
+  pointer-events: none;
 }
 
 .game-shell footer {
@@ -1185,17 +1294,23 @@ input {
   }
 
   .village-map {
-    min-height: 340px;
+    height: 360px;
+    min-height: 360px;
   }
 
   .map-building {
-    width: 130px;
-    height: 120px;
+    width: 64px;
+    height: 64px;
   }
 
   .village-building-art {
-    max-width: 120px;
-    max-height: 90px;
+    max-width: 56px;
+    max-height: 44px;
+  }
+
+  .base-map-radar {
+    width: 72px;
+    height: 72px;
   }
 
   .map-building strong,

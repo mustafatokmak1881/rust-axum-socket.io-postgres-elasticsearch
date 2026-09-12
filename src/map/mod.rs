@@ -63,9 +63,18 @@ pub struct MapVillage {
     pub affiliation: String,
 }
 
+#[derive(Serialize, FromRow)]
+pub struct MapBuilding {
+    pub village_id: Uuid,
+    pub kind: String,
+    pub tile_x: i32,
+    pub tile_y: i32,
+}
+
 #[derive(Serialize)]
 pub struct MapResponse {
     pub villages: Vec<MapVillage>,
+    pub buildings: Vec<MapBuilding>,
 }
 
 async fn current_user(
@@ -220,8 +229,37 @@ pub async fn area(
     .fetch_all(&state.db)
     .await?;
 
+    let buildings = if villages.is_empty() {
+        Vec::new()
+    } else {
+        let village_ids: Vec<Uuid> = villages.iter().map(|village| village.id).collect();
+
+        sqlx::query_as::<_, MapBuilding>(
+            r#"
+            SELECT village_id, kind, tile_x, tile_y
+            FROM village_buildings
+            WHERE village_id = ANY($1)
+              AND tile_x IS NOT NULL
+              AND tile_y IS NOT NULL
+              AND (level > 0 OR EXISTS (
+                  SELECT 1
+                  FROM building_upgrades u
+                  WHERE u.village_id = village_buildings.village_id
+                    AND u.building_kind = village_buildings.kind
+                    AND u.completed_at IS NULL
+              ))
+            "#,
+        )
+        .bind(&village_ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(MapResponse { villages }),
+        Json(MapResponse {
+            villages,
+            buildings,
+        }),
     ))
 }

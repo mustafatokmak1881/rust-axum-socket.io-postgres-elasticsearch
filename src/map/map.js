@@ -14,6 +14,7 @@
         world: null,
         home: null,
         villages: [],
+        buildings: [],
         selected: null,
 
         camera: { x: 500.5, y: 500.5 },
@@ -181,6 +182,7 @@
             if (requestId !== state.requestId) return;
 
             state.villages = data.villages;
+            state.buildings = data.buildings || [];
 
             // Seçili köy görünür alandaysa güncel veriyi kullan.
             if (state.selected) {
@@ -453,6 +455,39 @@
         }
     }
 
+    // Base overview ile aynı yerel ızgara — dünya karesinin içinde nokta olarak.
+    const BASE_GRID = 32;
+
+    function drawBuildingDots() {
+        if (state.scale < 34 || !state.buildings.length) return;
+
+        const villagesById = new Map(
+            state.villages.map((village) => [village.id, village]),
+        );
+        const radius = Math.max(1.15, Math.min(3.2, state.scale / 42));
+
+        for (const building of state.buildings) {
+            const village = villagesById.get(building.village_id);
+            if (!village) continue;
+
+            const worldX = village.x + (building.tile_x + 0.5) / BASE_GRID;
+            const worldY = village.y + (building.tile_y + 0.5) / BASE_GRID;
+            const point = toScreen(worldX, worldY);
+
+            ctx.fillStyle =
+                village.affiliation === "own" ? "#e8c547" : "#d4a090";
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (state.scale >= 70) {
+                ctx.strokeStyle = "#1a201488";
+                ctx.lineWidth = 0.75;
+                ctx.stroke();
+            }
+        }
+    }
+
     function drawOverview() {
         const width = overview.width;
         const height = overview.height;
@@ -524,6 +559,8 @@
         for (const village of state.villages) {
             drawVillage(village);
         }
+
+        drawBuildingDots();
 
         drawCoordinateRulers();
         drawOverview();

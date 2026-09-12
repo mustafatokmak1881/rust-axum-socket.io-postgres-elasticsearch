@@ -40,8 +40,34 @@ pub const STARTING_BUILDINGS: &[(&str, i32)] = &[
 /// Ele geçirilen / ikincil üslerde komuta merkezi yok; en fazla bu kadar bina (seviye > 0).
 pub const SECONDARY_BASE_MAX_BUILDINGS: i64 = 5;
 
+/// Yerel üs ızgarası (dünya haritası karesinin yakın bakış hali).
+pub const BASE_GRID_SIZE: i32 = 32;
+
+/// Yeni bina, mevcut bir binanın Chebyshev mesafesi ≤ bu değer olan karelere konur.
+pub const BUILD_MAX_CHEBYSHEV: i32 = 3;
+
+/// Başlangıç binalarının yerel kareleri (merkez ~15,15).
+pub const STARTING_TILES: &[(&str, i32, i32)] = &[
+    ("headquarters", 15, 15),
+    ("rally_point", 15, 17),
+    ("farm", 13, 15),
+    ("warehouse", 17, 15),
+    ("hiding_place", 15, 13),
+];
+
 pub fn is_command_center(kind: &str) -> bool {
     kind == "headquarters"
+}
+
+pub fn starting_tile(kind: &str) -> Option<(i32, i32)> {
+    STARTING_TILES
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .map(|(_, x, y)| (*x, *y))
+}
+
+pub fn chebyshev(ax: i32, ay: i32, bx: i32, by: i32) -> i32 {
+    (ax - bx).abs().max((ay - by).abs())
 }
 
 // 1× dünya: oduncu / kil ocağı / demir madeni aynı üretim eğrisi.
@@ -364,6 +390,67 @@ pub async fn ensure_base_construction_rules(
         if built >= SECONDARY_BASE_MAX_BUILDINGS {
             return Err(AppError::BadRequest(
                 "Bu üste en fazla 5 bina kurulabilir.",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(FromRow)]
+struct OccupiedTile {
+    kind: String,
+    tile_x: i32,
+    tile_y: i32,
+}
+
+/// İlk kurulumda seçilen kareyi doğrula: sınırlar, boşluk, komşuluk ≤ BUILD_MAX_CHEBYSHEV.
+pub async fn ensure_valid_placement(
+    connection: &mut PgConnection,
+    village_id: Uuid,
+    kind: &str,
+    tile_x: i32,
+    tile_y: i32,
+) -> Result<(), AppError> {
+    if !(0..BASE_GRID_SIZE).contains(&tile_x) || !(0..BASE_GRID_SIZE).contains(&tile_y) {
+        return Err(AppError::BadRequest(
+            "Seçilen kare üs sınırlarının dışında.",
+        ));
+    }
+
+    let occupied = sqlx::query_as::<_, OccupiedTile>(
+        r#"
+        SELECT kind, tile_x, tile_y
+        FROM village_buildings
+        WHERE village_id = $1
+          AND tile_x IS NOT NULL
+          AND tile_y IS NOT NULL
+        "#,
+    )
+    .bind(village_id)
+    .fetch_all(&mut *connection)
+    .await?;
+
+    if occupied
+        .iter()
+        .any(|tile| tile.kind != kind && tile.tile_x == tile_x && tile.tile_y == tile_y)
+    {
+        return Err(AppError::BadRequest("Bu kare dolu."));
+    }
+
+    let anchors: Vec<_> = occupied
+        .iter()
+        .filter(|tile| tile.kind != kind)
+        .collect();
+
+    if !anchors.is_empty() {
+        let near = anchors.iter().any(|tile| {
+            chebyshev(tile.tile_x, tile.tile_y, tile_x, tile_y) <= BUILD_MAX_CHEBYSHEV
+        });
+
+        if !near {
+            return Err(AppError::BadRequest(
+                "Bina, mevcut bir binanın en fazla 3 kare yakınına kurulabilir.",
             ));
         }
     }
