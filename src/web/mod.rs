@@ -72,7 +72,6 @@ fn building_svg(kind: &str) -> Option<&'static str> {
         "rally_point" => include_str!("building-rally_point.svg"),
         "statue" => include_str!("building-statue.svg"),
         "market" => include_str!("building-market.svg"),
-        "timber" => include_str!("building-timber.svg"),
         "iron" => include_str!("building-iron.svg"),
         "farm" => include_str!("building-farm.svg"),
         "warehouse" => include_str!("building-warehouse.svg"),
@@ -88,6 +87,7 @@ fn building_png(kind: &str) -> Option<&'static [u8]> {
         "headquarters" => include_bytes!("center-build.png").as_slice(),
         "barracks" => include_bytes!("kisla.png").as_slice(),
         "clay" => include_bytes!("kil-ocagi.png").as_slice(),
+        "timber" => include_bytes!("oduncu.png").as_slice(),
         _ => return None,
     })
 }
