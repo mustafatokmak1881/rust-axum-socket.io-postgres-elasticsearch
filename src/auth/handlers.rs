@@ -49,7 +49,7 @@ pub async fn google_login(
     let browser_token = random_token();
 
     repository::create_login_flow(
-        &state.db,
+        &state.redis,
         &hash_token(csrf_token.secret()),
         &hash_token(&browser_token),
         nonce.secret(),
@@ -78,9 +78,8 @@ pub async fn google_callback(
         .value()
         .to_owned();
 
-    // Tek kullanımlık state + tarayıcı bağı kontrolü.
     let flow = repository::consume_login_flow(
-        &state.db,
+        &state.redis,
         &hash_token(&query.state),
         &hash_token(&browser_token),
     )
@@ -90,7 +89,7 @@ pub async fn google_callback(
     let token_response = state
         .google
         .exchange_code(AuthorizationCode::new(query.code))
-        .set_pkce_verifier(PkceCodeVerifier::new(flow.pkce_verifier))
+        .set_pkce_verifier(PkceCodeVerifier::new(flow.1))
         .request_async(async_http_client)
         .await
         .map_err(|_| AppError::Unauthorized)?;
@@ -101,9 +100,8 @@ pub async fn google_callback(
         .ok_or(AppError::Unauthorized)?;
 
     let verifier = state.google.id_token_verifier();
-    let expected_nonce = Nonce::new(flow.nonce);
+    let expected_nonce = Nonce::new(flow.0);
 
-    // İmza, issuer, audience, expiration ve nonce doğrulanır.
     let claims = id_token
         .claims(&verifier, &expected_nonce)
         .map_err(|_| AppError::Unauthorized)?;
@@ -131,15 +129,14 @@ pub async fn google_callback(
         .to_owned();
 
     let google_sub = claims.subject().as_str().to_owned();
-
     let session_token = random_token();
 
     let previous_token_hash = jar
         .get(state.config.session_cookie_name())
         .map(|cookie| hash_token(cookie.value()));
 
-    repository::create_session(
-        &state.db,
+    repository::upsert_user_and_session(
+        &state.redis,
         &google_sub,
         &email,
         &hash_token(&session_token),
@@ -159,7 +156,7 @@ pub async fn google_callback(
             Duration::days(7),
         ));
 
-    Ok((jar, Redirect::to("/game")))
+    Ok((jar, Redirect::to("/play")))
 }
 
 pub async fn me(
@@ -171,7 +168,7 @@ pub async fn me(
         .ok_or(AppError::Unauthorized)?
         .value();
 
-    let user = repository::find_session_user(&state.db, &hash_token(session_token))
+    let user = repository::find_session_user(&state.redis, &hash_token(session_token))
         .await?
         .ok_or(AppError::Unauthorized)?;
 
@@ -183,7 +180,6 @@ pub async fn logout(
     headers: HeaderMap,
     jar: CookieJar,
 ) -> Result<(CookieJar, StatusCode), AppError> {
-    // Cookie tabanlı, durum değiştiren endpoint için Origin kontrolü.
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok());
@@ -193,7 +189,7 @@ pub async fn logout(
     }
 
     if let Some(cookie) = jar.get(state.config.session_cookie_name()) {
-        repository::delete_session(&state.db, &hash_token(cookie.value())).await?;
+        repository::delete_session(&state.redis, &hash_token(cookie.value())).await?;
     }
 
     let jar = jar.remove(removal_cookie(

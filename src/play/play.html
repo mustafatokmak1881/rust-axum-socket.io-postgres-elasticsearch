@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Koalisyon — Realtime Generals</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/play.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <header class="top-hud">
+      <div class="brand">KOALİSYON</div>
+      <div class="resources" id="resources">
+        <span>SUP <b id="res-supplies">—</b></span>
+        <span>FUEL <b id="res-fuel">—</b></span>
+        <span>MUN <b id="res-munitions">—</b></span>
+        <span>PWR <b id="res-power">—</b></span>
+      </div>
+      <div class="user-chip">
+        <span id="user-name">Commander</span>
+        <span id="user-xp">0 XP</span>
+        <button type="button" id="btn-logout" class="ghost">Logout</button>
+      </div>
+    </header>
+
+    <section id="lobby-screen" class="screen">
+      <div class="lobby-panel">
+        <h1>Command Lobby</h1>
+        <p class="blurb">Match-based Generals · up to 100 commanders · fair cosmetics only</p>
+
+        <div class="faction-row" id="faction-row">
+          <button type="button" data-faction="usa" class="faction on">USA</button>
+          <button type="button" data-faction="china" class="faction">China</button>
+          <button type="button" data-faction="gla" class="faction">GLA</button>
+        </div>
+
+        <div class="lobby-actions">
+          <label>Slots
+            <input id="max-players" type="number" min="2" max="100" value="16">
+          </label>
+          <label>Map
+            <input id="map-size" type="number" min="48" max="128" value="96">
+          </label>
+          <label class="check"><input id="ffa" type="checkbox"> FFA</label>
+          <button type="button" id="btn-create" class="primary">Create Lobby</button>
+        </div>
+
+        <div class="lobby-join">
+          <input id="lobby-id" placeholder="Lobby UUID to join">
+          <button type="button" id="btn-join" class="primary">Join</button>
+          <button type="button" id="btn-refresh-lobbies" class="ghost">Refresh list</button>
+        </div>
+
+        <div id="open-lobbies" class="open-lobbies"></div>
+
+        <div id="lobby-card" class="lobby-card" hidden>
+          <h2>Lobby <small id="lobby-id-label"></small></h2>
+          <ul id="lobby-slots"></ul>
+          <div class="lobby-actions">
+            <button type="button" id="btn-ready" class="primary">Ready</button>
+            <button type="button" id="btn-start" class="accent">Start Match</button>
+            <button type="button" id="btn-leave" class="ghost">Leave</button>
+          </div>
+        </div>
+
+        <div class="store-panel">
+          <h3>Officer Store <small>(no P2W)</small></h3>
+          <div id="store-items" class="store-items"></div>
+          <p id="store-status" class="muted"></p>
+        </div>
+      </div>
+    </section>
+
+    <section id="match-screen" class="screen" hidden>
+      <canvas id="viewport"></canvas>
+
+      <aside class="build-rail" id="build-rail">
+        <header>Structures</header>
+        <div id="build-list"></div>
+        <footer id="build-detail">Select a structure, then click the map.</footer>
+      </aside>
+
+      <aside class="unit-rail" id="unit-rail">
+        <header>Production</header>
+        <div id="unit-list"></div>
+      </aside>
+
+      <div class="match-caption" id="match-caption">Drag orbit · RMB move · LMB select/place</div>
+      <div class="status-toast" id="toast" hidden></div>
+    </section>
+  </div>
+
+  <script type="module" src="/assets/play.js"></script>
+</body>
+</html>

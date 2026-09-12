@@ -5,7 +5,7 @@ use std::env;
 pub struct Config {
     pub host: String,
     pub port: u16,
-    pub database_url: String,
+    pub redis_url: String,
 
     pub app_origin: String,
     pub cookie_secure: bool,
@@ -13,18 +13,13 @@ pub struct Config {
     pub google_client_id: String,
     pub google_client_secret: String,
 
-    pub internal_worker_secret: String,
+    pub stripe_secret_key: Option<String>,
+    pub stripe_webhook_secret: Option<String>,
+    pub stripe_price_flag_gold: Option<String>,
 }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        let internal_worker_secret = required("INTERNAL_WORKER_SECRET")?;
-
-        ensure!(
-            internal_worker_secret.len() >= 32 && !internal_worker_secret.starts_with("replace_"),
-            "INTERNAL_WORKER_SECRET must be a random secret of at least 32 characters"
-        );
-
         let app_origin = required("APP_ORIGIN")?.trim_end_matches('/').to_owned();
 
         let cookie_secure = env::var("COOKIE_SECURE")
@@ -44,14 +39,21 @@ impl Config {
                 .parse()
                 .context("Invalid PORT")?,
 
-            database_url: required("DATABASE_URL")?,
+            redis_url: env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_owned()),
             app_origin,
             cookie_secure,
 
             google_client_id: required("GOOGLE_CLIENT_ID")?,
             google_client_secret: required("GOOGLE_CLIENT_SECRET")?,
 
-            internal_worker_secret,
+            stripe_secret_key: env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty()),
+            stripe_webhook_secret: env::var("STRIPE_WEBHOOK_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            stripe_price_flag_gold: env::var("STRIPE_PRICE_FLAG_GOLD")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -78,8 +80,6 @@ impl Config {
 
 fn required(name: &str) -> anyhow::Result<String> {
     let value = env::var(name).with_context(|| format!("{name} is missing"))?;
-
     ensure!(!value.trim().is_empty(), "{name} cannot be empty");
-
     Ok(value)
 }
