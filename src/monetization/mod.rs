@@ -1,5 +1,3 @@
-pub mod handlers;
-
 use axum::{
     Json, Router,
     extract::State,
