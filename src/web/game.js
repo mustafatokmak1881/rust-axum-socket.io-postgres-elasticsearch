@@ -160,10 +160,10 @@ let selectedFaction = null;
 let hasVillage = false;
 const baseDocumentTitle = document.title;
 
-const BASE_TILE_PX = 56;
+const BASE_TILE_PX = 48;
 const baseMap = {
-  cameraX: 15.5,
-  cameraY: 15.5,
+  cameraX: 63.5,
+  cameraY: 63.5,
   scale: 1,
   drag: null,
   moved: false,
@@ -173,7 +173,7 @@ const baseMap = {
 };
 
 function baseGridSize() {
-  return Number(snapshot?.rules?.base_grid_size) || 32;
+  return Number(snapshot?.rules?.base_grid_size) || 128;
 }
 
 function buildMaxChebyshev() {
@@ -219,6 +219,38 @@ function isValidPlacementTile(x, y, kind) {
   return occupied.some((tile) => chebyshev(tile.x, tile.y, x, y) <= maxDist);
 }
 
+function validPlacementTiles(kind) {
+  const occupied = occupiedTiles(kind);
+  const size = baseGridSize();
+  const maxDist = buildMaxChebyshev();
+  const found = new Map();
+
+  if (occupied.length === 0) {
+    const cx = Math.floor(size / 2);
+    const cy = Math.floor(size / 2);
+    found.set(`${cx},${cy}`, { x: cx, y: cy });
+    return [...found.values()];
+  }
+
+  for (const tile of occupied) {
+    for (let dy = -maxDist; dy <= maxDist; dy++) {
+      for (let dx = -maxDist; dx <= maxDist; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) > maxDist) continue;
+
+        const x = tile.x + dx;
+        const y = tile.y + dy;
+
+        if (x < 0 || y < 0 || x >= size || y >= size) continue;
+        if (occupied.some((item) => item.x === x && item.y === y)) continue;
+
+        found.set(`${x},${y}`, { x, y });
+      }
+    }
+  }
+
+  return [...found.values()];
+}
+
 function applyBaseCamera() {
   const viewport = $("#base-map-viewport");
   const world = $("#base-map-world");
@@ -238,6 +270,8 @@ function applyBaseCamera() {
 
   const vw = viewport.clientWidth;
   const vh = viewport.clientHeight;
+  if (vw < 8 || vh < 8) return;
+
   const halfW = (vw / baseMap.scale) / (2 * tile);
   const halfH = (vh / baseMap.scale) / (2 * tile);
 
@@ -272,19 +306,17 @@ function drawBaseRadar() {
   ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
 
-  for (const tile of occupiedTiles()) {
+  const occupied = occupiedTiles();
+  const cell = Math.max(1.2, w / size);
+
+  for (const tile of occupied) {
     ctx.fillStyle = "#c8a050";
-    ctx.fillRect(
-      (tile.x / size) * w,
-      (tile.y / size) * h,
-      Math.max(2, w / size),
-      Math.max(2, h / size),
-    );
+    ctx.fillRect((tile.x / size) * w, (tile.y / size) * h, cell, cell);
   }
 
-  const tile = BASE_TILE_PX;
-  const viewW = (viewport.clientWidth / baseMap.scale) / tile;
-  const viewH = (viewport.clientHeight / baseMap.scale) / tile;
+  const tilePx = BASE_TILE_PX;
+  const viewW = (viewport.clientWidth / baseMap.scale) / tilePx;
+  const viewH = (viewport.clientHeight / baseMap.scale) / tilePx;
   const left = baseMap.cameraX - viewW / 2;
   const top = baseMap.cameraY - viewH / 2;
 
@@ -302,17 +334,115 @@ function updateBaseCaption() {
   const caption = $("#base-map-caption");
   if (!caption) return;
 
+  const size = baseGridSize();
+
   if (baseMap.placementKind) {
     const name = definitions[baseMap.placementKind]?.name || baseMap.placementKind;
     caption.textContent =
-      `Placing ${name} · green tiles are valid (≤${buildMaxChebyshev()} from existing)`;
+      `Placing ${name} · click a green tile (≤${buildMaxChebyshev()} from base) · ${size}×${size} field`;
     return;
   }
 
   const tx = Math.floor(baseMap.cameraX);
   const ty = Math.floor(baseMap.cameraY);
   caption.textContent =
-    `Drag to pan · Scroll to zoom · Focus (${tx}, ${ty}) · World map shows matching dots`;
+    `Drag to pan · Scroll to zoom · Focus (${tx}, ${ty}) · ${size}×${size} ops grid`;
+}
+
+function updateBuildRailDetail(offer) {
+  const detail = $("#base-build-detail");
+  const status = $("#base-build-status");
+  if (!detail || !status) return;
+
+  if (!offer) {
+    status.textContent = baseMap.placementKind
+      ? "Place on map"
+      : "Select a structure";
+    detail.innerHTML = `
+      <p class="muted small">
+        Choose a structure from the left, then click a green tile on the map.
+      </p>
+    `;
+    return;
+  }
+
+  const name = offer.name || definitions[offer.kind]?.name || offer.kind;
+  status.textContent = offer.level === 0 ? `Build ${name}` : `Upgrade ${name}`;
+
+  if (offer.blocked_reason && !offer.can_upgrade) {
+    detail.innerHTML = `
+      <strong>${escapeHtml(name)}</strong>
+      <p>${escapeHtml(offer.blocked_reason)}</p>
+    `;
+    return;
+  }
+
+  const cost = offer.level >= offer.max_level
+    ? "<p>Maximum level reached.</p>"
+    : `
+      <div class="base-build-costs">
+        <span>Sup ${number(offer.cost_wood)}</span>
+        <span>Fuel ${number(offer.cost_clay)}</span>
+        <span>Mun ${number(offer.cost_iron)}</span>
+        <span>${duration(offer.duration_seconds)}</span>
+      </div>
+      <p>${escapeHtml(offer.description || "")}</p>
+    `;
+
+  detail.innerHTML = `<strong>${escapeHtml(name)}</strong>${cost}`;
+}
+
+function renderBuildRail() {
+  const list = $("#base-build-list");
+  if (!list) return;
+
+  const offers = snapshot?.offers || [];
+
+  list.innerHTML = offers.map((offer) => {
+    const definition = definitions[offer.kind] || {
+      name: offer.name,
+      icon: buildingIconPath(offer.kind),
+    };
+    const selected = baseMap.placementKind === offer.kind;
+    const built = offer.level > 0 || offer.tile_x != null;
+    const locked = !offer.can_upgrade;
+    const disabled = mutating;
+
+    const meta = offer.level === 0
+      ? (offer.can_upgrade ? "Ready to build" : (offer.blocked_reason || "Locked"))
+      : offer.can_upgrade
+        ? `Upgrade → ${offer.level + 1}`
+        : `Lv ${offer.level}/${offer.max_level}`;
+
+    return `
+      <button
+        type="button"
+        class="base-build-item${selected ? " is-selected" : ""}${built ? " is-built" : ""}${locked ? " is-locked" : ""}"
+        data-build-kind="${escapeHtml(offer.kind)}"
+        ${disabled ? "disabled" : ""}
+        title="${escapeHtml(offer.description || definition.name || offer.kind)}"
+      >
+        <img
+          src="${definition.icon || buildingIconPath(offer.kind)}"
+          alt=""
+          width="40"
+          height="34"
+          loading="lazy"
+        >
+        <span class="base-build-item-copy">
+          <strong>${escapeHtml(offer.name || definition.name || offer.kind)}</strong>
+          <small>${escapeHtml(meta)}</small>
+        </span>
+      </button>
+    `;
+  }).join("");
+
+  const selectedOffer = offers.find((offer) => offer.kind === baseMap.placementKind)
+    || null;
+  updateBuildRailDetail(selectedOffer);
+
+  const cancel = $("#placement-cancel");
+  if (cancel) cancel.hidden = !baseMap.placementKind;
 }
 
 function screenToBaseTile(clientX, clientY) {
@@ -341,24 +471,19 @@ function renderPlacementHighlights() {
     return;
   }
 
-  const size = baseGridSize();
   const tile = BASE_TILE_PX;
   const kind = baseMap.placementKind;
   const parts = [];
 
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      if (!isValidPlacementTile(x, y, kind)) continue;
+  for (const spot of validPlacementTiles(kind)) {
+    const hover = baseMap.hoverTile?.x === spot.x && baseMap.hoverTile?.y === spot.y;
 
-      const hover = baseMap.hoverTile?.x === x && baseMap.hoverTile?.y === y;
-
-      parts.push(`
-        <div
-          class="base-tile-highlight valid${hover ? " hover" : ""}"
-          style="left:${x * tile}px;top:${y * tile}px;width:${tile}px;height:${tile}px"
-        ></div>
-      `);
-    }
+    parts.push(`
+      <div
+        class="base-tile-highlight valid${hover ? " hover" : ""}"
+        style="left:${spot.x * tile}px;top:${spot.y * tile}px;width:${tile}px;height:${tile}px"
+      ></div>
+    `);
   }
 
   root.innerHTML = parts.join("");
@@ -367,8 +492,9 @@ function renderPlacementHighlights() {
 function centerBaseOnBuildings() {
   const tiles = occupiedTiles();
   if (!tiles.length) {
-    baseMap.cameraX = 15.5;
-    baseMap.cameraY = 15.5;
+    const mid = baseGridSize() / 2;
+    baseMap.cameraX = mid;
+    baseMap.cameraY = mid;
     return;
   }
 
@@ -379,26 +505,37 @@ function centerBaseOnBuildings() {
 }
 
 function enterPlacementMode(kind) {
+  const offer = (snapshot?.offers || []).find((item) => item.kind === kind);
+  if (!offer) return;
+
+  if (offer.level > 0) {
+    exitPlacementMode();
+    void startUpgrade(kind, {});
+    return;
+  }
+
+  if (!offer.can_upgrade) {
+    showMessage(offer.blocked_reason || "Bu bina şu an kurulamaz.", true);
+    updateBuildRailDetail(offer);
+    return;
+  }
+
   baseMap.placementKind = kind;
   baseMap.hoverTile = null;
 
   const viewport = $("#base-map-viewport");
   viewport?.classList.add("placing");
 
-  const banner = $("#placement-banner");
-  const text = $("#placement-banner-text");
-  if (banner && text) {
-    const name = definitions[kind]?.name || kind;
-    text.textContent =
-      `Select a tile for ${name}. Must be within ${buildMaxChebyshev()} tiles of an existing building.`;
-    banner.hidden = false;
-  }
+  const cancel = $("#placement-cancel");
+  if (cancel) cancel.hidden = false;
 
   location.hash = "#overview";
   applyTab();
+  renderBuildRail();
   renderPlacementHighlights();
   applyBaseCamera();
   viewport?.focus();
+  showMessage("Sol menüden seçildi — haritada yeşil kareye tıkla.");
 }
 
 function exitPlacementMode() {
@@ -407,11 +544,34 @@ function exitPlacementMode() {
 
   $("#base-map-viewport")?.classList.remove("placing");
 
-  const banner = $("#placement-banner");
-  if (banner) banner.hidden = true;
+  const cancel = $("#placement-cancel");
+  if (cancel) cancel.hidden = true;
 
+  renderBuildRail();
   renderPlacementHighlights();
   updateBaseCaption();
+}
+
+async function startUpgrade(kind, body) {
+  if (mutating) return;
+
+  mutating = true;
+  document.querySelectorAll("[data-upgrade], [data-build-kind]").forEach((element) => {
+    element.disabled = true;
+  });
+
+  try {
+    await api(`/api/buildings/${encodeURIComponent(kind)}/upgrade`, {
+      method: "POST",
+      body: JSON.stringify(body || {}),
+    });
+    showMessage("İnşaat başladı. Tamamlandığında bina seviyesi güncellenecek.");
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    mutating = false;
+    await refresh();
+  }
 }
 
 async function confirmPlacement(x, y) {
@@ -424,24 +584,7 @@ async function confirmPlacement(x, y) {
   }
 
   exitPlacementMode();
-
-  mutating = true;
-  document.querySelectorAll("[data-upgrade]").forEach((element) => {
-    element.disabled = true;
-  });
-
-  try {
-    await api(`/api/buildings/${encodeURIComponent(kind)}/upgrade`, {
-      method: "POST",
-      body: JSON.stringify({ tile_x: x, tile_y: y }),
-    });
-    showMessage("İnşaat başladı. Bina seçtiğin karede yükselecek.");
-  } catch (error) {
-    showMessage(error.message, true);
-  } finally {
-    mutating = false;
-    await refresh();
-  }
+  await startUpgrade(kind, { tile_x: x, tile_y: y });
 }
 
 function renderBaseBuildings() {
@@ -476,8 +619,8 @@ function renderBaseBuildings() {
             src="${definition.icon}"
             alt="${escapeHtml(definition.name)}"
             class="village-building-art"
-            width="64"
-            height="52"
+            width="56"
+            height="46"
             loading="lazy"
           >
           <strong>${escapeHtml(definition.name)}</strong>
@@ -492,6 +635,7 @@ function renderBaseBuildings() {
     baseMap.centeredOnce = true;
   }
 
+  renderBuildRail();
   applyBaseCamera();
   renderPlacementHighlights();
 }
@@ -1363,19 +1507,33 @@ $("#building-rows").addEventListener("click", (event) => {
 
   if (offer && offer.level === 0) {
     enterPlacementMode(kind);
-    showMessage("Haritada yeşil bir kareye tıklayarak binayı yerleştir.");
     return;
   }
 
-  void mutate(
-    button,
-    `/api/buildings/${encodeURIComponent(kind)}/upgrade`,
-    {
-      method: "POST",
-      body: JSON.stringify({}),
-    },
-    "İnşaat başladı. Tamamlandığında bina seviyesi güncellenecek.",
-  );
+  void startUpgrade(kind, {});
+});
+
+$("#base-build-list")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-build-kind]");
+  if (!button || button.disabled) return;
+
+  const kind = button.dataset.buildKind;
+  const offer = (snapshot?.offers || []).find((item) => item.kind === kind);
+  if (!offer) return;
+
+  updateBuildRailDetail(offer);
+
+  if (!offer.can_upgrade) {
+    showMessage(offer.blocked_reason || "Bu yapı şu an kullanılamaz.", true);
+    return;
+  }
+
+  if (offer.level === 0) {
+    enterPlacementMode(kind);
+    return;
+  }
+
+  void startUpgrade(kind, {});
 });
 
 $("#placement-cancel")?.addEventListener("click", () => {
@@ -1450,7 +1608,7 @@ $("#placement-cancel")?.addEventListener("click", () => {
   viewport.addEventListener("wheel", (event) => {
     event.preventDefault();
     const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-    baseMap.scale = Math.max(0.55, Math.min(1.8, baseMap.scale * factor));
+    baseMap.scale = Math.max(0.45, Math.min(2.2, baseMap.scale * factor));
     applyBaseCamera();
   }, { passive: false });
 

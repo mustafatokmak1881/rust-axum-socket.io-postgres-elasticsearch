@@ -40,19 +40,19 @@ pub const STARTING_BUILDINGS: &[(&str, i32)] = &[
 /// Ele geçirilen / ikincil üslerde komuta merkezi yok; en fazla bu kadar bina (seviye > 0).
 pub const SECONDARY_BASE_MAX_BUILDINGS: i64 = 5;
 
-/// Yerel üs ızgarası (dünya haritası karesinin yakın bakış hali).
-pub const BASE_GRID_SIZE: i32 = 32;
+/// Yerel üs ızgarası — dünya karesinin yakın bakış hali (uzun soluklu üs yayılımı).
+pub const BASE_GRID_SIZE: i32 = 128;
 
 /// Yeni bina, mevcut bir binanın Chebyshev mesafesi ≤ bu değer olan karelere konur.
 pub const BUILD_MAX_CHEBYSHEV: i32 = 3;
 
-/// Başlangıç binalarının yerel kareleri (merkez ~15,15).
+/// Başlangıç binalarının yerel kareleri (ızgara merkezi ~63,63).
 pub const STARTING_TILES: &[(&str, i32, i32)] = &[
-    ("headquarters", 15, 15),
-    ("rally_point", 15, 17),
-    ("farm", 13, 15),
-    ("warehouse", 17, 15),
-    ("hiding_place", 15, 13),
+    ("headquarters", 63, 63),
+    ("rally_point", 63, 65),
+    ("farm", 61, 63),
+    ("warehouse", 65, 63),
+    ("hiding_place", 63, 61),
 ];
 
 pub fn is_command_center(kind: &str) -> bool {

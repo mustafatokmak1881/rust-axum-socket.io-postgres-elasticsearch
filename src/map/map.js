@@ -456,7 +456,7 @@
     }
 
     // Base overview ile aynı yerel ızgara — dünya karesinin içinde nokta olarak.
-    const BASE_GRID = 32;
+    const BASE_GRID = 128;
 
     function drawBuildingDots() {
         if (state.scale < 34 || !state.buildings.length) return;

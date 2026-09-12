@@ -90,7 +90,7 @@ button:disabled {
 }
 
 .game-shell {
-  width: min(1100px, calc(100% - 26px));
+  width: min(1280px, calc(100% - 20px));
 }
 
 .menu {
@@ -990,12 +990,174 @@ input {
 
 /* (klasik parşömen teması kaldırıldı — Generals Zero Hour) */
 
-/* Genel bakış: kaydırılabilir Generals tarzı yerel harita */
+/* Genel bakış: Generals tarzı sol build menü + büyük yerel harita */
+
+.overview-body {
+  padding-top: 8px !important;
+}
+
+.base-stage {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 0;
+  min-height: min(78vh, 860px);
+  height: min(78vh, 860px);
+  border: 1px solid #4a5a40;
+  background: #0c120c;
+  box-shadow: inset 0 0 40px #0008;
+}
+
+.base-build-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-right: 1px solid #3a4a34;
+  background:
+    linear-gradient(180deg, #1a2418 0%, #121810 40%, #0e140e 100%);
+}
+
+.base-build-rail-head {
+  flex: 0 0 auto;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid #3a4a34;
+  background: linear-gradient(180deg, #243020, #182018);
+}
+
+.base-build-rail-head span {
+  display: block;
+  font: 700 9px var(--font-display), sans-serif;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8a9a78;
+}
+
+.base-build-rail-head strong {
+  display: block;
+  margin-top: 4px;
+  font: 600 12px var(--font-display), sans-serif;
+  letter-spacing: 0.04em;
+  color: #e8c547;
+}
+
+.base-build-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.base-build-item {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid #334032;
+  background: linear-gradient(180deg, #1c261a, #141a14);
+  color: #d8e0c8;
+  text-align: left;
+  cursor: pointer;
+}
+
+.base-build-item:hover:not(:disabled) {
+  border-color: #6a7a50;
+  background: linear-gradient(180deg, #243022, #182018);
+}
+
+.base-build-item.is-locked {
+  opacity: 0.55;
+}
+
+.base-build-item.is-locked:hover:not(:disabled) {
+  opacity: 0.75;
+}
+
+.base-build-item.is-selected {
+  border-color: #e8c547;
+  box-shadow: inset 0 0 0 1px #e8c54755;
+  background: linear-gradient(180deg, #2a3420, #1c2418);
+}
+
+.base-build-item.is-built {
+  border-color: #455540;
+}
+
+.base-build-item img {
+  width: 40px;
+  height: 34px;
+  object-fit: contain;
+  filter: drop-shadow(1px 2px 1px #0008);
+}
+
+.base-build-item-copy {
+  min-width: 0;
+}
+
+.base-build-item-copy strong {
+  display: block;
+  font: 600 11px var(--font-display), sans-serif;
+  letter-spacing: 0.03em;
+  color: #f0e8c0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.base-build-item-copy small {
+  display: block;
+  margin-top: 2px;
+  font-size: 9px;
+  color: #8a9a78;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.base-build-rail-foot {
+  flex: 0 0 auto;
+  padding: 8px;
+  border-top: 1px solid #3a4a34;
+  background: #0a100a;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.base-build-detail {
+  min-height: 52px;
+}
+
+.base-build-detail strong {
+  display: block;
+  margin-bottom: 4px;
+  font: 600 11px var(--font-display), sans-serif;
+  color: #e8c547;
+}
+
+.base-build-detail p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #a8b898;
+}
+
+.base-build-costs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #c8d8b0;
+}
 
 .village-map {
   position: relative;
-  height: 440px;
-  min-height: 440px;
+  height: 100%;
+  min-height: 0;
   aspect-ratio: unset;
   overflow: hidden;
   isolation: isolate;
@@ -1003,7 +1165,7 @@ input {
   background-color: #3d5230;
   background-image: none;
 
-  border: 2px ridge #9d8953;
+  border: 0;
   border-radius: 0;
   box-shadow: inset 0 0 55px #1c2a1440;
 }
@@ -1046,11 +1208,11 @@ input {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.28;
+  opacity: 0.22;
   background-image:
-    linear-gradient(to right, #c8d8a855 1px, transparent 1px),
-    linear-gradient(to bottom, #c8d8a855 1px, transparent 1px);
-  background-size: 56px 56px;
+    linear-gradient(to right, #c8d8a844 1px, transparent 1px),
+    linear-gradient(to bottom, #c8d8a844 1px, transparent 1px);
+  background-size: 48px 48px;
 }
 
 #village-map-buildings,
@@ -1081,11 +1243,11 @@ input {
 
 .base-map-radar {
   position: absolute;
-  right: 8px;
+  right: 10px;
   bottom: 28px;
   z-index: 5;
-  width: 88px;
-  height: 88px;
+  width: 104px;
+  height: 104px;
   border: 1px solid #4a5a40;
   background: #0a1008d0;
   box-shadow: 0 2px 8px #0008;
@@ -1093,28 +1255,7 @@ input {
 }
 
 .placement-banner {
-  position: absolute;
-  z-index: 8;
-  left: 50%;
-  top: 36px;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  max-width: calc(100% - 24px);
-  padding: 8px 12px;
-  background: #10160ef2;
-  border: 1px solid #e8c54788;
-  color: #e8f0d0;
-  font-size: 12px;
-}
-
-.placement-banner[hidden] {
   display: none !important;
-}
-
-.placement-banner p {
-  margin: 0;
 }
 
 .village-map::before {
@@ -1293,9 +1434,37 @@ input {
     padding: 8px;
   }
 
+  .base-stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: 200px minmax(420px, 62vh);
+    height: auto;
+    min-height: 0;
+  }
+
+  .base-build-rail {
+    border-right: 0;
+    border-bottom: 1px solid #3a4a34;
+    max-height: 200px;
+  }
+
+  .base-build-list {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .base-build-item {
+    flex: 0 0 150px;
+  }
+
+  .base-build-rail-foot {
+    display: none;
+  }
+
   .village-map {
-    height: 360px;
-    min-height: 360px;
+    height: 62vh;
+    min-height: 420px;
   }
 
   .map-building {
@@ -1309,8 +1478,8 @@ input {
   }
 
   .base-map-radar {
-    width: 72px;
-    height: 72px;
+    width: 80px;
+    height: 80px;
   }
 
   .map-building strong,
@@ -1577,8 +1746,13 @@ input {
 
 .theme-generals .village-map,
 .game-shell .village-map {
-  border: 1px solid #4a5a40 !important;
-  box-shadow: inset 0 0 40px #0008 !important;
+  border: 0 !important;
+  box-shadow: inset 0 0 50px #0009 !important;
+}
+
+.theme-generals .base-stage,
+.game-shell .base-stage {
+  border-color: #4a5a40 !important;
 }
 
 .theme-generals table,
@@ -1728,7 +1902,7 @@ input {
 }
 
 .theme-generals .village-map {
-  border: 1px solid #4a5a40 !important;
+  border: 0 !important;
   box-shadow: inset 0 0 50px #0009 !important;
 }
 

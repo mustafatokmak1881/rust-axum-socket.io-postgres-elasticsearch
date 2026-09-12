@@ -143,44 +143,64 @@
           <div class="screens">
             <section class="panel screen" data-screen="overview">
               <h2>Command Center</h2>
-              <div class="panel-body">
-                <div class="village-map" id="base-map">
-                  <div class="map-title">
-                    <span>KOALİSYON</span>
-                    <strong>Base Layout</strong>
-                  </div>
+              <div class="panel-body overview-body">
+                <div class="base-stage" id="base-stage">
+                  <aside class="base-build-rail" aria-label="Build structures">
+                    <header class="base-build-rail-head">
+                      <span>Build menu</span>
+                      <strong id="base-build-status">Select a structure</strong>
+                    </header>
 
-                  <div
-                    class="base-map-viewport"
-                    id="base-map-viewport"
-                    tabindex="0"
-                    role="application"
-                    aria-label="Base tactical map"
-                  >
-                    <div class="base-map-world" id="base-map-world">
-                      <div class="base-map-grid" id="base-map-grid"></div>
-                      <div id="village-map-buildings"></div>
-                      <div id="base-map-highlights"></div>
+                    <div class="base-build-list" id="base-build-list"></div>
+
+                    <footer class="base-build-rail-foot" id="base-build-foot">
+                      <div id="base-build-detail" class="base-build-detail">
+                        <p class="muted small">
+                          Choose a structure, then click a green tile on the map.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        class="button small-button"
+                        id="placement-cancel"
+                        hidden
+                      >
+                        Cancel placement
+                      </button>
+                    </footer>
+                  </aside>
+
+                  <div class="village-map" id="base-map">
+                    <div class="map-title">
+                      <span>KOALİSYON · LOCAL OPS</span>
+                      <strong>Base Layout · 128²</strong>
                     </div>
-                  </div>
 
-                  <canvas
-                    class="base-map-radar"
-                    id="base-map-radar"
-                    width="96"
-                    height="96"
-                    aria-hidden="true"
-                  ></canvas>
+                    <div
+                      class="base-map-viewport"
+                      id="base-map-viewport"
+                      tabindex="0"
+                      role="application"
+                      aria-label="Base tactical map"
+                    >
+                      <div class="base-map-world" id="base-map-world">
+                        <div class="base-map-grid" id="base-map-grid"></div>
+                        <div id="village-map-buildings"></div>
+                        <div id="base-map-highlights"></div>
+                      </div>
+                    </div>
 
-                  <div class="map-caption" id="base-map-caption">
-                    Drag to pan · Scroll to zoom · Build within 3 tiles
-                  </div>
+                    <canvas
+                      class="base-map-radar"
+                      id="base-map-radar"
+                      width="112"
+                      height="112"
+                      aria-hidden="true"
+                    ></canvas>
 
-                  <div class="placement-banner" id="placement-banner" hidden>
-                    <p id="placement-banner-text"></p>
-                    <button type="button" class="button small-button" id="placement-cancel">
-                      Cancel
-                    </button>
+                    <div class="map-caption" id="base-map-caption">
+                      Drag to pan · Scroll to zoom · Build within 3 tiles
+                    </div>
                   </div>
                 </div>
 
