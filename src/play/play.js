@@ -190,7 +190,8 @@ async function setupMatchScene(snapshot) {
   renderBuildList(snapshot.buildable || []);
   renderUnitList(snapshot.trainable || []);
   await ensureBuildingModel();
-  initThree(snapshot.map_size);
+  const terrain = await loadTerrainTexture(snapshot.map_size);
+  initThree(snapshot.map_size, terrain);
   rebuildMeshes();
   toast("Match live — move mouse to screen edges to pan");
 }
@@ -249,53 +250,188 @@ function applyDelta(msg) {
 
 let renderer, scene, camera, controls, ground, raycaster, pointer;
 let mapSize = 192;
-let buildingGeometry = null;
-let buildingModelPromise = null;
+let buildingGeometries = Object.create(null);
+let buildingModelsPromise = null;
+let ghostMesh = null;
 const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 
 /** Generals-style locked pitch (radians from vertical-ish). */
 const CAMERA_PITCH = Math.PI / 3.35;
 const EDGE_SCROLL_PX = 42;
 
-async function ensureBuildingModel() {
-  if (buildingGeometry) return buildingGeometry;
-  if (buildingModelPromise) return buildingModelPromise;
+const BUILDING_STL = {
+  hq: { url: "/assets/models/command-center.stl", target: 2.6 },
+  power_plant: { url: "/assets/models/command-center.stl", target: 2.2 },
+  supply: { url: "/assets/models/command-center.stl", target: 2.2 },
+  barracks: { url: "/assets/models/barracks.stl", target: 2.5 },
+  war_factory: { url: "/assets/models/command-center.stl", target: 2.4 },
+  turret: { url: "/assets/models/command-center.stl", target: 1.8 },
+};
 
-  buildingModelPromise = (async () => {
-    const loader = new STLLoader();
-    const geo = await loader.loadAsync("/assets/models/command-center.stl");
-    // Most CAD STLs are Z-up; Three.js is Y-up — stand the building upright.
-    geo.rotateX(-Math.PI / 2);
-    geo.computeVertexNormals();
-    geo.center();
-    geo.computeBoundingBox();
-    const box = geo.boundingBox;
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const target = 2.6;
-    const s = target / maxDim;
-    geo.scale(s, s, s);
-    geo.computeBoundingBox();
-    // Feet on the ground (Y = 0).
-    geo.translate(0, -geo.boundingBox.min.y, 0);
-    buildingGeometry = geo;
-    return geo;
+async function prepareStlGeometry(url, targetSize) {
+  const loader = new STLLoader();
+  const geo = await loader.loadAsync(url);
+  // Most CAD STLs are Z-up; Three.js is Y-up — stand the building upright.
+  geo.rotateX(-Math.PI / 2);
+  geo.computeVertexNormals();
+  geo.center();
+  geo.computeBoundingBox();
+  const box = geo.boundingBox;
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const s = targetSize / maxDim;
+  geo.scale(s, s, s);
+  geo.computeBoundingBox();
+  geo.translate(0, -geo.boundingBox.min.y, 0);
+  return geo;
+}
+
+function geometryForKind(kind) {
+  return buildingGeometries[kind] || buildingGeometries.hq || null;
+}
+
+async function ensureBuildingModel() {
+  if (buildingGeometries.hq && buildingGeometries.barracks) return buildingGeometries;
+  if (buildingModelsPromise) return buildingModelsPromise;
+
+  buildingModelsPromise = (async () => {
+    const unique = new Map();
+    for (const [kind, spec] of Object.entries(BUILDING_STL)) {
+      const key = `${spec.url}|${spec.target}`;
+      if (!unique.has(key)) {
+        unique.set(key, prepareStlGeometry(spec.url, spec.target));
+      }
+      buildingGeometries[kind] = await unique.get(key);
+    }
+    return buildingGeometries;
   })();
 
   try {
-    return await buildingModelPromise;
+    return await buildingModelsPromise;
   } catch (error) {
     console.error(error);
-    buildingModelPromise = null;
+    buildingModelsPromise = null;
     toast("STL model failed to load — using cubes");
     return null;
   }
 }
 
-function initThree(size) {
+async function loadTerrainTexture(mapSize) {
+  try {
+    const loader = new THREE.TextureLoader();
+    const tex = await loader.loadAsync("/assets/terrain.jpg");
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = 8;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const tiles = Math.max(12, Math.round(mapSize / 10));
+    tex.repeat.set(tiles, tiles);
+    return tex;
+  } catch (error) {
+    console.error(error);
+    return makeFallbackTerrainTexture(mapSize);
+  }
+}
+
+function makeFallbackTerrainTexture(mapSize) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#4a5f34";
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 900; i++) {
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    const s = 1 + Math.random() * 3;
+    ctx.fillStyle = `rgba(${60 + Math.random() * 50},${80 + Math.random() * 60},${40 + Math.random() * 30},${0.15 + Math.random() * 0.35})`;
+    ctx.fillRect(x, y, s, s);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  const tiles = Math.max(12, Math.round(mapSize / 10));
+  tex.repeat.set(tiles, tiles);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function scatterGroundDecor(scene, size, cx, cz) {
+  const group = new THREE.Group();
+  group.name = "groundDecor";
+
+  // Soft dirt patches
+  const patchMat = new THREE.MeshStandardMaterial({
+    color: 0x6a5a3a,
+    roughness: 1,
+    metalness: 0,
+    flatShading: true,
+  });
+  const patchCount = Math.min(80, Math.floor(size * 0.35));
+  for (let i = 0; i < patchCount; i++) {
+    const w = 2.5 + Math.random() * 6;
+    const d = 2 + Math.random() * 5;
+    const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 7), patchMat);
+    mesh.scale.set(w * 0.5, d * 0.5, 1);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(
+      4 + Math.random() * (size - 8),
+      0.03,
+      4 + Math.random() * (size - 8),
+    );
+    mesh.rotation.z = Math.random() * Math.PI;
+    group.add(mesh);
+  }
+
+  // Low rock / rubble blobs
+  const rockMat = new THREE.MeshStandardMaterial({
+    color: 0x5a5848,
+    roughness: 0.95,
+    metalness: 0.05,
+    flatShading: true,
+  });
+  const rockCount = Math.min(60, Math.floor(size * 0.22));
+  for (let i = 0; i < rockCount; i++) {
+    const s = 0.25 + Math.random() * 0.55;
+    const mesh = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(s, 0),
+      rockMat,
+    );
+    mesh.position.set(
+      3 + Math.random() * (size - 6),
+      s * 0.35,
+      3 + Math.random() * (size - 6),
+    );
+    mesh.rotation.set(Math.random(), Math.random(), Math.random());
+    group.add(mesh);
+  }
+
+  // Sparse dry-grass tufts (thin boxes)
+  const grassMat = new THREE.MeshStandardMaterial({
+    color: 0x6a8038,
+    roughness: 1,
+    flatShading: true,
+  });
+  const tuftCount = Math.min(120, Math.floor(size * 0.45));
+  for (let i = 0; i < tuftCount; i++) {
+    const h = 0.25 + Math.random() * 0.45;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, h, 0.08), grassMat);
+    mesh.position.set(
+      2 + Math.random() * (size - 4),
+      h * 0.5,
+      2 + Math.random() * (size - 4),
+    );
+    group.add(mesh);
+  }
+
+  scene.add(group);
+}
+
+function initThree(size, terrainTexture) {
   mapSize = size;
   const canvas = $("#viewport");
+  ghostMesh = null;
 
   if (renderer) {
     // Re-entering a match: dispose previous GL context lightly by clearing scene refs.
@@ -349,9 +485,11 @@ function initThree(size) {
 
   const geo = new THREE.PlaneGeometry(size, size, 1, 1);
   const mat = new THREE.MeshStandardMaterial({
-    color: 0x3d5230,
-    wireframe: false,
-    flatShading: true,
+    map: terrainTexture || null,
+    color: terrainTexture ? 0xb8c898 : 0x3d5230,
+    roughness: 0.95,
+    metalness: 0.02,
+    flatShading: false,
   });
   ground = new THREE.Mesh(geo, mat);
   ground.rotation.x = -Math.PI / 2;
@@ -359,9 +497,32 @@ function initThree(size) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const grid = new THREE.GridHelper(size, Math.min(size, 128), 0x5a6a40, 0x2a3a20);
-  grid.position.set(cx, 0.02, cz);
+  // Subtle tile hint — not a loud debug grid.
+  const grid = new THREE.GridHelper(
+    size,
+    Math.min(size, 96),
+    0x000000,
+    0x2a3820,
+  );
+  grid.material.opacity = 0.22;
+  grid.material.transparent = true;
+  grid.position.set(cx, 0.025, cz);
   scene.add(grid);
+
+  scatterGroundDecor(scene, size, cx, cz);
+
+  // Dark underlay past the playable map edge.
+  const underlay = new THREE.Mesh(
+    new THREE.PlaneGeometry(size + 48, size + 48),
+    new THREE.MeshStandardMaterial({
+      color: 0x10160c,
+      roughness: 1,
+      metalness: 0,
+    }),
+  );
+  underlay.rotation.x = -Math.PI / 2;
+  underlay.position.set(cx, -0.04, cz);
+  scene.add(underlay);
 
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
@@ -382,10 +543,118 @@ function onEdgePointerMove(event) {
   edgeMouse.w = rect.width;
   edgeMouse.h = rect.height;
   edgeMouse.inside = true;
+  updateGhostPreview(event);
 }
 
 function onEdgePointerLeave() {
   edgeMouse.inside = false;
+  if (ghostMesh) ghostMesh.visible = false;
+}
+
+function myColors() {
+  for (const entity of state.entities.values()) {
+    if (entity.owner === state.match?.you && Array.isArray(entity.colors)) {
+      return entityColors(entity);
+    }
+  }
+  return [0x88aa66, 0xf5f5f5, 0x1565c0];
+}
+
+function clearGhost() {
+  if (!ghostMesh || !scene) return;
+  scene.remove(ghostMesh);
+  ghostMesh.traverse((obj) => {
+    // Shared STL geometries are kept cached — only dispose ghost-only geometry.
+    if (obj.geometry && !Object.values(buildingGeometries).includes(obj.geometry)) {
+      obj.geometry.dispose?.();
+    }
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose?.());
+      else obj.material.dispose?.();
+    }
+  });
+  ghostMesh = null;
+}
+
+function ensureGhost(kind) {
+  if (!scene) return null;
+  if (ghostMesh?.userData.kind === kind) return ghostMesh;
+  clearGhost();
+
+  const colors = myColors();
+  const mat = new THREE.MeshStandardMaterial({
+    color: colors[0],
+    transparent: true,
+    opacity: 0.38,
+    depthWrite: false,
+    metalness: 0.05,
+    roughness: 0.8,
+  });
+
+  let mesh;
+  const geo = geometryForKind(kind);
+  if (geo) {
+    mesh = new THREE.Mesh(geo, mat);
+  } else {
+    const h = kind === "hq" ? 2.4 : 1.4;
+    const w = kind === "hq" ? 2.2 : 1.2;
+    mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), mat);
+  }
+
+  // Soft tile footprint so placement cell is obvious.
+  const pad = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.95, 0.95),
+    new THREE.MeshBasicMaterial({
+      color: colors[1],
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    }),
+  );
+  pad.rotation.x = -Math.PI / 2;
+  pad.position.y = 0.04;
+  mesh.add(pad);
+
+  mesh.userData.kind = kind;
+  mesh.userData.isGhost = true;
+  mesh.visible = false;
+  scene.add(mesh);
+  ghostMesh = mesh;
+  return mesh;
+}
+
+function updateGhostPreview(event) {
+  if (!state.selectedBuild || !ground || !camera) {
+    if (ghostMesh) ghostMesh.visible = false;
+    return;
+  }
+  const ghost = ensureGhost(state.selectedBuild);
+  if (!ghost) return;
+  const point = worldFromEvent(event);
+  if (!point) {
+    ghost.visible = false;
+    return;
+  }
+  const x = Math.floor(point.x) + 0.5;
+  const z = Math.floor(point.z) + 0.5;
+  ghost.position.set(x, 0, z);
+  ghost.visible = true;
+}
+
+function setBuildPlacement(kind) {
+  state.selectedBuild = kind;
+  document.querySelectorAll(".build-item").forEach((el) => {
+    el.classList.toggle("on", el.dataset.kind === kind);
+  });
+  if (kind) {
+    ensureGhost(kind);
+    $("#build-detail").textContent =
+      `Placing ${kind} — drag to preview, click to build (Esc cancel)`;
+  } else {
+    clearGhost();
+    $("#build-detail").textContent = "Select a building to place";
+    document.querySelectorAll(".build-item").forEach((el) => el.classList.remove("on"));
+  }
 }
 
 function applyEdgePan() {
@@ -477,6 +746,7 @@ function onPointerDown(event) {
       x,
       y,
     });
+    // Stay in placement mode; ghost keeps following for the next build.
     return;
   }
 
@@ -596,11 +866,9 @@ function upsertMesh(entity) {
       roughness: 0.72,
     });
 
-    if (entity.building && buildingGeometry) {
-      mesh = new THREE.Mesh(buildingGeometry, mat);
-      // Temporary: every building uses command-center.stl until per-kind STLs exist.
-      const scale = entity.kind === "hq" ? 1.15 : 0.85;
-      mesh.scale.setScalar(scale);
+    const geo = entity.building ? geometryForKind(entity.kind) : null;
+    if (geo) {
+      mesh = new THREE.Mesh(geo, mat);
     } else if (entity.building) {
       const h = entity.kind === "hq" ? 2.4 : 1.4;
       const w = entity.kind === "hq" ? 2.2 : 1.2;
@@ -725,11 +993,17 @@ $("#open-lobbies").addEventListener("click", (event) => {
 $("#build-list").addEventListener("click", (event) => {
   const btn = event.target.closest("[data-kind]");
   if (!btn) return;
-  state.selectedBuild = btn.dataset.kind;
-  document.querySelectorAll(".build-item").forEach((el) => {
-    el.classList.toggle("on", el === btn);
-  });
-  $("#build-detail").textContent = `Placing ${btn.dataset.kind} — click any empty tile`;
+  if (state.selectedBuild === btn.dataset.kind) {
+    setBuildPlacement(null);
+    return;
+  }
+  setBuildPlacement(btn.dataset.kind);
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.selectedBuild) {
+    setBuildPlacement(null);
+  }
 });
 
 $("#unit-list").addEventListener("click", (event) => {

@@ -18,6 +18,8 @@ pub fn router() -> Router<SharedState> {
             "/assets/models/command-center.stl",
             get(command_center_stl),
         )
+        .route("/assets/models/barracks.stl", get(barracks_stl))
+        .route("/assets/terrain.jpg", get(terrain_jpg))
 }
 
 async fn stylesheet() -> impl IntoResponse {
@@ -41,6 +43,26 @@ async fn command_center_stl() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_bytes!("../web/usa/command-center.stl").as_slice(),
+    )
+}
+
+async fn barracks_stl() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "model/stl"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/barracks.stl").as_slice(),
+    )
+}
+
+async fn terrain_jpg() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/village-terrain.jpg").as_slice(),
     )
 }
 
