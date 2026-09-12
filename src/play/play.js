@@ -192,7 +192,7 @@ async function setupMatchScene(snapshot) {
   await ensureBuildingModel();
   initThree(snapshot.map_size);
   rebuildMeshes();
-  toast("Match live — WASD pan · scroll zoom · fixed Generals angle");
+  toast("Match live — move mouse to screen edges to pan");
 }
 
 function updateResources(res) {
@@ -242,19 +242,20 @@ function applyDelta(msg) {
     upsertMesh(entity);
   }
   $("#match-caption").textContent =
-    `Tick ${msg.tick} · ${state.entities.size} entities · WASD pan · scroll zoom`;
+    `Tick ${msg.tick} · ${state.entities.size} entities · edge-scroll / WASD`;
 }
 
 /* ---------- Three.js ---------- */
 
 let renderer, scene, camera, controls, ground, raycaster, pointer;
-let mapSize = 96;
+let mapSize = 192;
 let buildingGeometry = null;
 let buildingModelPromise = null;
-const panKeys = new Set();
+const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 
-/** Generals-style locked pitch (radians from top-down). */
+/** Generals-style locked pitch (radians from vertical-ish). */
 const CAMERA_PITCH = Math.PI / 3.35;
+const EDGE_SCROLL_PX = 42;
 
 async function ensureBuildingModel() {
   if (buildingGeometry) return buildingGeometry;
@@ -263,6 +264,8 @@ async function ensureBuildingModel() {
   buildingModelPromise = (async () => {
     const loader = new STLLoader();
     const geo = await loader.loadAsync("/assets/models/command-center.stl");
+    // Most CAD STLs are Z-up; Three.js is Y-up — stand the building upright.
+    geo.rotateX(-Math.PI / 2);
     geo.computeVertexNormals();
     geo.center();
     geo.computeBoundingBox();
@@ -270,11 +273,11 @@ async function ensureBuildingModel() {
     const size = new THREE.Vector3();
     box.getSize(size);
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const target = 2.4;
+    const target = 2.6;
     const s = target / maxDim;
     geo.scale(s, s, s);
     geo.computeBoundingBox();
-    // Sit on the ground plane (Y-up).
+    // Feet on the ground (Y = 0).
     geo.translate(0, -geo.boundingBox.min.y, 0);
     buildingGeometry = geo;
     return geo;
@@ -305,18 +308,18 @@ function initThree(size) {
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a2a14);
-  scene.fog = new THREE.Fog(0x1a2a14, 55, 140);
+  scene.fog = new THREE.Fog(0x1a2a14, Math.max(60, size * 0.55), Math.max(160, size * 1.4));
 
   camera = new THREE.PerspectiveCamera(
     42,
     canvas.clientWidth / canvas.clientHeight,
     0.1,
-    500,
+    Math.max(800, size * 4),
   );
 
   const cx = size / 2;
   const cz = size / 2;
-  const dist = 38;
+  const dist = Math.min(48, size * 0.28);
   camera.position.set(
     cx,
     Math.sin(CAMERA_PITCH) * dist,
@@ -329,11 +332,11 @@ function initThree(size) {
   controls.enableRotate = false;
   controls.enablePan = false;
   controls.enableZoom = true;
-  controls.minDistance = 14;
-  controls.maxDistance = 70;
+  controls.minDistance = 12;
+  controls.maxDistance = Math.max(90, size * 0.85);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.zoomSpeed = 0.9;
+  controls.zoomSpeed = 1.05;
   controls.minPolarAngle = CAMERA_PITCH;
   controls.maxPolarAngle = CAMERA_PITCH;
   controls.update();
@@ -356,7 +359,7 @@ function initThree(size) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const grid = new THREE.GridHelper(size, size, 0x5a6a40, 0x2a3a20);
+  const grid = new THREE.GridHelper(size, Math.min(size, 128), 0x5a6a40, 0x2a3a20);
   grid.position.set(cx, 0.02, cz);
   scene.add(grid);
 
@@ -366,12 +369,28 @@ function initThree(size) {
 
   window.addEventListener("resize", onResize);
   canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointermove", onEdgePointerMove);
+  canvas.addEventListener("pointerleave", onEdgePointerLeave);
   if (!initThree._keysBound) {
     window.addEventListener("keydown", onPanKeyDown);
     window.addEventListener("keyup", onPanKeyUp);
     initThree._keysBound = true;
   }
   animate();
+}
+
+function onEdgePointerMove(event) {
+  const canvas = $("#viewport");
+  const rect = canvas.getBoundingClientRect();
+  edgeMouse.x = event.clientX - rect.left;
+  edgeMouse.y = event.clientY - rect.top;
+  edgeMouse.w = rect.width;
+  edgeMouse.h = rect.height;
+  edgeMouse.inside = true;
+}
+
+function onEdgePointerLeave() {
+  edgeMouse.inside = false;
 }
 
 function onPanKeyDown(event) {
@@ -387,21 +406,39 @@ function onPanKeyUp(event) {
 }
 
 function applyKeyboardPan() {
-  if (!controls || !camera || panKeys.size === 0) return;
+  if (!controls || !camera) return;
 
-  const speed = 0.35 * (controls.getDistance() / 30);
   let dx = 0;
   let dz = 0;
-  if (panKeys.has("w") || panKeys.has("arrowup")) dz -= speed;
-  if (panKeys.has("s") || panKeys.has("arrowdown")) dz += speed;
-  if (panKeys.has("a") || panKeys.has("arrowleft")) dx -= speed;
-  if (panKeys.has("d") || panKeys.has("arrowright")) dx += speed;
+  const base = 0.42 * (controls.getDistance() / 28);
+
+  if (panKeys.has("w") || panKeys.has("arrowup")) dz -= base;
+  if (panKeys.has("s") || panKeys.has("arrowdown")) dz += base;
+  if (panKeys.has("a") || panKeys.has("arrowleft")) dx -= base;
+  if (panKeys.has("d") || panKeys.has("arrowright")) dx += base;
+
+  // Generals edge scroll: mouse near screen border pans the map.
+  if (edgeMouse.inside) {
+    const e = EDGE_SCROLL_PX;
+    const edgeSpeed = 0.7 * (controls.getDistance() / 26);
+    if (edgeMouse.x < e) {
+      dx -= edgeSpeed * (1 - edgeMouse.x / e);
+    } else if (edgeMouse.x > edgeMouse.w - e) {
+      dx += edgeSpeed * (1 - (edgeMouse.w - edgeMouse.x) / e);
+    }
+    if (edgeMouse.y < e) {
+      dz -= edgeSpeed * (1 - edgeMouse.y / e);
+    } else if (edgeMouse.y > edgeMouse.h - e) {
+      dz += edgeSpeed * (1 - (edgeMouse.h - edgeMouse.y) / e);
+    }
+  }
+
   if (!dx && !dz) return;
 
-  // Pan on XZ while keeping the locked camera offset.
   const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
-  controls.target.x = Math.max(2, Math.min(mapSize - 2, controls.target.x + dx));
-  controls.target.z = Math.max(2, Math.min(mapSize - 2, controls.target.z + dz));
+  const margin = 4;
+  controls.target.x = Math.max(margin, Math.min(mapSize - margin, controls.target.x + dx));
+  controls.target.z = Math.max(margin, Math.min(mapSize - margin, controls.target.z + dz));
   camera.position.copy(controls.target).add(offset);
 }
 
@@ -582,7 +619,7 @@ $("#btn-create").addEventListener("click", () => {
   send({
     t: "create_lobby",
     max_players: Number($("#max-players").value) || 16,
-    map_size: Number($("#map-size").value) || 96,
+    map_size: Number($("#map-size").value) || 192,
     ffa: $("#ffa").checked,
   });
   toast("Starting match…");

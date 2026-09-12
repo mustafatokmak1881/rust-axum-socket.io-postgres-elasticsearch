@@ -264,7 +264,7 @@ impl MatchSim {
         ffa: bool,
         roster: Vec<(Uuid, String, String, u8, Option<String>)>,
     ) -> Self {
-        let map_size = map_size.clamp(48, 128);
+        let map_size = map_size.clamp(64, 256);
         let mut sim = Self {
             id,
             map_size,

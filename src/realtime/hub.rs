@@ -175,7 +175,7 @@ impl MatchHub {
         }
 
         let max_players = max_players.clamp(2, MAX_PLAYERS);
-        let map_size = map_size.clamp(48, 128);
+        let map_size = map_size.clamp(64, 256);
         let user = users::load_user(&self.inner.redis, user_id)
             .await
             .map_err(|e| e.to_string())?
