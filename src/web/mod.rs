@@ -77,19 +77,42 @@ fn building_svg(kind: &str) -> Option<&'static str> {
     })
 }
 
-fn building_png(kind: &str) -> Option<&'static [u8]> {
+/// USA bina görselleri (`src/web/usa/`).
+fn usa_building_png(kind: &str) -> Option<&'static [u8]> {
     Some(match kind {
-        "headquarters" => include_bytes!("command-center.png").as_slice(),
-        "barracks" => include_bytes!("barracks.png").as_slice(),
-        "clay" => include_bytes!("kil-ocagi.png").as_slice(),
-        "timber" => include_bytes!("oduncu.png").as_slice(),
-        "iron" => include_bytes!("demir-madeni.png").as_slice(),
-        "rally_point" => include_bytes!("ictima-meydani.png").as_slice(),
-        "farm" => include_bytes!("ciftlik.png").as_slice(),
-        "hiding_place" => include_bytes!("gizli-depo.png").as_slice(),
-        "warehouse" => include_bytes!("ambar.png").as_slice(),
+        "headquarters" => include_bytes!("usa/command-center.png").as_slice(),
+        "barracks" => include_bytes!("usa/barracks.png").as_slice(),
+        "academy" => include_bytes!("usa/strategy-center.png").as_slice(),
+        "workshop" => include_bytes!("usa/war-factory.png").as_slice(),
+        "timber" => include_bytes!("usa/supply-pile.png").as_slice(),
+        "clay" => include_bytes!("usa/fuel-depot.png").as_slice(),
+        "iron" => include_bytes!("usa/munitions-plant.png").as_slice(),
+        "rally_point" => include_bytes!("usa/staging-area.png").as_slice(),
+        "farm" => include_bytes!("usa/cold-fusion-reactor.png").as_slice(),
+        "warehouse" => include_bytes!("usa/supply-center.png").as_slice(),
+        "hiding_place" => include_bytes!("usa/detention-camp.png").as_slice(),
         _ => return None,
     })
+}
+
+/// China görselleri (`src/web/china/`) — yoksa None → USA fallback.
+fn china_building_png(_kind: &str) -> Option<&'static [u8]> {
+    None
+}
+
+/// GLA görselleri (`src/web/gla/`) — yoksa None → USA fallback.
+fn gla_building_png(_kind: &str) -> Option<&'static [u8]> {
+    None
+}
+
+fn building_png(faction: &str, kind: &str) -> Option<&'static [u8]> {
+    let faction_art = match faction {
+        "china" => china_building_png(kind),
+        "gla" => gla_building_png(kind),
+        _ => usa_building_png(kind),
+    };
+
+    faction_art.or_else(|| usa_building_png(kind))
 }
 
 fn svg_response(svg: &'static str) -> Response {
@@ -105,9 +128,15 @@ fn png_response(png: &'static [u8]) -> Response {
 }
 
 pub async fn building_kind_art(
-    axum::extract::Path(kind): axum::extract::Path<String>,
+    axum::extract::Path((faction, kind)): axum::extract::Path<(String, String)>,
 ) -> Result<Response, crate::error::AppError> {
-    if let Some(png) = building_png(&kind) {
+    let faction = faction.to_ascii_lowercase();
+
+    if !matches!(faction.as_str(), "usa" | "china" | "gla") {
+        return Err(crate::error::AppError::NotFound);
+    }
+
+    if let Some(png) = building_png(&faction, &kind) {
         return Ok(png_response(png));
     }
 

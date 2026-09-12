@@ -976,568 +976,8 @@ input {
   }
 }
 
-/* ==========================================
-   KOALİSYON — klasik parşömen oyun teması
-   ========================================== */
 
-:root {
-  --classic-paper: #f2e3bc;
-  --classic-border: #9c7844;
-  --classic-ink: #38250f;
-  --classic-link: #653506;
-}
-
-body {
-  margin: 0;
-  color: var(--classic-ink);
-  font: 13px Arial, Helvetica, sans-serif;
-
-  background-color: #e4d4af;
-  background-image:
-    radial-gradient(ellipse at 10% 16%, #85623735, transparent 36%),
-    radial-gradient(ellipse at 88% 65%, #7d603129, transparent 38%),
-    repeating-linear-gradient(17deg,
-      #ffffff06 0,
-      #ffffff06 2px,
-      #79542006 3px,
-      transparent 5px),
-    linear-gradient(110deg, #dcc9a4, #f1e5c7 47%, #d9c59e);
-}
-
-[hidden] {
-  display: none !important;
-}
-
-.top-strip {
-  height: 31px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 12px;
-
-  color: #f4dfab;
-  background:
-    repeating-linear-gradient(45deg,
-      #ffffff04 0 2px,
-      transparent 2px 5px),
-    linear-gradient(#8a291c, #59140d);
-
-  border-top: 2px solid #c2a26a;
-  border-bottom: 2px solid #4f321c;
-  box-shadow: 0 2px 0 #c5aa70;
-  font-size: 10px;
-  letter-spacing: 2px;
-}
-
-.shell.game-shell {
-  width: min(1060px, calc(100% - 32px));
-  max-width: 1060px;
-  margin: 14px auto 35px;
-  padding: 9px;
-
-  background: #e6d5a9;
-  border: 3px double #775736;
-  border-radius: 0;
-
-  box-shadow:
-    0 0 0 2px #c4a675,
-    0 0 0 4px #70583d,
-    0 5px 15px #33271655,
-    inset 0 0 22px #a5884940;
-}
-
-.menu {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 5px;
-
-  padding: 8px;
-  margin: 0 0 8px;
-
-  background: linear-gradient(#85271a, #52160f);
-  border: 1px solid #3f2818;
-  border-radius: 0;
-}
-
-.menu a,
-.menu button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-
-  min-height: 30px;
-  padding: 5px 15px;
-
-  color: #fff0ce;
-  background: linear-gradient(#753e26, #472416);
-  border: 2px ridge #b99b60;
-  border-radius: 2px;
-
-  font: bold 12px Arial, sans-serif;
-  text-decoration: none;
-  text-shadow: 0 1px #271408;
-  cursor: pointer;
-}
-
-.menu a:hover,
-.menu a.selected,
-.menu button:hover {
-  color: #fff8df;
-  background: linear-gradient(#9a6135, #673419);
-  border-color: #dfc78f;
-}
-
-.hero.compact {
-  position: relative;
-  height: 86px;
-  min-height: 0;
-  margin: 0 0 9px;
-  overflow: hidden;
-
-  background:
-    radial-gradient(ellipse at 80% 100%, #53613a 0 18%, transparent 19%),
-    radial-gradient(ellipse at 22% 130%, #72804a 0 36%, transparent 37%),
-    linear-gradient(#c7c7a0, #a3ad79 65%, #778448);
-
-  border: 1px solid #927340;
-  border-radius: 0;
-}
-
-.hero-hills {
-  opacity: .35;
-}
-
-.hero-title {
-  position: relative;
-  z-index: 1;
-  padding: 12px 20px;
-  text-align: left;
-}
-
-.hero-title h1 {
-  margin: 0;
-  color: #fff1c8;
-  font: bold 33px var(--font-display);
-  letter-spacing: 2px;
-  text-shadow: 1px 2px 2px #343c22;
-}
-
-.hero-title p {
-  margin: 3px 0 0;
-  color: #fff2cf;
-  font: italic 12px var(--font-display);
-  text-shadow: 0 1px #414c2d;
-}
-
-.game-shell main {
-  max-width: none;
-  margin: 0;
-  padding: 0;
-}
-
-.village-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0;
-  min-height: 39px;
-  margin-bottom: 9px;
-  padding: 0;
-
-  background: linear-gradient(#f8edcb, #e8d29b);
-  border: 1px solid #aa884e;
-  border-radius: 0;
-}
-
-.village-bar>div:first-child {
-  flex: 1;
-  padding: 7px 12px;
-}
-
-.village-bar>div:first-child>small {
-  display: none;
-}
-
-#village-name {
-  color: #65400e;
-  font: bold 15px var(--font-display);
-}
-
-.village-bar .resource {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 12px;
-  margin: 0;
-
-  background: #e4ca8b55;
-  border: 0;
-  border-left: 1px solid #bea16b;
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.village-bar .resource small {
-  display: block;
-  color: #806638;
-  font-size: 8px;
-}
-
-.village-bar .resource strong {
-  display: block;
-  color: #39260f;
-  font-size: 13px;
-  margin: 0;
-}
-
-.incoming-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin: 4px 8px 4px auto;
-  padding: 5px 11px;
-  border: 1px solid #8a1f14;
-  background: linear-gradient(#c0392b, #7a1610);
-  color: #fff4d8;
-  text-decoration: none;
-  font: bold 12px var(--font-display);
-  box-shadow: inset 0 1px 0 #e07060;
-  animation: incoming-pulse 1.6s ease-in-out infinite;
-}
-
-.incoming-badge[hidden] {
-  display: none !important;
-}
-
-.incoming-badge-icon {
-  font-size: 14px;
-  line-height: 1;
-}
-
-#incoming-badge-count {
-  min-width: 1.1em;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-.incoming-badge-label {
-  font: 10px system-ui, sans-serif;
-  letter-spacing: 0.3px;
-}
-
-@keyframes incoming-pulse {
-  0%,
-  100% { filter: brightness(1); }
-  50% { filter: brightness(1.12); }
-}
-
-.incoming-panel {
-  margin-top: 14px;
-}
-
-.incoming-panel .section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.incoming-panel .section-title small {
-  margin-left: auto;
-  color: #8a1f14;
-  font: bold 11px Arial, sans-serif;
-}
-
-.army-section-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 2px;
-  font-size: 11px;
-  line-height: 1;
-}
-
-.army-section-icon.incoming {
-  background: #8a1f14;
-  color: #ffe7c2;
-}
-
-.army-incoming-list {
-  display: grid;
-  gap: 8px;
-}
-
-.army-order {
-  padding: 10px;
-  background: #ffe8d6;
-  border: 1px solid #c9896a;
-  border-left: 4px solid #a3261b;
-}
-
-.army-order > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 13px;
-}
-
-.army-order p {
-  margin: 7px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-  color: #5c3d16;
-}
-
-.army-order .army-countdown {
-  font-weight: bold;
-  color: #6d140e;
-  font-variant-numeric: tabular-nums;
-}
-
-.army-empty {
-  margin: 0;
-  font-size: 12px;
-  color: #766039;
-}
-
-.game-layout {
-  display: grid;
-  grid-template-columns: 165px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-}
-
-.side-panel {
-  padding: 0;
-  background: #f2e4bf;
-  border: 1px solid #a3844c;
-  border-radius: 0;
-}
-
-.side-panel h3 {
-  margin: 0;
-  padding: 5px 8px;
-  background: linear-gradient(#e1c88b, #c4a460);
-  border-bottom: 1px solid #9d7d42;
-  color: #49310f;
-  font: bold 13px var(--font-display);
-}
-
-.side-panel>a {
-  display: block;
-  padding: 9px 8px;
-  color: var(--classic-link);
-  border-bottom: 1px solid #dfcca2;
-  font-size: 11px;
-  text-decoration: none;
-}
-
-.side-panel>a:hover {
-  background: #e8d39f;
-}
-
-.side-note {
-  margin: 12px 8px;
-  padding: 9px;
-  background: #ead8ad;
-  border: 1px solid #c3a673;
-  color: #816b44;
-  font-size: 10px;
-  line-height: 1.6;
-}
-
-.screens {
-  min-width: 0;
-}
-
-.panel {
-  margin: 0 0 10px;
-  overflow: hidden;
-  background: var(--classic-paper);
-  border: 1px solid #a8884d;
-  border-radius: 0;
-  box-shadow: inset 0 0 12px #fff4ce55;
-}
-
-.panel>h2 {
-  margin: 0;
-  padding: 6px 9px;
-
-  color: #39270e;
-  background: linear-gradient(#e6d29d, #caaa65);
-  border-bottom: 1px solid #a4864d;
-
-  font: bold 15px var(--font-display);
-  text-align: left;
-}
-
-.panel-body {
-  padding: 12px;
-}
-
-.panel-body p {
-  line-height: 1.5;
-}
-
-.section-title {
-  padding: 5px 8px;
-  margin: 15px 0 8px;
-  color: #49300e;
-  background: linear-gradient(#e5d09a, #d0b275);
-  border-bottom: 1px solid #af9158;
-  font: bold 13px Arial, sans-serif;
-}
-
-.table-scroll {
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-thead th {
-  padding: 5px 6px;
-  background: linear-gradient(#e2c98c, #c5a460);
-  border: 1px solid #ead7a8;
-  color: #39270e;
-  text-align: left;
-  white-space: nowrap;
-}
-
-tbody td {
-  padding: 5px 6px;
-  background: #f1e2bb;
-  border: 1px solid #e2cda0;
-  vertical-align: middle;
-}
-
-tbody tr:nth-child(even) td {
-  background: #f7ebcd;
-}
-
-tbody tr:hover td {
-  background: #ecdaa9;
-}
-
-.building-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 160px;
-}
-
-.building-cell strong {
-  display: block;
-  color: #643b0b;
-  font-size: 12px;
-}
-
-.building-cell small {
-  display: block;
-  margin-top: 3px;
-  color: #796646;
-  font-size: 10px;
-}
-
-.building-icon {
-  display: block;
-  flex: 0 0 48px;
-  width: 48px;
-  height: 43px;
-  padding: 0;
-  border: 0;
-  background: none;
-}
-
-.building-art {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: 48px;
-  max-height: 43px;
-  object-fit: contain;
-  object-position: center bottom;
-}
-
-.button {
-  display: inline-block;
-  padding: 6px 11px;
-  color: #fff5db;
-  background: linear-gradient(#98713e, #674520);
-  border: 1px solid #4b3014;
-  border-radius: 3px;
-  box-shadow: inset 0 1px #dac394;
-  text-shadow: 0 1px #513113;
-  font: bold 11px Arial, sans-serif;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.button:hover:not(:disabled) {
-  background: linear-gradient(#ae8650, #78512a);
-}
-
-.button:disabled {
-  background: #e6d6b0;
-  border-color: #cbb78e;
-  color: #988563;
-  box-shadow: none;
-  text-shadow: none;
-  cursor: not-allowed;
-}
-
-.queue-box,
-.info-box,
-.notice {
-  padding: 10px;
-  border: 1px solid #bd9d62;
-  border-radius: 0;
-  background: #f7eccb;
-}
-
-.notice {
-  margin-bottom: 9px;
-}
-
-.notice.error {
-  color: #8d271c;
-  border-color: #b47457;
-  background: #f2dbbf;
-}
-
-.active-build {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: #523910;
-}
-
-.active-build b {
-  font-variant-numeric: tabular-nums;
-}
-
-.muted,
-.info-box {
-  color: #86714b;
-}
-
-.completed {
-  color: #496529;
-  font-weight: bold;
-}
-
-input {
-  padding: 7px 9px;
-  background: #fff7e1;
-  border: 1px solid #ae8c54;
-  border-radius: 2px;
-  color: #4e3618;
-}
+/* (klasik parşömen teması kaldırıldı — Generals Zero Hour) */
 
 /* Genel bakış: köy arazisi */
 
@@ -2169,4 +1609,171 @@ input {
 .theme-generals .onboarding-symbol {
   color: var(--warn) !important;
   text-shadow: 0 0 20px #e8c54766 !important;
+}
+
+
+/* === ZERO HOUR PAGE CHROME (final) === */
+html {
+  background: #0a0e08 !important;
+}
+
+html body,
+body.theme-generals,
+body {
+  margin: 0 !important;
+  min-height: 100vh !important;
+  color: #d7e0c8 !important;
+  font: 600 14px/1.45 "Rajdhani", "Segoe UI", sans-serif !important;
+  background-color: #0e120c !important;
+  background-image:
+    radial-gradient(ellipse at 18% 0%, #2a3a2266, transparent 42%),
+    radial-gradient(ellipse at 88% 12%, #3a281866, transparent 38%),
+    repeating-linear-gradient(0deg, transparent 0 3px, #00000022 3px 4px),
+    linear-gradient(180deg, #161e14 0%, #0e120c 45%, #090c08 100%) !important;
+}
+
+body .shell,
+body .shell.game-shell,
+.theme-generals .shell,
+.theme-generals .shell.game-shell {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+body .top-strip {
+  background: linear-gradient(90deg, #1a2814, #2a3a20 50%, #1a2814) !important;
+  border: 0 !important;
+  border-bottom: 2px solid #6a8a3a !important;
+  box-shadow: 0 2px 12px #000a !important;
+  color: #e8c547 !important;
+  font: 700 11px/1 "Oswald", Impact, sans-serif !important;
+  letter-spacing: 0.28em !important;
+}
+
+body .menu {
+  background: linear-gradient(180deg, #2c3828, #1c261a) !important;
+  border: 1px solid #4a5a40 !important;
+  box-shadow: 0 4px 18px #0008 !important;
+  gap: 0 !important;
+}
+
+body .menu a,
+body .menu button {
+  background: transparent !important;
+  border: 0 !important;
+  border-right: 1px solid #3a4a3488 !important;
+  border-radius: 0 !important;
+  color: #c5d4b0 !important;
+  font: 700 12px/1 "Oswald", Impact, sans-serif !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  text-shadow: none !important;
+}
+
+body .menu a.selected,
+body .menu a:hover,
+body .menu button:hover {
+  color: #10160e !important;
+  background: linear-gradient(180deg, #9fc24a, #6a8a3a) !important;
+}
+
+body .hero,
+body .hero.compact {
+  background: linear-gradient(180deg, #1e2a1c, #121810) !important;
+  border: 1px solid #4a5a40 !important;
+  box-shadow: inset 0 0 50px #000a !important;
+}
+
+body .hero-hills {
+  background:
+    linear-gradient(115deg, transparent 40%, #3a4a3044 41% 43%, transparent 44%),
+    radial-gradient(ellipse at 70% 80%, #5a402866, transparent 50%),
+    linear-gradient(180deg, #243024, #101810) !important;
+  clip-path: none !important;
+  inset: 0 !important;
+  opacity: .7 !important;
+}
+
+body .panel {
+  background: linear-gradient(180deg, #243022, #1a2218) !important;
+  border: 1px solid #455540 !important;
+  box-shadow: inset 0 1px 0 #5a6a5040, 0 8px 24px #0007 !important;
+}
+
+body .panel > h2 {
+  background: linear-gradient(90deg, #2a3a20, #1e281c) !important;
+  border-bottom: 1px solid #4a5a40 !important;
+  color: #e8c547 !important;
+  font: 700 14px/1 "Oswald", Impact, sans-serif !important;
+  letter-spacing: 0.16em !important;
+  text-transform: uppercase !important;
+  text-shadow: none !important;
+}
+
+body .button {
+  background: linear-gradient(180deg, #3a4a28, #243018) !important;
+  border: 1px solid #9fc24a !important;
+  color: #e8c547 !important;
+  box-shadow: inset 0 1px 0 #9fc24a44, 0 2px 8px #0006 !important;
+  font: 700 13px/1 "Oswald", Impact, sans-serif !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  text-shadow: none !important;
+}
+
+body .button:not(:disabled):hover {
+  background: linear-gradient(180deg, #4a5a30, #2a3a20) !important;
+  color: #fff !important;
+}
+
+body .features > div,
+body .faction-card {
+  background: linear-gradient(180deg, #2a3426, #1a2218) !important;
+  border: 1px solid #455540 !important;
+  color: #d7e0c8 !important;
+}
+
+body .faction-card[aria-pressed="true"] {
+  border-color: #9fc24a !important;
+  box-shadow: 0 0 16px #9fc24a44 !important;
+}
+
+body footer {
+  color: #8fa07a !important;
+  border-top: 1px solid #455540 !important;
+  background: transparent !important;
+}
+
+body .side-panel {
+  background: #1a2218 !important;
+  border: 1px solid #455540 !important;
+}
+
+body .village-bar {
+  background: linear-gradient(180deg, #2a3426, #1a2218) !important;
+  border: 1px solid #4a5a40 !important;
+}
+
+body table th {
+  background: #1a2814 !important;
+  color: #e8c547 !important;
+}
+
+body table td {
+  background: #1c241a !important;
+  color: #d7e0c8 !important;
+  border-color: #354034 !important;
+}
+
+body input {
+  background: #121810 !important;
+  border: 1px solid #455540 !important;
+  color: #d7e0c8 !important;
+}
+
+body .muted,
+body .info-box {
+  color: #8fa07a !important;
 }

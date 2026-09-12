@@ -6,107 +6,109 @@ const definitions = {
   headquarters: {
     name: "Komuta Merkezi",
     description: "Ana üssün komuta binası; yalnızca ilk üste kurulur",
-    icon: `/assets/buildings/headquarters`,
     map: { left: "58%", top: "32%" },
   },
   barracks: {
     name: "Kışla",
     description: "Piyade birliklerinin eğitildiği yer",
-    icon: `/assets/buildings/barracks`,
     map: { left: "78%", top: "42%" },
     href: "#army",
   },
   stable: {
     name: "Havaalanı",
     description: "Hava birliklerinin üretildiği yer",
-    icon: `/assets/buildings/stable`,
     map: { left: "86%", top: "58%" },
   },
   workshop: {
     name: "Savaş Fabrikası",
     description: "Tank ve zırhlı araç üretimi",
-    icon: `/assets/buildings/workshop`,
     map: { left: "72%", top: "62%" },
   },
   academy: {
     name: "Strateji Merkezi",
     description: "Doktrin güçleri ve ileri teknolojiler",
-    icon: `/assets/buildings/academy`,
     map: { left: "48%", top: "22%" },
   },
   smithy: {
     name: "Cephanelik",
     description: "Silah ve birim geliştirme",
-    icon: `/assets/buildings/smithy`,
     map: { left: "38%", top: "40%" },
   },
   rally_point: {
     name: "Seferberlik Sahası",
     description: "Orduların toplandığı çıkış noktası",
-    icon: `/assets/buildings/rally_point`,
     map: { left: "50%", top: "55%" },
     href: "#army",
   },
   statue: {
     name: "Radar İstasyonu",
     description: "Keşif ve erken uyarı",
-    icon: `/assets/buildings/statue`,
     map: { left: "62%", top: "48%" },
   },
   market: {
     name: "Tedarik Merkezi",
     description: "Lojistik ve hammadde transferi",
-    icon: `/assets/buildings/market`,
     map: { left: "34%", top: "70%" },
   },
   timber: {
     name: "İkmal Deposu",
     description: "Supplies production",
-    icon: `/assets/buildings/timber`,
     map: { left: "18%", top: "42%" },
   },
   clay: {
     name: "Petrol Rafinerisi",
     description: "Fuel production",
-    icon: `/assets/buildings/clay`,
     map: { left: "14%", top: "62%" },
   },
   iron: {
     name: "Maden Tesisi",
     description: "Munitions production",
-    icon: `/assets/buildings/iron`,
     map: { left: "22%", top: "78%" },
   },
   farm: {
     name: "Enerji Santrali",
     description: "Nüfus / güç kapasitesi",
-    icon: `/assets/buildings/farm`,
     map: { left: "42%", top: "78%" },
   },
   warehouse: {
     name: "Depo",
     description: "Üssün kaynak deposu",
-    icon: `/assets/buildings/warehouse`,
     map: { left: "27%", top: "52%" },
   },
   hiding_place: {
     name: "Yeraltı Deposu",
     description: "Yağmalanamayan gizli stoklar",
-    icon: `/assets/buildings/hiding_place`,
     map: { left: "66%", top: "76%" },
   },
   wall: {
     name: "Savunma Bataryası",
     description: "Üs savunmasını güçlendirir",
-    icon: `/assets/buildings/wall`,
     map: { left: "88%", top: "78%" },
   },
 };
 
+function currentFaction() {
+  return String(
+    snapshot?.village?.faction
+      || snapshot?.user?.faction
+      || selectedFaction
+      || "usa",
+  ).toLowerCase();
+}
+
+function buildingIconPath(kind) {
+  return `/assets/buildings/${currentFaction()}/${kind}`;
+}
+
 function syncDefinitionsFromOffers() {
+  const faction = currentFaction();
+
+  for (const kind of Object.keys(definitions)) {
+    definitions[kind].icon = `/assets/buildings/${faction}/${kind}`;
+  }
+
   for (const offer of snapshot?.offers || []) {
     const current = definitions[offer.kind] || {
-      icon: `/assets/buildings/${offer.kind}`,
       map: { left: "50%", top: "50%" },
     };
 
@@ -114,7 +116,7 @@ function syncDefinitionsFromOffers() {
       ...current,
       name: offer.name || current.name || offer.kind,
       description: offer.description || current.description || "",
-      icon: current.icon || `/assets/buildings/${offer.kind}`,
+      icon: `/assets/buildings/${faction}/${offer.kind}`,
     };
   }
 }
@@ -381,7 +383,7 @@ function render() {
     const definition = definitions[offer.kind] || {
       name: offer.name,
       description: offer.description,
-      icon: `/assets/buildings/${offer.kind}`,
+      icon: buildingIconPath(offer.kind),
     };
     if (!definition) return "";
 
