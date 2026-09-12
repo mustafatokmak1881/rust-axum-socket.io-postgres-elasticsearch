@@ -281,14 +281,8 @@ impl MatchSim {
             stream_jobs: VecDeque::new(),
         };
 
-        let n = roster.len().max(1) as f32;
-        for (index, (user_id, name, faction, team, flag)) in roster.into_iter().enumerate() {
-            let angle = (index as f32 / n) * std::f32::consts::TAU;
-            let radius = (map_size as f32) * 0.38;
-            let cx = map_size as f32 / 2.0;
-            let cy = map_size as f32 / 2.0;
-            let x = (cx + angle.cos() * radius).clamp(4.0, map_size as f32 - 5.0);
-            let y = (cy + angle.sin() * radius).clamp(4.0, map_size as f32 - 5.0);
+        for (user_id, name, faction, team, flag) in roster.into_iter() {
+            let (x, y) = sim.allocate_spawn_xy();
 
             sim.players.insert(
                 user_id,
@@ -336,7 +330,62 @@ impl MatchSim {
         sim
     }
 
-    /// Mid-match join: spawn HQ on an open arc slot.
+    /// Place new HQs in a tight cluster near existing players (not spread across the map).
+    fn allocate_spawn_xy(&self) -> (f32, f32) {
+        let map = self.map_size as f32;
+        let hq_positions: Vec<(f32, f32)> = self
+            .entities
+            .values()
+            .filter(|e| e.kind == "hq")
+            .map(|e| (e.x, e.y))
+            .collect();
+
+        let (bx, by) = if hq_positions.is_empty() {
+            // First player: cluster anchor slightly off map center.
+            (map * 0.42, map * 0.50)
+        } else {
+            let n = hq_positions.len() as f32;
+            let sx: f32 = hq_positions.iter().map(|(x, _)| *x).sum();
+            let sy: f32 = hq_positions.iter().map(|(_, y)| *y).sum();
+            (sx / n, sy / n)
+        };
+
+        // ~12 tile ring spacing so bases sit close but don't stack.
+        const MIN_SEP: f32 = 12.0;
+        const GOLDEN: f32 = 2.399_963;
+
+        for k in 0..96 {
+            let r = if hq_positions.is_empty() {
+                0.0
+            } else {
+                MIN_SEP + (k as f32).sqrt() * 3.5
+            };
+            let angle = k as f32 * GOLDEN;
+            let x = (bx + angle.cos() * r).clamp(4.0, map - 5.0);
+            let y = (by + angle.sin() * r).clamp(4.0, map - 5.0);
+            let ix = x.floor() as i32;
+            let iy = y.floor() as i32;
+
+            let blocked = self.entities.values().any(|e| {
+                if !e.building {
+                    return false;
+                }
+                let dx = e.x - (ix as f32 + 0.5);
+                let dy = e.y - (iy as f32 + 0.5);
+                dx * dx + dy * dy < (MIN_SEP * 0.85) * (MIN_SEP * 0.85)
+            });
+            if !blocked {
+                return (ix as f32 + 0.5, iy as f32 + 0.5);
+            }
+        }
+
+        (
+            bx.clamp(4.0, map - 5.0),
+            by.clamp(4.0, map - 5.0),
+        )
+    }
+
+    /// Mid-match join: spawn HQ near the existing player cluster.
     pub fn add_player(
         &mut self,
         user_id: Uuid,
@@ -358,13 +407,7 @@ impl MatchSim {
             (index % 2) as u8
         };
 
-        let n = (index + 1).max(1) as f32;
-        let angle = (index as f32 / n.max(8.0)) * std::f32::consts::TAU;
-        let radius = (self.map_size as f32) * 0.38;
-        let cx = self.map_size as f32 / 2.0;
-        let cy = self.map_size as f32 / 2.0;
-        let x = (cx + angle.cos() * radius).clamp(4.0, self.map_size as f32 - 5.0);
-        let y = (cy + angle.sin() * radius).clamp(4.0, self.map_size as f32 - 5.0);
+        let (x, y) = self.allocate_spawn_xy();
 
         self.players.insert(
             user_id,
