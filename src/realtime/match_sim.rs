@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use rand::Rng;
 use uuid::Uuid;
 
 use super::aoi;
@@ -12,7 +11,6 @@ use super::protocol::{
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 100;
-pub const DEFAULT_MAP: u16 = 96;
 
 #[derive(Clone, Debug)]
 pub struct PlayerState {
@@ -25,6 +23,16 @@ pub struct PlayerState {
     pub focus: [f32; 2],
     pub alive: bool,
     pub connected: bool,
+}
+
+impl PlayerState {
+    pub fn label(&self) -> String {
+        format!("{} ({})", self.name, self.faction)
+    }
+
+    pub fn is(&self, id: Uuid) -> bool {
+        self.user_id == id
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -247,13 +255,6 @@ pub struct MatchSim {
 #[derive(Clone, Debug)]
 pub struct StreamJob {
     pub due_tick: u64,
-    pub kind: StreamKind,
-}
-
-#[derive(Clone, Debug)]
-pub enum StreamKind {
-    /// Placeholder for Redis stream parity; sim already advances build timers each tick.
-    Ping,
 }
 
 impl MatchSim {
@@ -335,6 +336,85 @@ impl MatchSim {
         sim
     }
 
+    /// Mid-match join: spawn HQ on an open arc slot.
+    pub fn add_player(
+        &mut self,
+        user_id: Uuid,
+        name: String,
+        faction: String,
+        flag: Option<String>,
+    ) -> Result<(), &'static str> {
+        if self.ended {
+            return Err("Match already ended");
+        }
+        if self.players.contains_key(&user_id) {
+            return Err("Already in match");
+        }
+
+        let index = self.players.len();
+        let team = if self.ffa {
+            index as u8
+        } else {
+            (index % 2) as u8
+        };
+
+        let n = (index + 1).max(1) as f32;
+        let angle = (index as f32 / n.max(8.0)) * std::f32::consts::TAU;
+        let radius = (self.map_size as f32) * 0.38;
+        let cx = self.map_size as f32 / 2.0;
+        let cy = self.map_size as f32 / 2.0;
+        let x = (cx + angle.cos() * radius).clamp(4.0, self.map_size as f32 - 5.0);
+        let y = (cy + angle.sin() * radius).clamp(4.0, self.map_size as f32 - 5.0);
+
+        self.players.insert(
+            user_id,
+            PlayerState {
+                user_id,
+                name,
+                faction,
+                team,
+                flag: flag.clone(),
+                resources: Resources::starter(),
+                focus: [x, y],
+                alive: true,
+                connected: true,
+            },
+        );
+
+        let hq_id = Uuid::new_v4();
+        self.entities.insert(
+            hq_id,
+            Entity {
+                id: hq_id,
+                kind: "hq".into(),
+                owner: user_id,
+                team,
+                x,
+                y,
+                hp: 5000.0,
+                max_hp: 5000.0,
+                building: true,
+                unit: false,
+                flag,
+                build_remaining_ms: 0,
+                train_queue: VecDeque::new(),
+                target: None,
+                move_to: None,
+                speed: 0.0,
+                damage: 0.0,
+                range: 0.0,
+                attack_cooldown_ms: 0,
+                dirty: true,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn player_count(&self) -> usize {
+        self.players.len()
+    }
+
     pub fn buildable_info() -> Vec<BuildableInfo> {
         buildables()
             .iter()
@@ -370,7 +450,7 @@ impl MatchSim {
     }
 
     pub fn snapshot_for(&self, user_id: Uuid) -> Option<MatchSnapshot> {
-        let player = self.players.get(&user_id)?;
+        let player = self.players.values().find(|p| p.is(user_id))?;
         let focus = player.focus;
         let entities = aoi::visible_entities(self.entities.values(), focus[0], focus[1], user_id)
             .into_iter()
@@ -382,7 +462,9 @@ impl MatchSim {
             map_size: self.map_size,
             tick: self.tick,
             you: user_id,
+            you_name: player.label(),
             team: player.team,
+            ffa: self.ffa,
             resources: player.resources.view(),
             entities,
             buildable: Self::buildable_info(),
@@ -484,7 +566,6 @@ impl MatchSim {
         // Redis-stream style delayed job marker.
         self.stream_jobs.push_back(StreamJob {
             due_tick: self.tick + (def.build_ms as u64 / (1000 / TICK_HZ as u64)).max(1),
-            kind: StreamKind::Ping,
         });
 
         Ok(())
@@ -799,7 +880,8 @@ impl MatchSim {
             .map(|p| p.team)
             .collect();
 
-        if alive_teams.len() <= 1 {
+        // Drop-in matches: don't end while only one commander has joined yet.
+        if self.players.len() >= 2 && alive_teams.len() <= 1 {
             self.ended = true;
             self.winner_team = alive_teams.into_iter().next();
             self.end_reason = "Last command standing".into();
@@ -856,17 +938,4 @@ impl Entity {
             progress,
         }
     }
-}
-
-pub fn assign_teams(count: usize, ffa: bool) -> Vec<u8> {
-    if ffa {
-        (0..count as u8).collect()
-    } else {
-        (0..count).map(|i| (i % 2) as u8).collect()
-    }
-}
-
-pub fn random_lobby_code() -> String {
-    let mut rng = rand::thread_rng();
-    format!("{:04}", rng.gen_range(0..10000))
 }

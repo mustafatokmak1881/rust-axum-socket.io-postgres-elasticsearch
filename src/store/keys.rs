@@ -18,14 +18,6 @@ pub fn entitlements(user_id: &str) -> String {
     format!("entitlement:{user_id}")
 }
 
-pub fn lobby(lobby_id: &str) -> String {
-    format!("lobby:{lobby_id}")
-}
-
-pub fn lobbies_index() -> &'static str {
-    "lobbies:open"
-}
-
 pub fn match_meta(match_id: &str) -> String {
     format!("match:{match_id}:meta")
 }

@@ -46,7 +46,7 @@ async fn dev_grant(
         .iter()
         .any(|item| item.id == body.item_id);
     if !allowed {
-        return Err(AppError::BadRequest("Unknown catalog item"));
+        return Err(AppError::NotFound);
     }
 
     users::grant_entitlement(&state.redis, user.id, &body.item_id).await?;
@@ -83,6 +83,7 @@ async fn checkout(
         "mode": "stripe",
         "message": "Create Checkout Session with your Stripe price IDs (wired via env).",
         "item_id": body.item_id,
+        "price_id": state.config.stripe_price_flag_gold,
         "success_url": format!("{}/play?store=ok", state.config.app_origin),
         "cancel_url": format!("{}/play?store=cancel", state.config.app_origin),
     })))

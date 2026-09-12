@@ -78,12 +78,12 @@ function onServer(msg) {
       renderStore();
       break;
     case "lobby_update":
-      state.lobby = msg.lobby;
-      renderLobby();
+      // Waiting lobby removed — ignore.
       break;
     case "lobby_left":
-      state.lobby = null;
-      $("#lobby-card").hidden = true;
+      break;
+    case "open_matches":
+      renderOpenMatches(msg.matches || []);
       break;
     case "match_start":
       enterMatch(msg.snapshot);
@@ -116,20 +116,41 @@ function syncFactionButtons() {
   });
 }
 
-function renderLobby() {
-  const lobby = state.lobby;
-  if (!lobby) return;
-  $("#lobby-card").hidden = false;
-  $("#lobby-id-label").textContent = lobby.id;
-  $("#lobby-slots").innerHTML = lobby.slots
+function renderLobby() {}
+
+function renderOpenMatches(matches) {
+  const root = $("#open-lobbies");
+  if (!root) return;
+  if (!matches.length) {
+    root.innerHTML = "<p class='muted'>No open matches — Start Match to host one.</p>";
+    return;
+  }
+  root.innerHTML = matches
     .map(
-      (slot) => `
-      <li>
-        <span>${escapeHtml(slot.name)} · ${slot.faction.toUpperCase()} · T${slot.team}</span>
-        <span>${slot.ready ? "READY" : "…"} ${slot.flag ? `· ${slot.flag}` : ""}</span>
-      </li>`,
+      (m) => `
+      <button type="button" class="store-item" data-join="${escapeHtml(m.id)}">
+        <strong>${m.players}/${m.max_players} live</strong>
+        <small>${escapeHtml(m.id)}</small>
+        <span>Map ${m.map_size}${m.ffa ? " · FFA" : ""} · click to join</span>
+      </button>`,
     )
     .join("");
+}
+
+function joinMatchId(raw) {
+  const lobby_id = String(raw || "").trim();
+  if (!lobby_id) {
+    toast("Enter a match UUID or pick one from the list");
+    return;
+  }
+  // UUID shape check (lenient)
+  if (!/^[0-9a-fA-F-]{36}$/.test(lobby_id)) {
+    toast("Invalid match UUID");
+    return;
+  }
+  $("#lobby-id").value = lobby_id;
+  send({ t: "join_lobby", lobby_id });
+  toast("Joining match…");
 }
 
 function renderStore() {
@@ -430,29 +451,35 @@ $("#faction-row").addEventListener("click", (event) => {
 });
 
 $("#btn-create").addEventListener("click", () => {
+  send({ t: "set_faction", faction: state.faction });
   send({
     t: "create_lobby",
     max_players: Number($("#max-players").value) || 16,
     map_size: Number($("#map-size").value) || 96,
     ffa: $("#ffa").checked,
   });
-  send({ t: "set_faction", faction: state.faction });
+  toast("Starting match…");
 });
 
 $("#btn-join").addEventListener("click", () => {
-  const lobby_id = $("#lobby-id").value.trim();
-  if (!lobby_id) return toast("Enter lobby id");
-  send({ t: "join_lobby", lobby_id });
+  joinMatchId($("#lobby-id").value);
 });
 
-$("#btn-ready").addEventListener("click", () => {
-  state.ready = !state.ready;
-  send({ t: "ready", ready: state.ready });
-  $("#btn-ready").textContent = state.ready ? "Unready" : "Ready";
+$("#btn-refresh-lobbies").addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/lobbies", { credentials: "same-origin" });
+    const data = await res.json();
+    renderOpenMatches(data.matches || data.lobbies || []);
+  } catch {
+    toast("Could not list matches");
+  }
 });
 
-$("#btn-start").addEventListener("click", () => send({ t: "start_match" }));
-$("#btn-leave").addEventListener("click", () => send({ t: "leave_lobby" }));
+$("#open-lobbies").addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-join]");
+  if (!btn) return;
+  joinMatchId(btn.dataset.join);
+});
 
 $("#build-list").addEventListener("click", (event) => {
   const btn = event.target.closest("[data-kind]");
@@ -520,29 +547,7 @@ $("#btn-logout").addEventListener("click", async () => {
 
 $("#viewport")?.addEventListener("contextmenu", (e) => e.preventDefault());
 
-$("#btn-refresh-lobbies").addEventListener("click", async () => {
-  try {
-    const res = await fetch("/api/lobbies", { credentials: "same-origin" });
-    const data = await res.json();
-    $("#open-lobbies").innerHTML = (data.lobbies || [])
-      .map(
-        (lobby) => `
-        <button type="button" class="store-item" data-join="${lobby.id}">
-          <strong>${lobby.slots.length}/${lobby.max_players}</strong>
-          <small>${lobby.id}</small>
-          <span>Map ${lobby.map_size}${lobby.ffa ? " · FFA" : ""}</span>
-        </button>`,
-      )
-      .join("") || "<p class='muted'>No open lobbies</p>";
-  } catch {
-    toast("Could not list lobbies");
-  }
-});
-
-$("#open-lobbies").addEventListener("click", (event) => {
-  const btn = event.target.closest("[data-join]");
-  if (!btn) return;
-  send({ t: "join_lobby", lobby_id: btn.dataset.join });
-});
-
 connect();
+
+// Auto-load open matches once connected UI is ready
+setTimeout(() => $("#btn-refresh-lobbies")?.click(), 600);

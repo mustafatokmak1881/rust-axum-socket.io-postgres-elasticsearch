@@ -36,7 +36,7 @@
     <section id="lobby-screen" class="screen">
       <div class="lobby-panel">
         <h1>Command Lobby</h1>
-        <p class="blurb">Match-based Generals · up to 100 commanders · fair cosmetics only</p>
+        <p class="blurb">Match-based Generals · drop-in join · up to 100 commanders · fair cosmetics only</p>
 
         <div class="faction-row" id="faction-row">
           <button type="button" data-faction="usa" class="faction on">USA</button>
@@ -51,27 +51,21 @@
           <label>Map
             <input id="map-size" type="number" min="48" max="128" value="96">
           </label>
-          <label class="check"><input id="ffa" type="checkbox"> FFA</label>
-          <button type="button" id="btn-create" class="primary">Create Lobby</button>
+          <label class="check"><input id="ffa" type="checkbox" checked> FFA</label>
+          <button type="button" id="btn-create" class="primary">Start Match</button>
         </div>
 
         <div class="lobby-join">
-          <input id="lobby-id" placeholder="Lobby UUID to join">
-          <button type="button" id="btn-join" class="primary">Join</button>
+          <input id="lobby-id" placeholder="Match UUID to join">
+          <button type="button" id="btn-join" class="primary">Join Match</button>
           <button type="button" id="btn-refresh-lobbies" class="ghost">Refresh list</button>
         </div>
 
         <div id="open-lobbies" class="open-lobbies"></div>
 
-        <div id="lobby-card" class="lobby-card" hidden>
-          <h2>Lobby <small id="lobby-id-label"></small></h2>
-          <ul id="lobby-slots"></ul>
-          <div class="lobby-actions">
-            <button type="button" id="btn-ready" class="primary">Ready</button>
-            <button type="button" id="btn-start" class="accent">Start Match</button>
-            <button type="button" id="btn-leave" class="ghost">Leave</button>
-          </div>
-        </div>
+        <p class="muted" id="match-hint">
+          Start opens a live match instantly. Others Join and drop in immediately — no ready wait.
+        </p>
 
         <div class="store-panel">
           <h3>Officer Store <small>(no P2W)</small></h3>

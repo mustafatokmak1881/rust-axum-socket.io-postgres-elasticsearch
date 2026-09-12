@@ -65,6 +65,9 @@ pub enum ServerMsg {
         lobby: LobbyView,
     },
     LobbyLeft,
+    OpenMatches {
+        matches: Vec<OpenMatchView>,
+    },
     MatchStart {
         match_id: Uuid,
         snapshot: MatchSnapshot,
@@ -91,6 +94,15 @@ pub enum ServerMsg {
     StoreOk {
         entitlements: Vec<String>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenMatchView {
+    pub id: Uuid,
+    pub players: u8,
+    pub max_players: u8,
+    pub map_size: u16,
+    pub ffa: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +166,9 @@ pub struct MatchSnapshot {
     pub map_size: u16,
     pub tick: u64,
     pub you: Uuid,
+    pub you_name: String,
     pub team: u8,
+    pub ffa: bool,
     pub resources: ResourcesView,
     pub entities: Vec<EntityView>,
     pub buildable: Vec<BuildableInfo>,

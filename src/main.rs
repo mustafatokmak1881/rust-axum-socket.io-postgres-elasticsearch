@@ -107,8 +107,8 @@ async fn ready(State(state): State<SharedState>) -> Result<Json<Value>, AppError
 }
 
 async fn list_lobbies(State(state): State<SharedState>) -> Json<Value> {
-    let lobbies = state.hub.list_open_lobbies().await;
-    Json(json!({ "lobbies": lobbies }))
+    let matches = state.hub.list_open_matches().await;
+    Json(json!({ "matches": matches, "lobbies": matches }))
 }
 
 async fn shutdown_signal() {
