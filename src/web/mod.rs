@@ -79,8 +79,8 @@ fn building_svg(kind: &str) -> Option<&'static str> {
 
 fn building_png(kind: &str) -> Option<&'static [u8]> {
     Some(match kind {
-        "headquarters" => include_bytes!("center-build.png").as_slice(),
-        "barracks" => include_bytes!("kisla.png").as_slice(),
+        "headquarters" => include_bytes!("command-center.png").as_slice(),
+        "barracks" => include_bytes!("barracks.png").as_slice(),
         "clay" => include_bytes!("kil-ocagi.png").as_slice(),
         "timber" => include_bytes!("oduncu.png").as_slice(),
         "iron" => include_bytes!("demir-madeni.png").as_slice(),
