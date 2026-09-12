@@ -61,19 +61,19 @@ const definitions = {
   },
   timber: {
     name: "İkmal Deposu",
-    description: "Malzeme (odun) üretimi",
+    description: "Supplies production",
     icon: `/assets/buildings/timber`,
     map: { left: "18%", top: "42%" },
   },
   clay: {
     name: "Petrol Rafinerisi",
-    description: "Yakıt (kil) üretimi",
+    description: "Fuel production",
     icon: `/assets/buildings/clay`,
     map: { left: "14%", top: "62%" },
   },
   iron: {
     name: "Maden Tesisi",
-    description: "Maden (demir) üretimi",
+    description: "Munitions production",
     icon: `/assets/buildings/iron`,
     map: { left: "22%", top: "78%" },
   },
@@ -598,7 +598,7 @@ function renderIncoming(incoming) {
         <span>Saldırı</span>
       </div>
       <p>
-        Ordu: <strong>${attack.sent_spears}</strong> mızrakçı
+        Ordu: <strong>${attack.sent_spears}</strong> infantry
         · Varış: ${escapeHtml(date(attack.arrives_at))}
         · Kalan:
         <span class="army-countdown">${escapeHtml(formatCountdown(attack.arrives_at))}</span>
@@ -679,7 +679,7 @@ function renderArmyPanel() {
   const barracksEl = $("#army-barracks-level");
 
   if (homeEl) {
-    homeEl.textContent = `${number(army.home.spear || 0)} mızrakçı`;
+    homeEl.textContent = `${number(army.home.spear || 0)} infantry`;
   }
 
   if (farmEl) {
@@ -727,7 +727,7 @@ function renderArmyPanel() {
           <tbody>
             <tr>
               <td>
-                <strong>${number(recruit.count)} mızrakçı</strong>
+                <strong>${number(recruit.count)} infantry</strong>
               </td>
               <td>
                 <strong
@@ -806,7 +806,7 @@ function renderArmyPanel() {
               <span>${escapeHtml(statusNames[attack.status] || attack.status)}</span>
             </div>
             <p>
-              Gönderilen: ${number(attack.sent_spears)} mızrakçı
+              Gönderilen: ${number(attack.sent_spears)} infantry
               · Varış: ${escapeHtml(date(attack.arrives_at))}
               ${showCountdown && countdownAt ? `
                 · Kalan:
@@ -1085,7 +1085,7 @@ $("#recruit-form")?.addEventListener("submit", async (event) => {
     });
 
     if (result) {
-      result.textContent = `${count} mızrakçı eğitimi başladı.`;
+      result.textContent = `${count} infantry eğitimi başladı.`;
     }
 
     await refresh();

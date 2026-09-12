@@ -117,7 +117,7 @@ fn village_name_from_account(email: &str) -> String {
     if char_count >= 3 {
         cleaned
     } else if cleaned.is_empty() {
-        "Yeni Köy".to_owned()
+        "New Base".to_owned()
     } else {
         format!("{cleaned}koy").chars().take(32).collect()
     }
@@ -263,11 +263,11 @@ pub async fn bootstrap(
                 Some("İnşaat sürüyor".to_owned())
             } else if let Some(cost) = cost {
                 if village.wood < cost.wood {
-                    Some("Odun yetersiz".to_owned())
+                    Some("Supplies yetersiz".to_owned())
                 } else if village.clay < cost.clay {
-                    Some("Kil yetersiz".to_owned())
+                    Some("Fuel yetersiz".to_owned())
                 } else if village.iron < cost.iron {
-                    Some("Demir yetersiz".to_owned())
+                    Some("Munitions yetersiz".to_owned())
                 } else {
                     None
                 }
@@ -512,7 +512,7 @@ pub async fn rename_village(
 
     if !(3..=32).contains(&name.chars().count()) || name.chars().any(char::is_control) {
         return Err(AppError::BadRequest(
-            "Köy adı 3–32 karakter olmalı ve kontrol karakteri içermemeli.",
+            "Base name must be 3–32 characters.",
         ));
     }
 
@@ -580,7 +580,7 @@ pub async fn start_upgrade(
 
     if pending {
         return Err(AppError::BadRequest(
-            "Köyünde zaten devam eden bir inşaat var.",
+            "Construction already in progress on this base.",
         ));
     }
 
@@ -634,13 +634,13 @@ pub async fn start_upgrade(
     let duration_seconds = economy::upgrade_seconds(target_level);
 
     if resources.wood < cost.wood {
-        return Err(AppError::BadRequest("Yeterli odun yok."));
+        return Err(AppError::BadRequest("Not enough Supplies."));
     }
     if resources.clay < cost.clay {
-        return Err(AppError::BadRequest("Yeterli kil yok."));
+        return Err(AppError::BadRequest("Not enough Fuel."));
     }
     if resources.iron < cost.iron {
-        return Err(AppError::BadRequest("Yeterli demir yok."));
+        return Err(AppError::BadRequest("Not enough Munitions."));
     }
 
     sqlx::query(

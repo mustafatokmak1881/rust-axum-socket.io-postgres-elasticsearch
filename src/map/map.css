@@ -1,10 +1,15 @@
 :root {
-  --ink: #34392d;
-  --muted: #8b8777;
-  --paper: #fcf9f0;
-  --border: #ded6c3;
-  --gold: #bb9859;
-  --forest: #20352a;
+  --ink: #d7e0c8;
+  --muted: #8fa07a;
+  --paper: #1a2218;
+  --border: #4a5a40;
+  --gold: #d4b44a;
+  --forest: #1a2218;
+  --hud: #9fc24a;
+  --warn: #e8c547;
+  --panel: #1c241a;
+  --font-ui: "Rajdhani", "Segoe UI", sans-serif;
+  --font-display: "Oswald", Impact, sans-serif;
 }
 
 * {
@@ -14,10 +19,10 @@
 body {
   margin: 0;
   background:
-    radial-gradient(ellipse at top right, #f6f0de, transparent 60%),
-    #eee9dd;
+    radial-gradient(ellipse at 20% 0%, #2a3a2240, transparent 45%),
+    linear-gradient(180deg, #1a2218, #121710);
   color: var(--ink);
-  font: 13px system-ui, -apple-system, sans-serif;
+  font: 600 14px/1.45 var(--font-ui);
 }
 
 a {
@@ -78,7 +83,7 @@ button:disabled {
 }
 
 .brand>span:last-child {
-  font: 23px Georgia, serif;
+  font: 23px var(--font-display);
   letter-spacing: 3px;
 }
 
@@ -149,7 +154,7 @@ button:disabled {
   background: linear-gradient(#c0392b, #7a1610);
   color: #fff4d8;
   text-decoration: none;
-  font: bold 12px Georgia, serif;
+  font: bold 12px var(--font-display);
   box-shadow: inset 0 1px 0 #e07060, 0 1px 0 #1a1008;
   animation: incoming-pulse 1.6s ease-in-out infinite;
 }
@@ -217,7 +222,7 @@ main {
 }
 
 h1 {
-  font: 35px Georgia, serif;
+  font: 35px var(--font-display);
   margin: 9px 0;
 }
 
@@ -480,7 +485,7 @@ h1 {
 
 h2 {
   text-align: center;
-  font: 23px Georgia, serif;
+  font: 23px var(--font-display);
   margin: 0;
   overflow-wrap: anywhere;
 }
@@ -559,7 +564,7 @@ h2 {
 }
 
 h3 {
-  font: 16px Georgia, serif;
+  font: 16px var(--font-display);
   margin: 0;
 }
 
@@ -725,515 +730,174 @@ h3 {
   }
 }
 
-/* Klasik dünya haritası teması */
 
-body {
-  color: #38270e;
-  font-family: Arial, Helvetica, sans-serif;
-  font-size: 12px;
+/* === Generals Zero Hour theater === */
+
+body,
+body.theme-generals {
+  color: var(--ink) !important;
+  font-family: var(--font-ui) !important;
   background:
-    radial-gradient(ellipse at 8% 25%, #8d663a35, transparent 40%),
-    radial-gradient(ellipse at 93% 73%, #84633130, transparent 38%),
-    repeating-linear-gradient(17deg,
-      #ffffff08 0 2px,
-      #74532305 3px 5px,
-      transparent 6px 9px),
-    #e8d9b5;
+    radial-gradient(ellipse at 15% 0%, #2a3a2255, transparent 42%),
+    radial-gradient(ellipse at 90% 20%, #3a2a1855, transparent 40%),
+    repeating-linear-gradient(0deg, transparent 0 3px, #00000014 3px 4px),
+    linear-gradient(180deg, #1a2218, #0e120c) !important;
 }
 
 .header {
-  min-height: 49px;
-  padding: 5px max(16px, calc((100vw - 1060px) / 2));
-  gap: 18px;
-  background:
-    repeating-linear-gradient(45deg,
-      #ffffff05 0 2px,
-      transparent 2px 5px),
-    linear-gradient(#8c291b, #52140c);
-  border-top: 2px solid #c8ab6e;
-  border-bottom: 3px ridge #c3a16b;
+  min-height: 52px !important;
+  padding: 6px max(16px, calc((100vw - 1100px) / 2)) !important;
+  gap: 18px !important;
+  background: linear-gradient(180deg, #2c3828, #1c261a) !important;
+  border-top: 1px solid #4a5a40 !important;
+  border-bottom: 2px solid var(--hud) !important;
+  color: var(--ink) !important;
+  box-shadow: 0 4px 20px #0008 !important;
 }
 
 .brand-mark {
-  font-size: 29px;
+  font-size: 22px !important;
+  color: var(--warn) !important;
 }
 
-.brand>span:last-child {
-  font-size: 17px;
+.brand > span:last-child {
+  font: 700 18px/1 var(--font-display) !important;
+  letter-spacing: 0.12em !important;
+  color: #eef5d8 !important;
 }
 
 .brand small,
 .world-indicator {
-  display: none;
-}
-
-.header nav {
-  gap: 5px;
-  align-self: center;
+  display: block !important;
+  color: var(--warn) !important;
+  font: 700 9px/1 var(--font-display) !important;
+  letter-spacing: 0.22em !important;
+  text-transform: uppercase !important;
 }
 
 .header nav a {
-  padding: 8px 13px;
-  color: #fff2d5;
-  font-size: 11px;
-  font-weight: bold;
-  border: 2px ridge #bb9b61;
-  background: linear-gradient(#773b24, #452013);
-  text-shadow: 0 1px #211207;
+  color: #c5d4b0 !important;
+  font: 700 12px/1 var(--font-display) !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  border: 0 !important;
 }
 
-.header nav a.active {
-  color: #ffdf8d;
-  background: linear-gradient(#8c522d, #5b2e16);
-}
-
-.header nav a.active::after {
-  display: none;
+.header nav a.active,
+.header nav a:hover {
+  color: #10160e !important;
+  background: linear-gradient(180deg, var(--hud), #6a8a3a) !important;
 }
 
 main {
-  width: min(1060px, calc(100% - 24px));
-  max-width: 1060px;
-  min-height: calc(100vh - 80px);
-  margin: 12px auto;
-  padding: 17px;
-
-  background:
-    radial-gradient(ellipse at 80% 40%, #fff4ce65, transparent 70%),
-    #efdfb5;
-
-  border: 3px double #8b693c;
-  box-shadow:
-    0 0 0 2px #c4a77b,
-    0 0 0 4px #6c5033,
-    0 6px 20px #49351c44;
-}
-
-.heading {
-  margin-bottom: 19px;
-}
-
-.heading h1 {
-  font: bold 22px Arial, sans-serif;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: var(--ink) !important;
 }
 
 .heading .eyebrow {
-  color: #987947;
+  color: var(--hud) !important;
+  font: 700 11px/1 var(--font-display) !important;
+  letter-spacing: 0.28em !important;
 }
 
-.coordinate-form {
-  background: #f6e9c5;
-  border-color: #ac884b;
-  border-radius: 0;
+.heading h1 {
+  font: 700 36px/1 var(--font-display) !important;
+  letter-spacing: 0.06em !important;
+  color: #eef5d8 !important;
+  text-shadow: 0 0 18px #9fc24a44 !important;
 }
 
-.coordinate-form button,
-.primary-button {
-  background: linear-gradient(#997340, #65451f);
-  border: 1px solid #513416;
-  border-radius: 3px;
-  color: #fff4d4;
+.heading p {
+  color: var(--muted) !important;
 }
 
-.layout {
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: 14px;
-}
-
+.coordinate-form,
 .map-panel,
 .village-card,
-.overview-card {
-  border: 1px solid #a7803c;
-  border-radius: 0;
-  background: #f4e5bd;
-  box-shadow: none;
+.overview-card,
+.world-note,
+.attack-modal,
+.attack-sheet,
+.map-toolbar {
+  background: linear-gradient(180deg, #243022, #1a2218) !important;
+  border: 1px solid #455540 !important;
+  box-shadow: inset 0 1px 0 #5a6a5040, 0 8px 24px #0007 !important;
+  color: var(--ink) !important;
 }
 
 .map-toolbar {
-  height: 36px;
-  padding: 0 12px;
-  background: linear-gradient(#e6cf91, #c6a45f);
+  border-bottom: 1px solid #455540 !important;
 }
 
-.map-toolbar strong,
-#center-label {
-  color: #493412;
+.live-dot {
+  background: var(--hud) !important;
+  box-shadow: 0 0 8px var(--hud) !important;
 }
 
-.map-hint {
-  color: #756039;
+.map-hint,
+.toolbar-divider {
+  color: var(--muted) !important;
 }
-
-.map-stage {
-  height: 450px;
-  margin: 14px;
-  border: 1px solid #7e803e;
-}
-
-.map-bottom {
-  border-top: 1px solid #d2b77c;
-}
-
-.village-card {
-  padding: 14px;
-}
-
-.village-emblem {
-  margin: 15px auto;
-  border-radius: 3px;
-}
-
-.village-card h2 {
-  font-size: 20px;
-}
-
-.overview-card {
-  padding: 12px;
-}
-
-.overview-heading {
-  padding: 5px;
-  background: linear-gradient(#e2c98b, #c5a460);
-}
-
-.overview-heading h3 {
-  font: bold 12px Arial, sans-serif;
-}
-
-#overview {
-  border-radius: 0;
-}
-
-.type-badge,
-.secondary-button {
-  border-radius: 0;
-}
-
-/* Köy üzerindeki komut menüsü */
 
 .village-actions {
-  position: absolute;
-  z-index: 15;
-  display: flex;
-  gap: 4px;
-  padding: 5px;
-  background: #f8e9bedf;
-  border: 2px ridge #b39259;
-  box-shadow: 0 3px 9px #26301c66;
-  max-width: calc(100% - 12px);
+  background: #121810 !important;
+  border: 1px solid #455540 !important;
 }
 
-.village-actions button {
-  padding: 7px 9px;
-  white-space: nowrap;
-  color: #fff2d2;
-  background: linear-gradient(#947344, #604322);
-  border: 1px solid #473015;
-  border-radius: 2px;
-  font-size: 11px;
-  font-weight: bold;
-}
-
-.village-actions button:hover:not(:disabled) {
-  background: linear-gradient(#b48b49, #805826);
-}
-
-.village-actions button:disabled {
-  opacity: .5;
-}
-
-/* Komut penceresi */
-
-.command-dialog {
-  width: min(650px, calc(100vw - 28px));
-  max-height: calc(100dvh - 40px);
-  overflow: auto;
-  padding: 0;
-  color: #3c2b11;
-  background: #f4e6bd;
-  border: 4px ridge #b29362;
-  box-shadow: 0 0 0 2px #67472a, 0 15px 50px #0007;
-}
-
-.command-dialog::backdrop {
-  background: #0009;
-}
-
-.command-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 15px;
-  background: linear-gradient(#e9d49b, #cfb276);
-  border-bottom: 1px solid #a1834e;
-}
-
-.command-heading h2 {
-  margin: 0;
-  font: bold 19px Georgia, serif;
-}
-
-.command-close {
-  padding: 0 7px;
-  border: 1px solid #876936;
-  color: #4d3011;
-  background: #f6e8bf;
-  font-size: 24px;
-}
-
-.command-body {
-  padding: 17px;
-}
-
-.command-target {
-  padding: 12px;
-  margin-bottom: 16px;
-  background: #fff4d6;
-  border: 1px solid #b29359;
-}
-
-.command-target strong,
-.command-target span {
-  display: block;
-}
-
-.command-target span {
-  margin-top: 6px;
-  color: #81683f;
-  font-size: 11px;
-}
-
-.command-information {
-  padding: 12px;
-  line-height: 1.7;
-  border: 1px solid #c9ae77;
-  background: #eee0b9;
-}
-
-.command-submit {
-  margin-top: 17px;
-  padding: 8px 16px;
-  background: #dfcfa7;
-  border: 1px solid #b6a079;
-  color: #796948;
-}
-
-.command-note {
-  color: #907953;
-  line-height: 1.6;
-  font-size: 11px;
-}
-
-@media (max-width: 780px) {
-  main {
-    padding: 10px;
-  }
-
-  .header {
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
-  .layout {
-    grid-template-columns: 1fr;
-  }
-
-  .map-stage {
-    margin: 8px;
-    height: 410px;
-    min-height: 0;
-  }
-
-  .village-actions button {
-    padding: 7px 6px;
-    font-size: 10px;
-  }
-}
-
-.map-controls {
-  left: 37px;
-  top: 8px;
-}
-
-.map-position {
-  left: 37px;
-  bottom: 27px;
-}
-
-.attack-unit-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-top: 16px;
-  padding: 12px;
-  background: #f8edcb;
-  border: 1px solid #c1a367;
-}
-
-.attack-unit-row input {
-  width: 90px;
-  padding: 6px;
-  background: #fff8e5;
-  border: 1px solid #a98950;
-}
-
-.attack-unit-row button {
-  padding: 6px 10px;
-  background: #e7d5a7;
-  border: 1px solid #ae8d54;
-  color: #5d421c;
-}
-
-.command-submit:not(:disabled) {
-  background: linear-gradient(#a57b40, #6c451d);
-  color: #fff3d0;
-  cursor: pointer;
-}
-
-#attack-result {
-  line-height: 1.6;
-  color: #835319;
-}
-
-.army-panel {
-  margin-top: 18px;
-  border: 1px solid #a88950;
-  background: #f4e7c2;
-}
-
-.army-panel > h3 {
-  padding: 9px;
-  margin: 0;
-  background: linear-gradient(#e1c98e, #c7a76a);
-  font: bold 14px Georgia, serif;
-}
-
-.army-panel > h3 small {
-  font: normal 11px Arial, sans-serif;
-}
-
-.army-sections {
-  display: grid;
-  gap: 0;
-}
-
-.army-section {
-  border-top: 1px solid #c9ae78;
-}
-
-.army-section > h4 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 8px 10px;
-  background: linear-gradient(#efe0b8, #dfc894);
-  font: bold 12px Georgia, serif;
-  color: #5c3d16;
-}
-
-.army-section > h4 small {
-  margin-left: auto;
-  font: bold 11px Arial, sans-serif;
-  color: #8a1f14;
-}
-
-.army-section-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 2px;
-  font-size: 11px;
-  line-height: 1;
-}
-
-.army-section-icon.incoming {
-  background: #8a1f14;
-  color: #ffe7c2;
-}
-
-.army-section-icon.outgoing {
-  background: #355c2f;
-  color: #e8f5d8;
-}
-
-#army-orders,
-#army-incoming-list {
-  padding: 10px;
-}
-
-.army-order {
-  padding: 10px;
-  margin-bottom: 8px;
-  background: #fff2d0;
-  border: 1px solid #d4bb86;
-}
-
-.army-order.incoming {
-  background: #ffe8d6;
-  border-color: #c9896a;
-  border-left: 4px solid #a3261b;
-}
-
-.army-order > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.army-order p {
-  margin: 7px 0 0;
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.army-order .army-countdown {
-  font-weight: bold;
-  color: #8a1f14;
-  font-variant-numeric: tabular-nums;
-}
-
-.army-order.incoming .army-countdown {
-  color: #6d140e;
-}
-
-.army-empty {
-  margin: 0;
-  font-size: 12px;
-  color: #766039;
-}
-
-.army-report {
-  color: #766039;
-}
-
-/* Generals theater overrides */
-body.theme-generals {
-  background:
-    radial-gradient(ellipse at 20% 0%, #2a3a2240, transparent 45%),
-    linear-gradient(180deg, #1a2218, #121710) !important;
-  color: #d7e0c8 !important;
-  font-family: "Rajdhani", "Segoe UI", sans-serif !important;
-}
-
-body.theme-generals .header {
-  background: linear-gradient(180deg, #2c3828, #1c261a) !important;
-  border-bottom: 1px solid #4a5a40 !important;
-  color: #d7e0c8 !important;
-}
-
-body.theme-generals .brand small {
-  color: #d4b44a !important;
-}
-
-body.theme-generals .eyebrow {
-  color: #9fc24a !important;
-}
-
-body.theme-generals h1 {
-  font-family: "Oswald", Impact, sans-serif !important;
+.village-actions button,
+.coordinate-form button,
+.attack-sheet button,
+button.primary,
+.button {
+  background: linear-gradient(180deg, #3a4a28, #243018) !important;
+  border: 1px solid var(--hud) !important;
+  color: var(--warn) !important;
+  font: 700 12px/1 var(--font-display) !important;
   letter-spacing: 0.06em !important;
-  color: #eef5d8 !important;
+  text-transform: uppercase !important;
+  box-shadow: inset 0 1px 0 #9fc24a33 !important;
+}
+
+.village-card h2,
+.attack-sheet h2,
+.overview-card h2 {
+  font: 700 18px/1.2 var(--font-display) !important;
+  color: var(--warn) !important;
+  letter-spacing: 0.06em !important;
+}
+
+.village-card dt,
+.attack-sheet label,
+.overview-card strong {
+  color: var(--hud) !important;
+  font-family: var(--font-display) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  font-size: 11px !important;
+}
+
+.village-card dd,
+.army-empty,
+.army-report {
+  color: var(--muted) !important;
+}
+
+input, select, textarea {
+  background: #121810 !important;
+  border: 1px solid #455540 !important;
+  color: var(--ink) !important;
+}
+
+#map-stage,
+.map-stage {
+  background: #0e140c !important;
+  border: 1px solid #455540 !important;
+}
+
+.incoming-badge {
+  background: #3a2010 !important;
+  border: 1px solid var(--warn) !important;
+  color: var(--warn) !important;
 }

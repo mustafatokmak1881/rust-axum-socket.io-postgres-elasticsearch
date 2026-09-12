@@ -82,7 +82,7 @@
             Harita için Canvas destekleyen bir tarayıcı gerekir.
           </canvas>
 
-          <div id="village-actions" class="village-actions" role="group" aria-label="Seçili köye verilecek komutlar"
+          <div id="village-actions" class="village-actions" role="group" aria-label="Selected base commands"
             hidden>
             <button type="button" data-command="attack">
               ⚔ Saldır
@@ -93,14 +93,14 @@
             </button>
 
             <button type="button" data-command="resources">
-              ▰ Hammadde
+              ▰ Resources
             </button>
           </div>
 
           <div class="map-controls">
             <button id="zoom-in" type="button" aria-label="Yakınlaştır">+</button>
             <button id="zoom-out" type="button" aria-label="Uzaklaştır">−</button>
-            <button id="go-home" type="button" aria-label="Köyüme dön">⌂</button>
+            <button id="go-home" type="button" aria-label="Return to base">⌂</button>
           </div>
 
           <div class="compass" aria-hidden="true">
@@ -115,7 +115,7 @@
 
         <div class="map-bottom">
           <div class="legend">
-            <span><i class="own"></i> Senin köyün</span>
+            <span><i class="own"></i> Your base</span>
             <span><i class="player"></i> Oyuncu</span>
           </div>
           <span id="village-count">—</span>
@@ -131,7 +131,7 @@
 
           <div class="village-emblem" aria-hidden="true">⌂</div>
 
-          <h2 id="selected-name">Bir köy seç</h2>
+          <h2 id="selected-name">Select a base</h2>
           <p id="selected-coordinate" class="selected-coordinate">
             Haritadaki bir yerleşime tıkla.
           </p>
@@ -142,11 +142,11 @@
               <dd id="selected-owner">—</dd>
             </div>
             <div>
-              <dt>Köy puanı</dt>
+              <dt>Base power</dt>
               <dd id="selected-points">—</dd>
             </div>
             <div>
-              <dt>Köyüne mesafe</dt>
+              <dt>Distance to base</dt>
               <dd id="selected-distance">—</dd>
             </div>
           </dl>
@@ -156,7 +156,7 @@
           </button>
 
           <a id="open-village" href="/game" class="secondary-button" hidden>
-            Köy merkezine git →
+            Open Command Center →
           </a>
 
           <p class="development-note">
@@ -171,15 +171,15 @@
           </div>
 
           <canvas id="overview" width="240" height="150"
-            aria-label="Dünya sınırları, kendi köyün ve görünen alan"></canvas>
+            aria-label="World bounds, your base, and viewport"></canvas>
 
-          <p>Altın nokta köyünü, çerçeve görüntülediğin alanı gösterir.</p>
+          <p>Gold mark is your base; frame shows the viewport.</p>
         </section>
 
         <div class="world-note">
           <span>☼</span>
           <p>
-            <strong>Her büyük yolculuk bir köy ile başlar.</strong>
+            <strong>Every campaign starts from a Command Center.</strong>
             Orman ve tepeler şimdilik görseldir;
             hareket süresini değiştirmez.
           </p>
@@ -240,7 +240,7 @@
 
       <div id="attack-fields" hidden>
         <div class="attack-unit-row">
-          <label for="attack-spears">⚔ Mızrakçı</label>
+          <label for="attack-spears">⚔ Infantry</label>
 
           <input id="attack-spears" type="number" min="1" step="1" value="1">
 
@@ -249,7 +249,7 @@
           </button>
 
           <span>
-            Köyde: <strong id="available-spears">0</strong>
+            At base: <strong id="available-spears">0</strong>
           </span>
         </div>
 
@@ -259,8 +259,8 @@
       <p id="attack-result" role="status" aria-live="polite"></p>
 
       <p class="command-note">
-        Geliştirme savaş sistemi: yalnızca mızrakçı.
-        Gönderilen birlikler köyden ayrılır; savaşta kaybedilebilir.
+        Geliştirme savaş sistemi: infantry only.
+        Deployed units leave the base and can be lost in combat.
         Destek, yağma ve kaynak sevkiyatı henüz kapalıdır.
       </p>
 

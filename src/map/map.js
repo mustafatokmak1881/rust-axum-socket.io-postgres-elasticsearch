@@ -32,9 +32,9 @@
     };
 
     const affiliationLabels = {
-        own: "Senin köyün",
-        player: "Oyuncu köyü",
-        barbarian: "Barbar köyü",
+        own: "Your base",
+        player: "Enemy base",
+        barbarian: "Neutral outpost",
     };
 
     function status(message, error = false) {
@@ -192,9 +192,9 @@
             }
 
             $("village-count").textContent =
-                `${data.villages.length} köy · görüntü alanı ve kenarları`;
+                `${data.villages.length} bases · görüntü alanı ve kenarları`;
 
-            status("Harita güncel · Köyler PostgreSQL'den yükleniyor.");
+            status("Map live · Bases loading from PostgreSQL.");
             scheduleDraw();
         } catch (error) {
             if (error.name === "AbortError") return;
@@ -305,7 +305,7 @@
         }
 
         // Kıta sınırları.
-        ctx.strokeStyle = "#f4edcb80";
+        ctx.strokeStyle = "#9fc24a55";
         ctx.lineWidth = 2;
 
         if (x % 100 === 0) {
@@ -379,7 +379,7 @@
         const width = size * 0.48;
         const height = size * 0.32;
 
-        ctx.fillStyle = "#d8c497";
+        ctx.fillStyle = "#3a4a30";
         ctx.fillRect(
             point.x - width / 2,
             point.y - height * 0.25,
@@ -539,7 +539,7 @@
         if (!state.ready || !selected) return;
 
         if (selected.affiliation === "own") {
-            status("Kendi köyüne saldıramazsın.", true);
+            status("Cannot attack your own base.", true);
             return;
         }
 
@@ -603,8 +603,8 @@
         }
 
         $("command-information").textContent =
-            "Göndereceğin mızrakçı sayısını seç. " +
-            "Birlikler köyünden hemen ayrılır ve savaşta kaybedilebilir.";
+            "Göndereceğin infantry sayısını seç. " +
+            "Units leave your base immediately and can be lost in battle.";
 
         $("command-submit").textContent = pendingAttack
             ? "Aynı gönderimi tekrar dene"
@@ -889,7 +889,7 @@
                 $("center-selected").disabled = true;
                 $("open-village").hidden = true;
 
-                $("selected-name").textContent = "Bir köy seç";
+                $("selected-name").textContent = "Select a base";
                 $("selected-coordinate").textContent =
                     "Haritadaki bir yerleşime tıkla.";
 
@@ -1087,7 +1087,7 @@
             // İlk sürümde oyuncunun tek köyü var.
             button.disabled = ownVillage;
             button.title = ownVillage
-                ? "Bu komut kendi köyüne gönderilemez."
+                ? "Cannot issue this order against your own base."
                 : "";
         });
 
@@ -1221,7 +1221,7 @@
                 <span>Saldırı</span>
               </div>
               <p>
-                Ordu: <strong>${attack.sent_spears}</strong> mızrakçı
+                Ordu: <strong>${attack.sent_spears}</strong> infantry
                 · Varış:
                 ${escapeMilitaryHtml(militaryDate(attack.arrives_at))}
                 · Kalan:
@@ -1248,11 +1248,11 @@
             militarySnapshot = await militaryApi("/api/military");
 
             $("army-home-count").textContent =
-                `· Köyde ${militarySnapshot.spears} mızrakçı`;
+                `· At base: ${militarySnapshot.spears} infantry`;
 
             const statusNames = {
                 outbound: "Hedefe gidiyor",
-                returning: "Köye dönüyor",
+                returning: "Returning to base",
                 completed: "Tamamlandı",
             };
 
@@ -1287,7 +1287,7 @@
               </div>
 
               <p>
-                Gönderilen: ${attack.sent_spears} mızrakçı
+                Gönderilen: ${attack.sent_spears} infantry
                 · Varış:
                 ${escapeMilitaryHtml(militaryDate(attack.arrives_at))}
                 ${showCountdown && countdownAt ? `
@@ -1304,9 +1304,9 @@
                   · Savunmacı:
                   ${attack.defender_before} → ${attack.defender_after}
                   ${(attack.loot_wood > 0 || attack.loot_clay > 0 || attack.loot_iron > 0) ? `
-                    · Ganimet: ${attack.loot_wood || 0} / ${attack.loot_clay || 0} / ${attack.loot_iron || 0}
+                    · Loot: ${attack.loot_wood || 0} / ${attack.loot_clay || 0} / ${attack.loot_iron || 0}
                   ` : attack.surviving_spears > 0 ? `
-                    · Ganimet: yok
+                    · Loot: yok
                   ` : ""}
                 </p>
               ` : ""}
@@ -1316,7 +1316,7 @@
                   Dönüş:
                   ${escapeMilitaryHtml(militaryDate(attack.returns_at))}
                   ${attack.returned_at
-                    ? ` · Köye ulaştı${(attack.loot_wood > 0 || attack.loot_clay > 0 || attack.loot_iron > 0)
+                    ? ` · Arrived at base${(attack.loot_wood > 0 || attack.loot_clay > 0 || attack.loot_iron > 0)
                         ? ` (+${attack.loot_wood || 0}/${attack.loot_clay || 0}/${attack.loot_iron || 0})`
                         : ""}`
                     : (attack.loot_wood > 0 || attack.loot_clay > 0 || attack.loot_iron > 0)
@@ -1388,7 +1388,7 @@
             state.world = data.world;
             state.home = data.village;
             if (!state.home) {
-                status("Önce ilk köyünü kurmalısın. Köy merkezine yönlendiriliyorsun.");
+                status("Deploy a base first. Redirecting to Command Center.");
                 location.replace("/game");
                 return;
             }
@@ -1408,7 +1408,7 @@
             selectVillage(state.villages[0]);
             centerOn(state.home.x, state.home.y);
 
-            status("Köyün hazır. Çevredeki köyler yükleniyor…");
+            status("Base ready. Loading nearby theaters…");
         } catch (error) {
             status(
                 `${error.message}. Bağlantıyı kontrol edip sayfayı yenile.`,

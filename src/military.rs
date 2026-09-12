@@ -265,7 +265,7 @@ pub async fn bootstrap(
             },
             "units": {
                 "spear": {
-                    "name": "Mızrakçı",
+                    "name": "Infantry",
                     "wood_cost": economy::SPEAR_WOOD_COST,
                     "clay_cost": economy::SPEAR_CLAY_COST,
                     "iron_cost": economy::SPEAR_IRON_COST,
@@ -390,7 +390,7 @@ pub async fn start_recruit(
 
     if barracks_level < 1 {
         return Err(AppError::BadRequest(
-            "Mızrakçı eğitmek için kışla gerekli (Komuta Merkezi 3).",
+            "Build Barracks to train infantry (Command Center 3).",
         ));
     }
 
@@ -410,7 +410,7 @@ pub async fn start_recruit(
 
     if pending {
         return Err(AppError::BadRequest(
-            "Köyünde zaten devam eden bir eğitim var.",
+            "Training already in progress on this base.",
         ));
     }
 
@@ -443,13 +443,13 @@ pub async fn start_recruit(
     let cost = economy::spear_cost(input.count)?;
 
     if resources.wood < cost.wood {
-        return Err(AppError::BadRequest("Yeterli odun yok."));
+        return Err(AppError::BadRequest("Not enough Supplies."));
     }
     if resources.clay < cost.clay {
-        return Err(AppError::BadRequest("Yeterli kil yok."));
+        return Err(AppError::BadRequest("Not enough Fuel."));
     }
     if resources.iron < cost.iron {
-        return Err(AppError::BadRequest("Yeterli demir yok."));
+        return Err(AppError::BadRequest("Not enough Munitions."));
     }
 
     let duration_seconds =
@@ -630,7 +630,7 @@ pub async fn send_attack(
 
     if updated.rows_affected() != 1 {
         return Err(AppError::BadRequest(
-            "Köyünde yeterli mızrakçı yok.",
+            "Not enough infantry at base.",
         ));
     }
 

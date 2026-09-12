@@ -439,7 +439,7 @@ footer {
 }
 
 .faction-card strong {
-  font: bold 16px Georgia, serif;
+  font: bold 16px var(--font-display);
   letter-spacing: 0.04em;
 }
 
@@ -507,7 +507,7 @@ footer {
 
 #village-name {
   display: block;
-  font: bold 21px Georgia, serif;
+  font: bold 21px var(--font-display);
   overflow-wrap: anywhere;
 }
 
@@ -630,7 +630,7 @@ footer {
 .map-title strong {
   display: block;
   margin-top: 5px;
-  font: 19px Georgia, serif;
+  font: 19px var(--font-display);
 }
 
 .map-building {
@@ -660,7 +660,7 @@ footer {
 
 .map-building strong {
   margin-top: 5px;
-  font: bold 13px Georgia, serif;
+  font: bold 13px var(--font-display);
 }
 
 .map-building small {
@@ -1118,7 +1118,7 @@ body {
 .hero-title h1 {
   margin: 0;
   color: #fff1c8;
-  font: bold 33px Georgia, serif;
+  font: bold 33px var(--font-display);
   letter-spacing: 2px;
   text-shadow: 1px 2px 2px #343c22;
 }
@@ -1126,7 +1126,7 @@ body {
 .hero-title p {
   margin: 3px 0 0;
   color: #fff2cf;
-  font: italic 12px Georgia, serif;
+  font: italic 12px var(--font-display);
   text-shadow: 0 1px #414c2d;
 }
 
@@ -1161,7 +1161,7 @@ body {
 
 #village-name {
   color: #65400e;
-  font: bold 15px Georgia, serif;
+  font: bold 15px var(--font-display);
 }
 
 .village-bar .resource {
@@ -1201,7 +1201,7 @@ body {
   background: linear-gradient(#c0392b, #7a1610);
   color: #fff4d8;
   text-decoration: none;
-  font: bold 12px Georgia, serif;
+  font: bold 12px var(--font-display);
   box-shadow: inset 0 1px 0 #e07060;
   animation: incoming-pulse 1.6s ease-in-out infinite;
 }
@@ -1321,7 +1321,7 @@ body {
   background: linear-gradient(#e1c88b, #c4a460);
   border-bottom: 1px solid #9d7d42;
   color: #49310f;
-  font: bold 13px Georgia, serif;
+  font: bold 13px var(--font-display);
 }
 
 .side-panel>a {
@@ -1368,7 +1368,7 @@ body {
   background: linear-gradient(#e6d29d, #caaa65);
   border-bottom: 1px solid #a4864d;
 
-  font: bold 15px Georgia, serif;
+  font: bold 15px var(--font-display);
   text-align: left;
 }
 
@@ -1591,12 +1591,12 @@ input {
 }
 
 .map-title span {
-  font: bold 10px Georgia, serif;
+  font: bold 10px var(--font-display);
   letter-spacing: 1px;
 }
 
 .map-title strong {
-  font: italic bold 12px Georgia, serif;
+  font: italic bold 12px var(--font-display);
 }
 
 .map-building {
@@ -2078,4 +2078,95 @@ input {
 .theme-generals .map-building small {
   background: #2a4a20 !important;
   border-color: var(--hud) !important;
+}
+
+/* === Zero Hour full wipe of parchment leftovers === */
+.theme-generals,
+.theme-generals * {
+  font-family: var(--font-ui);
+}
+
+.theme-generals .hero-title h1,
+.theme-generals .crest,
+.theme-generals .panel > h2,
+.theme-generals .section-title,
+.theme-generals .menu a,
+.theme-generals .menu button,
+.theme-generals .button,
+.theme-generals .top-strip,
+.theme-generals footer {
+  font-family: var(--font-display) !important;
+}
+
+.theme-generals .panel,
+.theme-generals .queue-box,
+.theme-generals .info-box,
+.theme-generals .recruit-panel,
+.theme-generals .army-summary > div,
+.theme-generals .table-scroll,
+.theme-generals .incoming-panel {
+  background: linear-gradient(180deg, #243022, #1a2218) !important;
+  border: 1px solid #455540 !important;
+  box-shadow: inset 0 1px 0 #5a6a5040 !important;
+  color: var(--ink) !important;
+}
+
+.theme-generals .panel > h2 {
+  background: linear-gradient(90deg, #2a3a20, #1e281c) !important;
+  border-bottom: 1px solid #4a5a40 !important;
+  color: var(--warn) !important;
+  text-shadow: none !important;
+}
+
+.theme-generals table,
+.theme-generals th,
+.theme-generals td {
+  background: #1c241a !important;
+  border-color: #354034 !important;
+  color: var(--ink) !important;
+}
+
+.theme-generals th {
+  background: #1a2814 !important;
+  color: var(--warn) !important;
+}
+
+.theme-generals .building-cell small,
+.theme-generals .muted,
+.theme-generals .production-description {
+  color: var(--muted) !important;
+}
+
+.theme-generals .requirement-met {
+  color: var(--hud) !important;
+}
+
+.theme-generals .requirement-missing {
+  color: #f0a090 !important;
+}
+
+.theme-generals .army-summary > div small {
+  color: var(--hud) !important;
+  font-family: var(--font-display) !important;
+  letter-spacing: 0.12em !important;
+}
+
+.theme-generals .army-summary > div strong {
+  color: var(--warn) !important;
+}
+
+.theme-generals .incoming-badge {
+  background: #3a2010 !important;
+  border: 1px solid var(--warn) !important;
+  color: var(--warn) !important;
+}
+
+.theme-generals .village-map {
+  border: 1px solid #4a5a40 !important;
+  box-shadow: inset 0 0 50px #0009 !important;
+}
+
+.theme-generals .onboarding-symbol {
+  color: var(--warn) !important;
+  text-shadow: 0 0 20px #e8c54766 !important;
 }
