@@ -122,12 +122,12 @@ COOKIE_SECURE=false
 RUST_LOG=info,sqlx=warn
 
 # Docker PostgreSQL:
-POSTGRES_DB=umaykut
-POSTGRES_USER=umaykut
+POSTGRES_DB=koalisyon
+POSTGRES_USER=koalisyon
 POSTGRES_PASSWORD=local_dev_change_me
 
 # Host'ta çalışan Rust için:
-DATABASE_URL=postgresql://umaykut:local_dev_change_me@localhost:5432/umaykut
+DATABASE_URL=postgresql://koalisyon:local_dev_change_me@localhost:5432/koalisyon
 
 # Google Cloud Console:
 GOOGLE_CLIENT_ID=replace_me
@@ -163,7 +163,7 @@ node_modules
 ## `compose.yaml`
 
 ```yaml
-name: umaykut-dev
+name: koalisyon-dev
 
 services:
   postgres:
@@ -1362,7 +1362,7 @@ Rust / PostgreSQL transaction
 
 ```json
 {
-  "name": "umaykut-bullmq",
+  "name": "koalisyon-bullmq",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -1747,7 +1747,7 @@ http://localhost:3000/auth/me
 
 ```bash
 docker compose exec -T postgres \
-  psql -U umaykut -d umaykut <<'SQL'
+  psql -U koalisyon -d koalisyon <<'SQL'
 INSERT INTO scheduled_jobs (
     id,
     kind,
@@ -1780,7 +1780,7 @@ PostgreSQL kontrolü:
 
 ```bash
 docker compose exec postgres \
-  psql -U umaykut -d umaykut \
+  psql -U koalisyon -d koalisyon \
   -c "SELECT id, kind, run_at, completed_at FROM scheduled_jobs ORDER BY created_at DESC;"
 ```
 

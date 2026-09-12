@@ -1,4 +1,4 @@
--- Klanlar.org klasik bina kataloğu.
+-- Koalisyon bina kataloğu.
 -- Seviye 0 = henüz inşa edilmemiş.
 
 ALTER TABLE village_buildings

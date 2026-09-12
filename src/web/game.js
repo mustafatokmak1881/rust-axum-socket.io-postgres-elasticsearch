@@ -4,8 +4,8 @@ const $ = (selector) => document.querySelector(selector);
 
 const definitions = {
   headquarters: {
-    name: "Bey otağı",
-    description: "Obanın yönetim merkezi",
+    name: "Ana bina",
+    description: "Köyün yönetim merkezi",
     icon: `/assets/building-headquarters.svg`,
     map: { left: "58%", top: "32%" },
   },
@@ -85,7 +85,7 @@ const definitions = {
   },
   warehouse: {
     name: "Ambar",
-    description: "Obanın kaynak deposu",
+    description: "Köyün kaynak deposu",
     icon: `/assets/building-warehouse.svg`,
     map: { left: "27%", top: "52%" },
   },
@@ -703,7 +703,7 @@ function renderArmyPanel() {
   if (hint) {
     if (!barracksReady) {
       hint.textContent =
-        "Mızrakçı eğitmek için kışla inşa et (Bey otağı seviye 3 gerekir).";
+        "Mızrakçı eğitmek için kışla inşa et (Ana bina seviye 3 gerekir).";
     } else if (training) {
       hint.textContent = "Eğitim tamamlanınca yeni emir verebilirsin.";
     } else {
@@ -966,7 +966,7 @@ $("#create-village").addEventListener("click", (event) => {
     event.currentTarget,
     "/api/villages",
     { method: "POST" },
-    "Oban kuruldu. Yurduna hoş geldin!",
+    "Köyün kuruldu. Hoş geldin!",
   );
 });
 

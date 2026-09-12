@@ -25,7 +25,7 @@ use crate::{
 const MOVEMENT_SPEED: f64 = 540.0;
 const SPEAR_SECONDS_PER_TILE: f64 = 18.0 * 60.0;
 
-/// Klanlar.org mızrakçı taşıma kapasitesi.
+/// Mızrakçı taşıma kapasitesi.
 const SPEAR_CARRY_CAPACITY: i64 = 25;
 
 /// Yeni köy başlangıç ordusu (erken yağma/savunma için).
@@ -390,7 +390,7 @@ pub async fn start_recruit(
 
     if barracks_level < 1 {
         return Err(AppError::BadRequest(
-            "Mızrakçı eğitmek için kışla gerekli (Bey otağı 3).",
+            "Mızrakçı eğitmek için kışla gerekli (Ana bina 3).",
         ));
     }
 
@@ -705,7 +705,7 @@ pub async fn send_attack(
 /// - Mızrakçı piyade savunması: 35
 /// - Zayıf taraf tamamen kaybeder.
 /// - Güçlü taraf oransal, yukarı yuvarlanan kayıp verir.
-/// Bu, Tribal Wars'ın gerçek kayıp formülü değildir.
+/// Bu, gerçek kayıp formülünün basitleştirilmiş geliştirme sürümüdür.
 fn resolve_combat(attacker: i64, defender: i64) -> (i64, i64) {
     let attack_power = i128::from(attacker) * 10;
     let defense_power = i128::from(defender) * 35;

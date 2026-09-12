@@ -7,7 +7,7 @@ use crate::error::AppError;
 
 const MICROS_PER_HOUR: i128 = 3_600_000_000;
 
-/// Klanlar.org / Tribal Wars bina kataloğu (dünya ayarına bağlı
+/// Koalisyon bina kataloğu (dünya ayarına bağlı
 /// tapınak ve gözetleme kulesi hariç).
 pub const BUILDING_KINDS: &[&str] = &[
     "headquarters",
@@ -28,7 +28,7 @@ pub const BUILDING_KINDS: &[&str] = &[
     "wall",
 ];
 
-/// Yeni köyde seviye 1 başlayan binalar (Klanlar.org / modern TW).
+/// Yeni köyde seviye 1 başlayan binalar (Koalisyon başlangıç düzeni).
 /// Oduncu, kil ocağı ve demir madeni oyuncu tarafından inşa edilir.
 pub const STARTING_BUILDINGS: &[(&str, i32)] = &[
     ("headquarters", 1),
@@ -89,7 +89,7 @@ pub struct ResourceCost {
     pub iron: i64,
 }
 
-// Geliştirme maliyetleri (henüz tam TW tabloları değil).
+// Geliştirme maliyetleri (henüz tam dengeli tablolar değil).
 pub fn upgrade_cost(target_level: i32) -> ResourceCost {
     let n = i64::from(target_level);
     ResourceCost {
@@ -118,7 +118,7 @@ fn requirements(kind: &str) -> &'static [(&'static str, i32)] {
 
 pub fn building_name(kind: &str) -> &'static str {
     match kind {
-        "headquarters" => "Bey otağı",
+        "headquarters" => "Ana bina",
         "barracks" => "Kışla",
         "stable" => "Ahır",
         "workshop" => "Atölye",
@@ -146,7 +146,7 @@ pub fn starting_level(kind: &str) -> i32 {
         .unwrap_or(0)
 }
 
-/// Klanlar.org gizli depo kapasitesi (1× dünya).
+/// Gizli depo kapasitesi (1× dünya).
 const HIDING_CAPACITY: [i64; 11] = [
     0, 150, 200, 274, 354, 456, 584, 747, 956, 1222, 1560,
 ];
@@ -161,7 +161,7 @@ pub fn hiding_capacity(level: i32) -> Result<i64, AppError> {
     Ok(HIDING_CAPACITY[level as usize])
 }
 
-/// Klanlar.org 1× dünya çiftlik kapasitesi (yaklaşık).
+/// 1× dünya çiftlik kapasitesi (yaklaşık).
 const FARM_CAPACITY: [i64; 31] = [
     0, 240, 281, 329, 386, 452, 530, 622, 729, 854, 1002, 1174, 1376, 1613,
     1891, 2216, 2598, 3045, 3569, 4183, 4904, 5748, 6737, 7896, 9255, 10848,
@@ -178,7 +178,7 @@ pub fn farm_capacity(level: i32) -> Result<i64, AppError> {
     Ok(FARM_CAPACITY[level as usize])
 }
 
-/// Mızrakçı: Klanlar.org 50 odun / 30 kil / 10 demir.
+/// Mızrakçı: 50 odun / 30 kil / 10 demir.
 pub const SPEAR_WOOD_COST: i64 = 50;
 pub const SPEAR_CLAY_COST: i64 = 30;
 pub const SPEAR_IRON_COST: i64 = 10;

@@ -1187,7 +1187,7 @@
         const badge = $("incoming-badge");
         const countEl = $("incoming-badge-count");
         const sectionCount = $("incoming-section-count");
-        const baseTitle = "Umaykut — Dünya Haritası";
+        const baseTitle = "Koalisyon — Dünya Haritası";
 
         countEl.textContent = String(count);
         sectionCount.textContent = count > 0 ? `(${count})` : "";
@@ -1388,7 +1388,7 @@
             state.world = data.world;
             state.home = data.village;
             if (!state.home) {
-                status("Önce ilk obanı kurmalısın. Köy merkezine yönlendiriliyorsun.");
+                status("Önce ilk köyünü kurmalısın. Köy merkezine yönlendiriliyorsun.");
                 location.replace("/game");
                 return;
             }
@@ -1408,7 +1408,7 @@
             selectVillage(state.villages[0]);
             centerOn(state.home.x, state.home.y);
 
-            status("Oban hazır. Çevredeki köyler yükleniyor…");
+            status("Köyün hazır. Çevredeki köyler yükleniyor…");
         } catch (error) {
             status(
                 `${error.message}. Bağlantıyı kontrol edip sayfayı yenile.`,

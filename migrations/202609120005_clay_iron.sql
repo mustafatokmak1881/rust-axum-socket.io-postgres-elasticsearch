@@ -1,4 +1,4 @@
--- Klanlar.org hammaddeleri: odun, kil, demir.
+-- Hammaddeler: odun, kil, demir.
 ALTER TABLE villages
     ADD COLUMN clay BIGINT NOT NULL DEFAULT 1500 CHECK (clay >= 0),
     ADD COLUMN iron BIGINT NOT NULL DEFAULT 1500 CHECK (iron >= 0),

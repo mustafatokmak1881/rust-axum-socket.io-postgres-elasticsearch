@@ -33,7 +33,7 @@ def wrap(name: str, body: str, prefix: str) -> str:
 
 arts = {
     "headquarters": (
-        "Bey otağı",
+        "Ana bina",
         """
     <path d="M27 70L79 52L118 73L68 94Z" fill="#d4bf87"/>
     <path d="M27 70V107L68 126V94Z" fill="#b5a073"/>

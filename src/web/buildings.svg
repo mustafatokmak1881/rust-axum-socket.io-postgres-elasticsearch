@@ -24,7 +24,7 @@
     </pattern>
   </defs>
 
-  <!-- Bey otağı -->
+  <!-- Ana bina -->
   <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
     <ellipse cx="82" cy="119" rx="64" ry="14"
              fill="#273c25" opacity=".25" stroke="none"/>

@@ -14,7 +14,7 @@
       <path d="M0 2h12M0 8h12" stroke="#685134" stroke-width="2"/>
     </pattern>
   </defs>
-  <!-- Bey otağı -->
+  <!-- Ana bina -->
   <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
     <ellipse cx="80" cy="122" rx="62" ry="12" fill="#273c25" opacity=".28" stroke="none"/>
 

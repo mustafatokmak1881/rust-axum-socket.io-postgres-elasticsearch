@@ -1,4 +1,4 @@
--- Mevcut köyleri Klanlar.org başlangıç düzenine yaklaştır.
+-- Koalisyon başlangıç bina düzeni.
 -- Kaynak binaları (oduncu/kil/demir) başlangıçta yoktur; oyuncu kurar.
 -- İleride yükseltilmiş kaynak binalarına dokunulmaz.
 

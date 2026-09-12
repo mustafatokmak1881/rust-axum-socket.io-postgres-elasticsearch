@@ -3,7 +3,7 @@ CREATE TABLE villages (
     owner_id UUID NOT NULL UNIQUE
         REFERENCES users(id) ON DELETE CASCADE,
 
-    name TEXT NOT NULL DEFAULT 'Yeni Oba',
+    name TEXT NOT NULL DEFAULT 'Yeni Köy',
     wood BIGINT NOT NULL DEFAULT 1500 CHECK (wood >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 

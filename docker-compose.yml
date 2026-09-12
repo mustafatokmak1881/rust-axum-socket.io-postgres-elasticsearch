@@ -1,4 +1,4 @@
-name: umaykut-dev
+name: koalisyon-dev
 
 services:
   postgres:

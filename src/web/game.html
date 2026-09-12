@@ -4,13 +4,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Umaykut — Köy merkezi</title>
+  <title>Koalisyon — Köy merkezi</title>
   <link rel="stylesheet" href="/assets/game.css">
   <script src="/assets/game.js" defer></script>
 </head>
 
 <body>
-  <div class="top-strip">UMAYKUT · GELİŞTİRME DÜNYASI 01</div>
+  <div class="top-strip">KOALİSYON · GELİŞTİRME DÜNYASI 01</div>
 
   <div class="shell game-shell">
     <nav class="menu" aria-label="Oyun menüsü">
@@ -26,8 +26,8 @@
     <header class="hero compact">
       <div class="hero-hills"></div>
       <div class="hero-title">
-        <h1>Umaykut</h1>
-        <p>Bir boyun yükselişi</p>
+        <h1>Koalisyon</h1>
+        <p>Stratejini kur, dünyayı fethet</p>
       </div>
     </header>
 
@@ -35,7 +35,7 @@
       <div id="message" class="notice" role="status" hidden></div>
 
       <section id="loading" class="panel">
-        <h2>Yurduna bağlanılıyor…</h2>
+        <h2>Köyüne bağlanılıyor…</h2>
         <div class="panel-body">
           <p>Oyuncu ve köy bilgileri yükleniyor.</p>
           <button class="button" id="retry" type="button">
@@ -45,18 +45,18 @@
       </section>
 
       <section id="onboarding" class="panel" hidden>
-        <h2>Hoş geldin, beyim</h2>
+        <h2>Hoş geldin</h2>
         <div class="panel-body onboarding-body">
           <span class="onboarding-symbol">⚑</span>
-          <h3>Destanın ilk obanla başlasın.</h3>
+          <h3>İlk köyünle başla.</h3>
           <p>
-            Obanı kurarak 1.500 odun, kil ve demirle
+            Köyünü kurarak 1.500 odun, kil ve demirle
             gelişmeye başlayabilirsin.
             Ana bina, içtima meydanı, çiftlik, ambar ve gizli depo
             hazır gelir; kaynak binalarını sen inşa edersin.
           </p>
           <button id="create-village" class="button large" type="button">
-            İlk obamı kur
+            İlk köyümü kur
           </button>
         </div>
       </section>
@@ -127,8 +127,8 @@
               <div class="panel-body">
                 <div class="village-map">
                   <div class="map-title">
-                    <span>UMAYKUT</span>
-                    <strong>Obanın kalbi</strong>
+                    <span>KOALİSYON</span>
+                    <strong>Köyün kalbi</strong>
                   </div>
 
                   <div id="village-map-buildings"></div>
@@ -276,7 +276,7 @@
 
                 <div class="info-box">
                   Kaynak binaları saatlik üretimi artırır.
-                  Bina koşulları Klanlar.org kurallarına göre kontrol edilir.
+                  Bina koşulları sunucuda kontrol edilir.
                   Maliyetler üç hammadde (odun / kil / demir) olarak alınır.
                 </div>
               </div>
@@ -334,7 +334,7 @@
     </main>
 
     <footer>
-      UMAYKUT · Rust / Axum · PostgreSQL · BullMQ
+      KOALİSYON · Rust / Axum · PostgreSQL · BullMQ
       <span id="sync-status"></span>
     </footer>
   </div>

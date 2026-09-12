@@ -107,9 +107,9 @@ fn village_name_from_account(email: &str) -> String {
     if char_count >= 3 {
         cleaned
     } else if cleaned.is_empty() {
-        "Yeni Oba".to_owned()
+        "Yeni Köy".to_owned()
     } else {
-        format!("{cleaned}oba").chars().take(32).collect()
+        format!("{cleaned}koy").chars().take(32).collect()
     }
 }
 
