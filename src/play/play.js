@@ -242,7 +242,7 @@ function applyDelta(msg) {
     upsertMesh(entity);
   }
   $("#match-caption").textContent =
-    `Tick ${msg.tick} · ${state.entities.size} entities · edge-scroll / WASD`;
+    `Tick ${msg.tick} · ${state.entities.size} entities · edge-scroll`;
 }
 
 /* ---------- Three.js ---------- */
@@ -371,11 +371,6 @@ function initThree(size) {
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onEdgePointerMove);
   canvas.addEventListener("pointerleave", onEdgePointerLeave);
-  if (!initThree._keysBound) {
-    window.addEventListener("keydown", onPanKeyDown);
-    window.addEventListener("keyup", onPanKeyUp);
-    initThree._keysBound = true;
-  }
   animate();
 }
 
@@ -393,44 +388,23 @@ function onEdgePointerLeave() {
   edgeMouse.inside = false;
 }
 
-function onPanKeyDown(event) {
-  const key = event.key.toLowerCase();
-  if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
-    panKeys.add(key);
-    event.preventDefault();
-  }
-}
-
-function onPanKeyUp(event) {
-  panKeys.delete(event.key.toLowerCase());
-}
-
-function applyKeyboardPan() {
-  if (!controls || !camera) return;
+function applyEdgePan() {
+  if (!controls || !camera || !edgeMouse.inside) return;
 
   let dx = 0;
   let dz = 0;
-  const base = 0.42 * (controls.getDistance() / 28);
+  const e = EDGE_SCROLL_PX;
+  const edgeSpeed = 0.7 * (controls.getDistance() / 26);
 
-  if (panKeys.has("w") || panKeys.has("arrowup")) dz -= base;
-  if (panKeys.has("s") || panKeys.has("arrowdown")) dz += base;
-  if (panKeys.has("a") || panKeys.has("arrowleft")) dx -= base;
-  if (panKeys.has("d") || panKeys.has("arrowright")) dx += base;
-
-  // Generals edge scroll: mouse near screen border pans the map.
-  if (edgeMouse.inside) {
-    const e = EDGE_SCROLL_PX;
-    const edgeSpeed = 0.7 * (controls.getDistance() / 26);
-    if (edgeMouse.x < e) {
-      dx -= edgeSpeed * (1 - edgeMouse.x / e);
-    } else if (edgeMouse.x > edgeMouse.w - e) {
-      dx += edgeSpeed * (1 - (edgeMouse.w - edgeMouse.x) / e);
-    }
-    if (edgeMouse.y < e) {
-      dz -= edgeSpeed * (1 - edgeMouse.y / e);
-    } else if (edgeMouse.y > edgeMouse.h - e) {
-      dz += edgeSpeed * (1 - (edgeMouse.h - edgeMouse.y) / e);
-    }
+  if (edgeMouse.x < e) {
+    dx -= edgeSpeed * (1 - edgeMouse.x / e);
+  } else if (edgeMouse.x > edgeMouse.w - e) {
+    dx += edgeSpeed * (1 - (edgeMouse.w - edgeMouse.x) / e);
+  }
+  if (edgeMouse.y < e) {
+    dz -= edgeSpeed * (1 - edgeMouse.y / e);
+  } else if (edgeMouse.y > edgeMouse.h - e) {
+    dz += edgeSpeed * (1 - (edgeMouse.h - edgeMouse.y) / e);
   }
 
   if (!dx && !dz) return;
@@ -599,7 +573,7 @@ function rebuildMeshes() {
 function animate() {
   requestAnimationFrame(animate);
   if (!renderer) return;
-  applyKeyboardPan();
+  applyEdgePan();
   controls?.update();
   renderer.render(scene, camera);
 }
