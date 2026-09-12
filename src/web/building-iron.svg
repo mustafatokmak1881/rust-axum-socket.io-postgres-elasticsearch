@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="140" viewBox="0 0 160 140">
+  <defs>
+    <pattern id="irthatch" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#a98442"/>
+      <path d="M1 0v8M5 0v8" stroke="#d3b36a" stroke-width="2"/>
+      <path d="M0 6h8" stroke="#77582f" stroke-width="1"/>
+    </pattern>
+    <pattern id="irstone" width="18" height="12" patternUnits="userSpaceOnUse">
+      <rect width="18" height="12" fill="#9b9b88"/>
+      <path d="M0 0h18M0 12h18M9 0v6M0 6h18M3 6v6" stroke="#666d61" fill="none"/>
+    </pattern>
+    <pattern id="irwood" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#9b7849"/>
+      <path d="M0 2h12M0 8h12" stroke="#685134" stroke-width="2"/>
+    </pattern>
+  </defs>
+  <!-- Demir madeni -->
+  <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
+    <ellipse cx="80" cy="122" rx="62" ry="12" fill="#273c25" opacity=".28" stroke="none"/>
+
+    <path d="M30 100L80 70L130 100L80 125Z" fill="url(#irstone)"/>
+    <path d="M45 100Q80 85 115 100Q80 115 45 100Z" fill="#2a2a28" stroke="none"/>
+    <path d="M55 98Q80 90 105 98Q80 108 55 98Z" fill="#1a1a18" stroke="none"/>
+    <path d="M100 75L120 40" stroke="#5a4a32" stroke-width="3"/>
+    <path d="M116 42L128 38L122 50Z" fill="#6a6a6a"/>
+    <path d="M40 70L48 50L56 70" fill="#7a7a6a"/>
+    <rect x="35" y="108" width="18" height="8" rx="2" fill="#5a5a50" stroke="none"/>
+    <rect x="108" y="106" width="18" height="8" rx="2" fill="#5a5a50" stroke="none"/>
+
+  </g>
+</svg>

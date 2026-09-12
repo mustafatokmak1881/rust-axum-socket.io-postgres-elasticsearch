@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="140" viewBox="0 0 160 140">
+  <defs>
+    <pattern id="rpthatch" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#a98442"/>
+      <path d="M1 0v8M5 0v8" stroke="#d3b36a" stroke-width="2"/>
+      <path d="M0 6h8" stroke="#77582f" stroke-width="1"/>
+    </pattern>
+    <pattern id="rpstone" width="18" height="12" patternUnits="userSpaceOnUse">
+      <rect width="18" height="12" fill="#9b9b88"/>
+      <path d="M0 0h18M0 12h18M9 0v6M0 6h18M3 6v6" stroke="#666d61" fill="none"/>
+    </pattern>
+    <pattern id="rpwood" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#9b7849"/>
+      <path d="M0 2h12M0 8h12" stroke="#685134" stroke-width="2"/>
+    </pattern>
+  </defs>
+  <!-- İçtima -->
+  <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
+    <ellipse cx="80" cy="122" rx="62" ry="12" fill="#273c25" opacity=".28" stroke="none"/>
+
+    <ellipse cx="80" cy="100" rx="50" ry="22" fill="#6b7a45" stroke="none"/>
+    <ellipse cx="80" cy="100" rx="40" ry="16" fill="#7a8a52" stroke="none"/>
+    <path d="M40 70V105" stroke="#5d4d31" stroke-width="3"/>
+    <path d="M40 70L62 78L40 86Z" fill="#8c3026"/>
+    <path d="M120 68V103" stroke="#5d4d31" stroke-width="3"/>
+    <path d="M120 68L142 76L120 84Z" fill="#2e5a8c"/>
+    <path d="M80 55V100" stroke="#5d4d31" stroke-width="3"/>
+    <path d="M80 55L102 63L80 71Z" fill="#c9a227"/>
+    <circle cx="55" cy="108" r="3" fill="#4a3a28" stroke="none"/>
+    <circle cx="70" cy="112" r="3" fill="#4a3a28" stroke="none"/>
+    <circle cx="90" cy="112" r="3" fill="#4a3a28" stroke="none"/>
+    <circle cx="105" cy="108" r="3" fill="#4a3a28" stroke="none"/>
+
+  </g>
+</svg>

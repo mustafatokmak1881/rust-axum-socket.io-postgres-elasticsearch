@@ -28,15 +28,13 @@ pub const BUILDING_KINDS: &[&str] = &[
     "wall",
 ];
 
-/// Yeni köyde seviye 1 başlayan binalar.
+/// Yeni köyde seviye 1 başlayan binalar (Klanlar.org / modern TW).
+/// Oduncu, kil ocağı ve demir madeni oyuncu tarafından inşa edilir.
 pub const STARTING_BUILDINGS: &[(&str, i32)] = &[
     ("headquarters", 1),
-    ("timber", 1),
-    ("clay", 1),
-    ("iron", 1),
+    ("rally_point", 1),
     ("farm", 1),
     ("warehouse", 1),
-    ("rally_point", 1),
     ("hiding_place", 1),
 ];
 

@@ -12,51 +12,51 @@ const definitions = {
   barracks: {
     name: "Kışla",
     description: "Piyade birliklerinin eğitildiği yer",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-barracks.svg`,
     map: { left: "78%", top: "42%" },
     href: "#army",
   },
   stable: {
     name: "Ahır",
     description: "Atlı birliklerin yetiştirildiği yer",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-stable.svg`,
     map: { left: "86%", top: "58%" },
   },
   workshop: {
     name: "Atölye",
     description: "Kuşatma silahlarının üretildiği yer",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-workshop.svg`,
     map: { left: "72%", top: "62%" },
   },
   academy: {
     name: "Akademi",
     description: "Misyoner eğitimi ve fetih merkezi",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-academy.svg`,
     map: { left: "48%", top: "22%" },
   },
   smithy: {
     name: "Demirci",
     description: "Silah araştırma ve geliştirme",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-smithy.svg`,
     map: { left: "38%", top: "40%" },
   },
   rally_point: {
     name: "İçtima meydanı",
     description: "Orduların toplandığı komuta noktası",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-rally_point.svg`,
     map: { left: "50%", top: "55%" },
     href: "#army",
   },
   statue: {
     name: "Heykel",
     description: "Şövalye anıtı",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-statue.svg`,
     map: { left: "62%", top: "48%" },
   },
   market: {
     name: "Pazar",
     description: "Ticaret ve hammadde gönderimi",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-market.svg`,
     map: { left: "34%", top: "70%" },
   },
   timber: {
@@ -68,19 +68,19 @@ const definitions = {
   clay: {
     name: "Kil ocağı",
     description: "Kil üretimi",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-clay.svg`,
     map: { left: "14%", top: "62%" },
   },
   iron: {
     name: "Demir madeni",
     description: "Demir üretimi",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-iron.svg`,
     map: { left: "22%", top: "78%" },
   },
   farm: {
     name: "Çiftlik",
     description: "Nüfus ve birlik beslemesi",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-farm.svg`,
     map: { left: "42%", top: "78%" },
   },
   warehouse: {
@@ -92,13 +92,13 @@ const definitions = {
   hiding_place: {
     name: "Gizli depo",
     description: "Yağmalanamayan gizlenmiş kaynaklar",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-hiding_place.svg`,
     map: { left: "66%", top: "76%" },
   },
   wall: {
     name: "Duvar",
     description: "Köy savunmasını güçlendirir",
-    icon: `/assets/building-generic.svg`,
+    icon: `/assets/building-wall.svg`,
     map: { left: "88%", top: "78%" },
   },
 };

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="140" viewBox="0 0 160 140">
+  <defs>
+    <pattern id="smthatch" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#a98442"/>
+      <path d="M1 0v8M5 0v8" stroke="#d3b36a" stroke-width="2"/>
+      <path d="M0 6h8" stroke="#77582f" stroke-width="1"/>
+    </pattern>
+    <pattern id="smstone" width="18" height="12" patternUnits="userSpaceOnUse">
+      <rect width="18" height="12" fill="#9b9b88"/>
+      <path d="M0 0h18M0 12h18M9 0v6M0 6h18M3 6v6" stroke="#666d61" fill="none"/>
+    </pattern>
+    <pattern id="smwood" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#9b7849"/>
+      <path d="M0 2h12M0 8h12" stroke="#685134" stroke-width="2"/>
+    </pattern>
+  </defs>
+  <!-- Demirci -->
+  <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
+    <ellipse cx="80" cy="122" rx="62" ry="12" fill="#273c25" opacity=".28" stroke="none"/>
+
+    <path d="M28 85L80 58L132 85L80 112Z" fill="#a89068"/>
+    <path d="M28 85V110L80 132V112Z" fill="#7a6545"/>
+    <path d="M80 112L132 85V110L80 132Z" fill="#968058"/>
+    <path d="M36 85L80 35L124 85Z" fill="#5a4a3a"/>
+    <path d="M100 50L108 20L116 50" fill="#6a6a6a" stroke="#4a4a4a"/>
+    <path d="M104 20Q108 8 112 20" fill="none" stroke="#888" stroke-width="2" opacity=".6"/>
+    <ellipse cx="55" cy="118" rx="12" ry="6" fill="#4a4a4a" stroke="none"/>
+    <path d="M48 112H62V118H48Z" fill="#3a3a3a" stroke="none"/>
+    <path d="M70 132V108H90V132Z" fill="#4d4533"/>
+    <circle cx="115" cy="105" r="8" fill="#ff8c40" opacity=".7" stroke="none"/>
+    <circle cx="115" cy="105" r="4" fill="#ffcc66" stroke="none"/>
+
+  </g>
+</svg>

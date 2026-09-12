@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="140" viewBox="0 0 160 140">
+  <defs>
+    <pattern id="brthatch" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#a98442"/>
+      <path d="M1 0v8M5 0v8" stroke="#d3b36a" stroke-width="2"/>
+      <path d="M0 6h8" stroke="#77582f" stroke-width="1"/>
+    </pattern>
+    <pattern id="brstone" width="18" height="12" patternUnits="userSpaceOnUse">
+      <rect width="18" height="12" fill="#9b9b88"/>
+      <path d="M0 0h18M0 12h18M9 0v6M0 6h18M3 6v6" stroke="#666d61" fill="none"/>
+    </pattern>
+    <pattern id="brwood" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#9b7849"/>
+      <path d="M0 2h12M0 8h12" stroke="#685134" stroke-width="2"/>
+    </pattern>
+  </defs>
+  <!-- Kışla -->
+  <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
+    <ellipse cx="80" cy="122" rx="62" ry="12" fill="#273c25" opacity=".28" stroke="none"/>
+
+    <path d="M18 78L80 48L142 78L80 108Z" fill="#c4a46a"/>
+    <path d="M18 78V108L80 132V108Z" fill="url(#brwood)"/>
+    <path d="M80 108L142 78V108L80 132Z" fill="#b8955f"/>
+    <path d="M28 78L80 22L132 78Z" fill="url(#brthatch)"/>
+    <path d="M28 78L80 22L132 78" fill="none" stroke="#624b29" stroke-width="2.5"/>
+    <path d="M70 132V100H90V132Z" fill="#4d4533"/>
+    <path d="M40 88V112M55 95V118M105 95V118M120 88V112" stroke="#5a4a32" stroke-width="3"/>
+    <path d="M48 70L52 50M62 68L66 48M98 68L94 48M112 70L108 50" stroke="#7a6a4a" stroke-width="2"/>
+    <circle cx="52" cy="48" r="3" fill="#8a3030" stroke="none"/>
+    <circle cx="66" cy="46" r="3" fill="#8a3030" stroke="none"/>
+    <circle cx="94" cy="46" r="3" fill="#8a3030" stroke="none"/>
+    <circle cx="108" cy="48" r="3" fill="#8a3030" stroke="none"/>
+
+  </g>
+</svg>

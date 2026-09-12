@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="140" viewBox="0 0 160 140">
+  <defs>
+    <pattern id="szthatch" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#a98442"/>
+      <path d="M1 0v8M5 0v8" stroke="#d3b36a" stroke-width="2"/>
+      <path d="M0 6h8" stroke="#77582f" stroke-width="1"/>
+    </pattern>
+    <pattern id="szstone" width="18" height="12" patternUnits="userSpaceOnUse">
+      <rect width="18" height="12" fill="#9b9b88"/>
+      <path d="M0 0h18M0 12h18M9 0v6M0 6h18M3 6v6" stroke="#666d61" fill="none"/>
+    </pattern>
+    <pattern id="szwood" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect width="12" height="12" fill="#9b7849"/>
+      <path d="M0 2h12M0 8h12" stroke="#685134" stroke-width="2"/>
+    </pattern>
+  </defs>
+  <!-- Heykel -->
+  <g stroke="#4e4833" stroke-width="1.5" stroke-linejoin="round">
+    <ellipse cx="80" cy="122" rx="62" ry="12" fill="#273c25" opacity=".28" stroke="none"/>
+
+    <path d="M50 115L80 100L110 115L80 130Z" fill="url(#szstone)"/>
+    <path d="M55 115V125L80 135V125Z" fill="#7a7a6a"/>
+    <path d="M80 125L105 115V125L80 135Z" fill="#9a9a88"/>
+    <rect x="70" y="70" width="20" height="40" fill="#b0b0a0" stroke="none"/>
+    <circle cx="80" cy="58" r="12" fill="#c0c0b0" stroke="none"/>
+    <path d="M68 78L55 95L62 98L72 85Z" fill="#b0b0a0" stroke="none"/>
+    <path d="M92 78L105 95L98 98L88 85Z" fill="#b0b0a0" stroke="none"/>
+    <path d="M72 110L68 125H76L78 110Z" fill="#a0a090" stroke="none"/>
+    <path d="M88 110L84 125H92L90 110Z" fill="#a0a090" stroke="none"/>
+    <path d="M80 46L88 40L80 50Z" fill="#8c3026" stroke="none"/>
+
+  </g>
+</svg>
