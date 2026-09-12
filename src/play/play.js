@@ -507,19 +507,91 @@ function onPointerDown(event) {
   }
 }
 
+function entityColors(entity) {
+  const fallback = [0x888888, 0x555555, 0x333333];
+  const c = entity.colors;
+  if (!Array.isArray(c) || c.length < 3) return fallback;
+  return [c[0] >>> 0, c[1] >>> 0, c[2] >>> 0];
+}
+
+function makeNameSprite(text, colors) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Tricolor identity bar
+  const bandW = canvas.width / 3;
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = `#${(colors[i] >>> 0).toString(16).padStart(6, "0")}`;
+    ctx.fillRect(i * bandW, 0, bandW, 10);
+  }
+
+  ctx.font = "bold 22px Segoe UI, Tahoma, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.fillStyle = "#f4f1e8";
+  const label = String(text || "?").slice(0, 18);
+  ctx.strokeText(label, canvas.width / 2, 38);
+  ctx.fillText(label, canvas.width / 2, 38);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(3.2, 0.8, 1);
+  sprite.center.set(0.5, 0);
+  return sprite;
+}
+
+function attachOwnerMarkings(mesh, entity) {
+  const colors = entityColors(entity);
+  const name = entity.owner_name || "Player";
+
+  // Three vertical color bands on the building
+  const bandGeo = new THREE.BoxGeometry(0.22, entity.kind === "hq" ? 1.5 : 1.05, 0.08);
+  for (let i = 0; i < 3; i++) {
+    const band = new THREE.Mesh(
+      bandGeo,
+      new THREE.MeshStandardMaterial({
+        color: colors[i],
+        metalness: 0.05,
+        roughness: 0.55,
+        emissive: colors[i],
+        emissiveIntensity: 0.12,
+      }),
+    );
+    const y = entity.kind === "hq" ? 1.1 : 0.85;
+    band.position.set(-0.45 + i * 0.45, y, 0.85);
+    band.name = `colorBand${i}`;
+    mesh.add(band);
+  }
+
+  const sprite = makeNameSprite(name, colors);
+  sprite.position.set(0, entity.kind === "hq" ? 3.2 : 2.4, 0);
+  sprite.name = "ownerLabel";
+  mesh.add(sprite);
+  mesh.userData.ownerLabel = sprite;
+}
+
 function colorFor(entity) {
-  if (entity.kind === "hq") return 0xe8c547;
-  if (entity.building) return entity.team === 0 ? 0x5a8a45 : 0x9a5545;
-  if (entity.kind.includes("tank")) return 0x6a7a50;
-  return 0xb0c080;
+  return entityColors(entity)[0];
 }
 
 function upsertMesh(entity) {
   let mesh = state.meshes.get(entity.id);
+  const colors = entityColors(entity);
 
   if (!mesh) {
     const mat = new THREE.MeshStandardMaterial({
-      color: colorFor(entity),
+      color: colors[0],
       metalness: 0.15,
       roughness: 0.72,
     });
@@ -542,10 +614,24 @@ function upsertMesh(entity) {
     scene.add(mesh);
     state.meshes.set(entity.id, mesh);
 
+    if (entity.building) {
+      attachOwnerMarkings(mesh, entity);
+    } else {
+      // Units: small tricolor fin for ownership at a glance.
+      for (let i = 0; i < 3; i++) {
+        const fin = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12, 0.35, 0.05),
+          new THREE.MeshStandardMaterial({ color: colors[i] }),
+        );
+        fin.position.set(-0.18 + i * 0.18, 0.55, 0.2);
+        mesh.add(fin);
+      }
+    }
+
     if (entity.flag) {
       const flag = new THREE.Mesh(
         new THREE.BoxGeometry(0.12, 1.1, 0.35),
-        new THREE.MeshStandardMaterial({ color: 0xf0d060 }),
+        new THREE.MeshStandardMaterial({ color: colors[2] }),
       );
       flag.position.set(0.9, 1.4, 0);
       mesh.add(flag);
@@ -558,10 +644,27 @@ function upsertMesh(entity) {
     mesh.position.set(entity.x, 0.35, entity.y);
   }
 
-  mesh.material.color.setHex(colorFor(entity));
+  mesh.material.color.setHex(colors[0]);
   const building = entity.progress != null && entity.progress < 1;
   mesh.material.opacity = building ? 0.55 : 1;
   mesh.material.transparent = mesh.material.opacity < 1;
+
+  // Refresh label if owner name/colors changed (rare).
+  const label = mesh.userData.ownerLabel;
+  if (label && entity.building) {
+    const key = `${entity.owner_name}|${colors.join(",")}`;
+    if (mesh.userData.labelKey !== key) {
+      mesh.remove(label);
+      label.material.map?.dispose();
+      label.material.dispose();
+      const sprite = makeNameSprite(entity.owner_name || "Player", colors);
+      sprite.position.set(0, entity.kind === "hq" ? 3.2 : 2.4, 0);
+      sprite.name = "ownerLabel";
+      mesh.add(sprite);
+      mesh.userData.ownerLabel = sprite;
+      mesh.userData.labelKey = key;
+    }
+  }
 }
 
 function rebuildMeshes() {

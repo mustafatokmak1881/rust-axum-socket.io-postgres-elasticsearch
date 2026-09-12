@@ -149,6 +149,8 @@ pub struct EntityView {
     pub id: Uuid,
     pub kind: String,
     pub owner: Uuid,
+    pub owner_name: String,
+    pub colors: [u32; 3],
     pub team: u8,
     pub x: f32,
     pub y: f32,

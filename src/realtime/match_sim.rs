@@ -19,6 +19,8 @@ pub struct PlayerState {
     pub faction: String,
     pub team: u8,
     pub flag: Option<String>,
+    /// Three-band identity colors (body / stripe / accent) — shared across many players via schemes.
+    pub colors: [u32; 3],
     pub resources: Resources,
     pub focus: [f32; 2],
     pub alive: bool,
@@ -33,6 +35,38 @@ impl PlayerState {
     pub fn is(&self, id: Uuid) -> bool {
         self.user_id == id
     }
+}
+
+/// Distinct tricolor schemes so ownership stays readable even with many players.
+/// Reuses by wrap-around past the table length (100 players → still recognizable bands).
+pub fn color_scheme_for_slot(slot: usize) -> [u32; 3] {
+    const SCHEMES: &[[u32; 3]] = &[
+        [0xc62828, 0xf5f5f5, 0x1565c0], // red · white · blue
+        [0xf9a825, 0x212121, 0x2e7d32], // yellow · black · green
+        [0x6a1b9a, 0xff6f00, 0x00838f], // purple · orange · teal
+        [0xffffff, 0xc62828, 0x212121], // white · red · black
+        [0x1565c0, 0xf9a825, 0xffffff], // blue · yellow · white
+        [0x2e7d32, 0xffffff, 0xc62828], // green · white · red
+        [0xff6f00, 0x1565c0, 0x212121], // orange · blue · black
+        [0x00838f, 0xf5f5f5, 0x6a1b9a], // teal · white · purple
+        [0xad1457, 0x81d4fa, 0x33691e], // magenta · lightblue · darkgreen
+        [0x4e342e, 0xffeb3b, 0xd32f2f], // brown · yellow · red
+        [0x1a237e, 0xeeff41, 0xe65100], // navy · lime · orange
+        [0x00695c, 0xffcdd2, 0x311b92], // green · pink · indigo
+        [0xbf360c, 0xb3e5fc, 0x263238], // deep orange · sky · charcoal
+        [0x4527a0, 0xa5d6a7, 0xff8f00], // violet · mint · amber
+        [0x37474f, 0xff1744, 0x00e5ff], // slate · neon red · cyan
+        [0xfafafa, 0x00c853, 0x0d47a1], // white · green · blue
+        [0xffd600, 0x880e4f, 0x00bfa5], // gold · wine · aqua
+        [0x3e2723, 0xffffff, 0x1565c0], // brown · white · blue
+        [0xd50000, 0x00e676, 0x212121], // red · lime · black
+        [0x0277bd, 0xffecb3, 0x4a148c], // blue · cream · purple
+        [0x558b2f, 0xff5252, 0xeceff1], // olive · coral · silver
+        [0x5d4037, 0x40c4ff, 0xffab00], // brown · azure · amber
+        [0x7b1fa2, 0xc8e6c9, 0xb71c1c], // purple · pale green · red
+        [0x01579b, 0xfff176, 0x1b5e20], // blue · pale yellow · green
+    ];
+    SCHEMES[slot % SCHEMES.len()]
 }
 
 #[derive(Clone, Debug)]
@@ -283,6 +317,8 @@ impl MatchSim {
 
         for (user_id, name, faction, team, flag) in roster.into_iter() {
             let (x, y) = sim.allocate_spawn_xy();
+            let slot = sim.players.len();
+            let colors = color_scheme_for_slot(slot);
 
             sim.players.insert(
                 user_id,
@@ -292,6 +328,7 @@ impl MatchSim {
                     faction,
                     team,
                     flag: flag.clone(),
+                    colors,
                     resources: Resources::starter(),
                     focus: [x, y],
                     alive: true,
@@ -408,6 +445,7 @@ impl MatchSim {
         };
 
         let (x, y) = self.allocate_spawn_xy();
+        let colors = color_scheme_for_slot(index);
 
         self.players.insert(
             user_id,
@@ -417,6 +455,7 @@ impl MatchSim {
                 faction,
                 team,
                 flag: flag.clone(),
+                colors,
                 resources: Resources::starter(),
                 focus: [x, y],
                 alive: true,
@@ -497,7 +536,7 @@ impl MatchSim {
         let focus = player.focus;
         let entities = aoi::visible_entities(self.entities.values(), focus[0], focus[1], user_id)
             .into_iter()
-            .map(|e| e.view())
+            .map(|e| self.entity_view(e))
             .collect();
 
         Some(MatchSnapshot {
@@ -930,7 +969,7 @@ impl MatchSim {
         let entities = aoi::visible_entities(self.entities.values(), focus[0], focus[1], user_id)
             .into_iter()
             .filter(|e| e.dirty || e.unit || e.build_remaining_ms > 0)
-            .map(|e| e.view())
+            .map(|e| self.entity_view(e))
             .collect();
 
         let removed = self.removed.clone();
@@ -943,30 +982,36 @@ impl MatchSim {
         }
         self.removed.clear();
     }
-}
 
-impl Entity {
-    pub fn view(&self) -> EntityView {
-        let progress = if self.build_remaining_ms > 0 {
-            Some(1.0 - (self.build_remaining_ms as f32 / 15_000.0).min(1.0))
+    fn entity_view(&self, entity: &Entity) -> EntityView {
+        let (owner_name, colors) = self
+            .players
+            .get(&entity.owner)
+            .map(|p| (p.name.clone(), p.colors))
+            .unwrap_or_else(|| ("Unknown".into(), [0x888888, 0x555555, 0x333333]));
+
+        let progress = if entity.build_remaining_ms > 0 {
+            Some(1.0 - (entity.build_remaining_ms as f32 / 15_000.0).min(1.0))
         } else {
-            self.train_queue.front().map(|j| {
+            entity.train_queue.front().map(|j| {
                 1.0 - (j.remaining_ms as f32 / 12_000.0).min(1.0)
             })
         };
 
         EntityView {
-            id: self.id,
-            kind: self.kind.clone(),
-            owner: self.owner,
-            team: self.team,
-            x: self.x,
-            y: self.y,
-            hp: self.hp,
-            max_hp: self.max_hp,
-            building: self.building,
-            unit: self.unit,
-            flag: self.flag.clone(),
+            id: entity.id,
+            kind: entity.kind.clone(),
+            owner: entity.owner,
+            owner_name,
+            colors,
+            team: entity.team,
+            x: entity.x,
+            y: entity.y,
+            hp: entity.hp,
+            max_hp: entity.max_hp,
+            building: entity.building,
+            unit: entity.unit,
+            flag: entity.flag.clone(),
             progress,
         }
     }
