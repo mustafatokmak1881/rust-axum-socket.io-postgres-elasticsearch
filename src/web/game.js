@@ -143,6 +143,9 @@ function buildingIcon(definition) {
     src="${definition.icon}"
     alt=""
     class="building-art"
+    width="52"
+    height="44"
+    loading="lazy"
   >`;
 }
 
@@ -487,6 +490,9 @@ function render() {
               src="${definition.icon}"
               alt="${escapeHtml(definition.name)}"
               class="village-building-art"
+              width="140"
+              height="100"
+              loading="lazy"
             >
             <strong>${escapeHtml(definition.name)}</strong>
             <small>Seviye ${offer.level}</small>

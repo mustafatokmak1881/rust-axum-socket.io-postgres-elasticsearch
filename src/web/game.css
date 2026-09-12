@@ -785,12 +785,23 @@ tr:nth-child(even) td {
 .building-icon {
   display: grid;
   place-items: center;
-  width: 35px;
-  height: 35px;
-  border: 2px ridge #bfa16b;
-  background: #dfcd9e;
-  font-size: 24px;
-  color: #87643b;
+  flex: 0 0 56px;
+  width: 56px;
+  height: 48px;
+  overflow: hidden;
+  border: 1px solid #455540;
+  background: #121810;
+  padding: 0;
+}
+
+.building-art {
+  display: block;
+  width: 52px;
+  height: 44px;
+  max-width: 52px;
+  max-height: 44px;
+  object-fit: contain;
+  object-position: center bottom;
 }
 
 .completed {
@@ -1776,4 +1787,33 @@ body input {
 body .muted,
 body .info-box {
   color: #8fa07a !important;
+}
+
+/* Building list icons — hard size lock */
+body .building-icon {
+  flex: 0 0 56px !important;
+  width: 56px !important;
+  height: 48px !important;
+  max-width: 56px !important;
+  max-height: 48px !important;
+  overflow: hidden !important;
+  border: 1px solid #455540 !important;
+  background: #121810 !important;
+}
+
+body .building-art {
+  width: 52px !important;
+  height: 44px !important;
+  max-width: 52px !important;
+  max-height: 44px !important;
+  object-fit: contain !important;
+  object-position: center bottom !important;
+}
+
+body .village-building-art {
+  max-width: 140px !important;
+  max-height: 100px !important;
+  width: auto !important;
+  height: auto !important;
+  object-fit: contain !important;
 }
