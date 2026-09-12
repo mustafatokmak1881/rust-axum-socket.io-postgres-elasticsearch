@@ -1439,23 +1439,15 @@ input {
   overflow: hidden;
   isolation: isolate;
 
-  background-color: #819747;
-  background-image:
-    radial-gradient(ellipse at 50% 59%, #c4b173 0 15%, transparent 16%),
-    linear-gradient(132deg, transparent 44%, #bcaa70 45% 47%, transparent 48%),
-    linear-gradient(35deg, transparent 44%, #bcaa70 45% 47%, transparent 48%),
-    radial-gradient(ellipse at 8% 20%, #3f652f 0 10%, transparent 21%),
-    radial-gradient(ellipse at 87% 15%, #486b31 0 12%, transparent 23%),
-    radial-gradient(ellipse at 84% 92%, #41652d 0 13%, transparent 25%),
-    radial-gradient(ellipse at 12% 90%, #4b6a32 0 12%, transparent 25%),
-    repeating-linear-gradient(115deg,
-      #ffffff05 0 2px,
-      #28421b09 3px 5px,
-      transparent 6px 9px);
+  background-color: #5f7a35;
+  background-image: url("/assets/village-terrain.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 
   border: 2px ridge #9d8953;
   border-radius: 0;
-  box-shadow: inset 0 0 45px #293d2555;
+  box-shadow: inset 0 0 55px #1c2a1440;
 }
 
 .village-map::before {
@@ -1463,18 +1455,12 @@ input {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  z-index: 1;
 
-  background-image:
-    radial-gradient(ellipse at center, #45602c 0 22%, #5c7534 24% 36%, transparent 40%),
-    radial-gradient(ellipse at center, #526d31 0 24%, #6a8140 26% 35%, transparent 39%);
-
-  background-size: 81px 72px, 113px 91px;
-  background-position: 8px 14px, 44px 32px;
-
-  /* Ağaç dokusu köyün kenarlarında yoğunlaşır. */
-  -webkit-mask-image: radial-gradient(ellipse, transparent 37%, black 76%);
-  mask-image: radial-gradient(ellipse, transparent 37%, black 76%);
-  opacity: .9;
+  background:
+    radial-gradient(ellipse at 50% 55%, transparent 42%, #1a2a1288 100%),
+    linear-gradient(180deg, #2a3a1888 0, transparent 42px),
+    linear-gradient(0deg, #1c2a1499 0, transparent 36px);
 }
 
 .map-title {

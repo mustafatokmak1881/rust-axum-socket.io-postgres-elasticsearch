@@ -45,6 +45,14 @@ pub async fn javascript() -> impl IntoResponse {
     )
 }
 
+pub async fn village_terrain_art() -> Response {
+    (
+        [(header::CONTENT_TYPE, "image/jpeg")],
+        include_bytes!("village-terrain.jpg").as_slice(),
+    )
+        .into_response()
+}
+
 pub async fn building_art() -> impl axum::response::IntoResponse {
     (
         [(
@@ -65,7 +73,6 @@ fn building_svg(kind: &str) -> Option<&'static str> {
         "statue" => include_str!("building-statue.svg"),
         "market" => include_str!("building-market.svg"),
         "timber" => include_str!("building-timber.svg"),
-        "clay" => include_str!("building-clay.svg"),
         "iron" => include_str!("building-iron.svg"),
         "farm" => include_str!("building-farm.svg"),
         "warehouse" => include_str!("building-warehouse.svg"),
@@ -80,6 +87,7 @@ fn building_png(kind: &str) -> Option<&'static [u8]> {
     Some(match kind {
         "headquarters" => include_bytes!("center-build.png").as_slice(),
         "barracks" => include_bytes!("kisla.png").as_slice(),
+        "clay" => include_bytes!("kil-ocagi.png").as_slice(),
         _ => return None,
     })
 }

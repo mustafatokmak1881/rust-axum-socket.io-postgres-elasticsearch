@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/military/recruit", post(military::start_recruit))
         .route("/assets/buildings/{kind}", get(web::building_kind_art))
         .route("/assets/buildings.svg", get(web::building_art))
+        .route("/assets/village-terrain.jpg", get(web::village_terrain_art))
         .route("/map", get(map::page))
         .route("/assets/map.css", get(map::stylesheet))
         .route("/assets/map.js", get(map::javascript))
