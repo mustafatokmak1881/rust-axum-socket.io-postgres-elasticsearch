@@ -57,8 +57,6 @@ pub async fn building_art() -> impl axum::response::IntoResponse {
 
 fn building_svg(kind: &str) -> Option<&'static str> {
     Some(match kind {
-        "headquarters" => include_str!("building-headquarters.svg"),
-        "barracks" => include_str!("building-barracks.svg"),
         "stable" => include_str!("building-stable.svg"),
         "workshop" => include_str!("building-workshop.svg"),
         "academy" => include_str!("building-academy.svg"),
@@ -78,19 +76,33 @@ fn building_svg(kind: &str) -> Option<&'static str> {
     })
 }
 
-fn svg_response(svg: &'static str) -> impl axum::response::IntoResponse {
+fn building_png(kind: &str) -> Option<&'static [u8]> {
+    Some(match kind {
+        "headquarters" => include_bytes!("center-build.png").as_slice(),
+        "barracks" => include_bytes!("kisla.png").as_slice(),
+        _ => return None,
+    })
+}
+
+fn svg_response(svg: &'static str) -> Response {
     (
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "image/svg+xml; charset=utf-8",
-        )],
+        [(header::CONTENT_TYPE, "image/svg+xml; charset=utf-8")],
         svg,
     )
+        .into_response()
+}
+
+fn png_response(png: &'static [u8]) -> Response {
+    ([(header::CONTENT_TYPE, "image/png")], png).into_response()
 }
 
 pub async fn building_kind_art(
     axum::extract::Path(kind): axum::extract::Path<String>,
-) -> Result<impl axum::response::IntoResponse, crate::error::AppError> {
+) -> Result<Response, crate::error::AppError> {
+    if let Some(png) = building_png(&kind) {
+        return Ok(png_response(png));
+    }
+
     let svg = building_svg(&kind).ok_or(crate::error::AppError::NotFound)?;
     Ok(svg_response(svg))
 }

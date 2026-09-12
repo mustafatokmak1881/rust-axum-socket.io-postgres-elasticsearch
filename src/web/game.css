@@ -1345,9 +1345,12 @@ tbody tr:hover td {
 
 .building-art {
   display: block;
-  width: 48px;
-  height: 43px;
+  width: auto;
+  height: auto;
+  max-width: 48px;
+  max-height: 43px;
   object-fit: contain;
+  object-position: center bottom;
 }
 
 .button {
@@ -1508,8 +1511,8 @@ input {
   align-items: center;
   justify-content: flex-end;
 
-  width: 92px;
-  height: 108px;
+  width: 160px;
+  height: 140px;
   margin: 0;
   padding: 0;
 
@@ -1531,9 +1534,13 @@ input {
 
 .village-building-art {
   display: block;
-  width: 84px;
-  height: 74px;
+  width: auto;
+  height: auto;
+  max-width: 150px;
+  max-height: 110px;
+  flex-shrink: 0;
   object-fit: contain;
+  object-position: center bottom;
   filter: drop-shadow(5px 8px 3px #26351b66);
 }
 
@@ -1543,7 +1550,7 @@ input {
 }
 
 .map-building strong {
-  max-width: 92px;
+  max-width: 150px;
   padding: 2px 5px;
   margin-top: -2px;
   background: #344523d9;
@@ -1561,7 +1568,7 @@ input {
 .map-building small {
   position: absolute;
   top: 4px;
-  right: 0;
+  right: 12px;
   padding: 2px 4px;
   color: #fff7ce;
   background: #3d6129;
@@ -1635,13 +1642,13 @@ input {
   }
 
   .map-building {
-    width: 76px;
-    height: 92px;
+    width: 130px;
+    height: 120px;
   }
 
   .village-building-art {
-    width: 70px;
-    height: 62px;
+    max-width: 120px;
+    max-height: 90px;
   }
 
   .map-building strong,
