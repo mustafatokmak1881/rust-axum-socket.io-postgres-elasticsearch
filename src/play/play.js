@@ -191,9 +191,21 @@ async function setupMatchScene(snapshot) {
   renderUnitList(snapshot.trainable || []);
   await ensureBuildingModel();
   const terrain = await loadTerrainTexture(snapshot.map_size);
-  initThree(snapshot.map_size, terrain);
+  const home = findOwnHome(snapshot);
+  initThree(snapshot.map_size, terrain, home);
   rebuildMeshes();
   toast("Match live — move mouse to screen edges to pan");
+}
+
+function findOwnHome(snapshot) {
+  const you = snapshot.you;
+  const hq = (snapshot.entities || []).find(
+    (e) => e.owner === you && e.kind === "hq",
+  );
+  if (hq) return { x: hq.x, z: hq.y };
+  const any = (snapshot.entities || []).find((e) => e.owner === you);
+  if (any) return { x: any.x, z: any.y };
+  return { x: snapshot.map_size / 2, z: snapshot.map_size / 2 };
 }
 
 function updateResources(res) {
@@ -428,7 +440,7 @@ function scatterGroundDecor(scene, size) {
   scene.add(group);
 }
 
-function initThree(size, terrainTexture) {
+function initThree(size, terrainTexture, home) {
   mapSize = size;
   const canvas = $("#viewport");
   ghostMesh = null;
@@ -453,17 +465,19 @@ function initThree(size, terrainTexture) {
     Math.max(800, size * 4),
   );
 
+  const lookX = home?.x ?? size / 2;
+  const lookZ = home?.z ?? size / 2;
   const cx = size / 2;
   const cz = size / 2;
   const dist = Math.min(48, size * 0.28);
   camera.position.set(
-    cx,
+    lookX,
     Math.sin(CAMERA_PITCH) * dist,
-    cz + Math.cos(CAMERA_PITCH) * dist,
+    lookZ + Math.cos(CAMERA_PITCH) * dist,
   );
 
   controls = new OrbitControls(camera, canvas);
-  controls.target.set(cx, 0, cz);
+  controls.target.set(lookX, 0, lookZ);
   // Fixed Generals angle: no free rotate.
   controls.enableRotate = false;
   controls.enablePan = false;
@@ -824,26 +838,6 @@ function makeNameSprite(text, colors) {
 function attachOwnerMarkings(mesh, entity) {
   const colors = entityColors(entity);
   const name = entity.owner_name || "Player";
-
-  // Three vertical color bands on the building
-  const bandGeo = new THREE.BoxGeometry(0.22, entity.kind === "hq" ? 1.5 : 1.05, 0.08);
-  for (let i = 0; i < 3; i++) {
-    const band = new THREE.Mesh(
-      bandGeo,
-      new THREE.MeshStandardMaterial({
-        color: colors[i],
-        metalness: 0.05,
-        roughness: 0.55,
-        emissive: colors[i],
-        emissiveIntensity: 0.12,
-      }),
-    );
-    const y = entity.kind === "hq" ? 1.1 : 0.85;
-    band.position.set(-0.45 + i * 0.45, y, 0.85);
-    band.name = `colorBand${i}`;
-    mesh.add(band);
-  }
-
   const sprite = makeNameSprite(name, colors);
   sprite.position.set(0, entity.kind === "hq" ? 3.2 : 2.4, 0);
   sprite.name = "ownerLabel";
