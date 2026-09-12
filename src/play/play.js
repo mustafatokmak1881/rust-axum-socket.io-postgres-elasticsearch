@@ -357,7 +357,7 @@ function makeFallbackTerrainTexture(mapSize) {
   return tex;
 }
 
-function scatterGroundDecor(scene, size, cx, cz) {
+function scatterGroundDecor(scene, size) {
   const group = new THREE.Group();
   group.name = "groundDecor";
 
@@ -509,7 +509,7 @@ function initThree(size, terrainTexture) {
   grid.position.set(cx, 0.025, cz);
   scene.add(grid);
 
-  scatterGroundDecor(scene, size, cx, cz);
+  scatterGroundDecor(scene, size);
 
   // Dark underlay past the playable map edge.
   const underlay = new THREE.Mesh(
