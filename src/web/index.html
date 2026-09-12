@@ -3,68 +3,73 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Koalisyon — Tarayıcı strateji</title>
+  <meta name="theme-color" content="#1a2218">
+  <title>Koalisyon — Generals Strategy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/game.css">
 </head>
-<body>
-  <div class="top-strip">KOALİSYON · TARAYICI STRATEJİ OYUNU</div>
+<body class="theme-generals">
+  <div class="top-strip">KOALİSYON · USA · CHINA · GLA · REAL-TIME STRATEGY</div>
 
   <div class="shell">
     <nav class="menu" aria-label="Ana menü">
-      <a href="/">Ana sayfa</a>
-      <a href="#about">Oyun hakkında</a>
-      <a href="#rules">Oyun kuralları</a>
-      <a href="/game">Oyuna gir</a>
+      <a href="/">Ana üs</a>
+      <a href="#about">Briefing</a>
+      <a href="#rules">Kurallar</a>
+      <a href="/game">Komuta merkezi</a>
     </nav>
 
     <header class="hero">
-      <div class="hero-hills"></div>
+      <div class="hero-hills" aria-hidden="true"></div>
+      <div class="hero-scan" aria-hidden="true"></div>
       <div class="hero-title">
-        <span class="crest">⚔</span>
-        <h1>Koalisyon</h1>
-        <p>Stratejini kur, dünyayı fethet</p>
+        <span class="crest">◆ GENERALS MODE ◆</span>
+        <h1>KOALİSYON</h1>
+        <p>Choose your army · Build your base · Dominate the map</p>
       </div>
     </header>
 
     <main>
       <div class="landing-grid">
         <section class="panel" id="about">
-          <h2>Kendi yolunu çiz</h2>
+          <h2>BRIEFING</h2>
           <div class="panel-body">
             <p>
-              Küçük bir köyle başla. Binalarını yükselt,
-              topraklarını geliştir ve gücünü artır.
+              Modern savaş arenasına hoş geldin. USA, China veya GLA’yı seç;
+              Command Center’ını kur, War Factory aç, haritada düşmanı ez.
             </p>
 
             <p>
-              Koalisyon, geliştirilmekte olan bir tarayıcı strateji
-              oyunudur. Bu sürümde köy kurabilir, ordu toplayabilir
-              ve dünya haritasında savaşabilirsin.
+              Koalisyon, Command &amp; Conquer Generals ruhunda uzun vadeli
+              bir tarayıcı strateji oyunudur: üsler, üretim hatları,
+              fraksiyon doktrinleri ve dünya haritası savaşları.
             </p>
 
             <a class="button large" href="/auth/google">
-              Ücretsiz başla — Google ile giriş
+              Deploy — Google ile giriş
             </a>
 
             <div class="features">
-              <div><span>⌂</span><strong>Köyünü kur</strong></div>
-              <div><span>⚒</span><strong>Binalarını geliştir</strong></div>
-              <div><span>◷</span><strong>İnşaatları takip et</strong></div>
+              <div><span>★</span><strong>USA / China / GLA</strong></div>
+              <div><span>▣</span><strong>Üs &amp; War Factory</strong></div>
+              <div><span>⌖</span><strong>Dünya haritası</strong></div>
             </div>
           </div>
         </section>
 
         <section class="panel login-panel">
-          <h2>Oyuna giriş</h2>
+          <h2>LOGIN</h2>
           <div class="panel-body">
-            <div class="login-seal">ᛟ</div>
-            <p>Köyün seni bekliyor.</p>
+            <div class="login-seal">★</div>
+            <p>Ordunu seç. Üssünü kur. Savaşa gir.</p>
             <a class="button" href="/auth/google">Google ile giriş yap</a>
             <a class="secondary-link" href="/game">
               Açık oturumla devam et →
             </a>
             <p class="muted small">
-              İlk girişte oyuncu hesabın otomatik oluşturulur.
+              İlk girişte komutan hesabın oluşur.
               Google şifren Koalisyon ile paylaşılmaz.
             </p>
           </div>
@@ -72,19 +77,20 @@
       </div>
 
       <section class="panel news-panel" id="rules">
-        <h2>Geliştirme dünyası · Oyun kuralları</h2>
+        <h2>OPERATION RULES</h2>
         <div class="panel-body">
-          <p><strong>İlk yerleşim:</strong> Her hesap bir köy oluşturabilir.</p>
-          <p><strong>Başlangıç:</strong> 5.000 odun, kil ve demir; temel binalar hazır.</p>
-          <p><strong>İnşaat:</strong> Köy başına aynı anda bir yükseltme.</p>
+          <p><strong>Fraksiyon:</strong> USA, China veya GLA — kalıcı seçim.</p>
+          <p><strong>Ana üs:</strong> Command Center yalnızca ilk üste.</p>
+          <p><strong>Başlangıç:</strong> 5.000 Supplies / Fuel / Munitions.</p>
+          <p><strong>İnşaat:</strong> Üs başına aynı anda bir yükseltme.</p>
           <p class="muted">
-            Maliyetler ve süreler geliştirme testi içindir.
+            Generals temalı geliştirme dünyası · koalisyon.org
           </p>
         </div>
       </section>
     </main>
 
-    <footer>KOALİSYON · Geliştirme sürümü · koalisyon.org</footer>
+    <footer>KOALİSYON · GENERALS STRATEGY · koalisyon.org</footer>
   </div>
 </body>
 </html>

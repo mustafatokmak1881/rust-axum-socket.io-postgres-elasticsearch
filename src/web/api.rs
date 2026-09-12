@@ -1,4 +1,5 @@
 use crate::economy;
+use crate::faction::{self, Faction};
 
 use axum::{
     Json,
@@ -26,6 +27,8 @@ struct Village {
     wood: i64,
     clay: i64,
     iron: i64,
+    is_capital: bool,
+    faction: String,
 }
 
 #[derive(Serialize, FromRow)]
@@ -37,6 +40,8 @@ struct Building {
 #[derive(Serialize)]
 struct BuildingOffer {
     kind: String,
+    name: String,
+    description: String,
     level: i32,
     max_level: i32,
 
@@ -65,6 +70,11 @@ struct Upgrade {
 #[derive(Deserialize)]
 pub struct RenameRequest {
     name: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateVillageRequest {
+    pub faction: String,
 }
 
 async fn current_user(state: &SharedState, jar: &CookieJar) -> Result<CurrentUser, AppError> {
@@ -122,7 +132,7 @@ pub async fn bootstrap(
 
     let mut village = sqlx::query_as::<_, Village>(
         r#"
-        SELECT id, name, wood, clay, iron
+        SELECT id, name, wood, clay, iron, is_capital, faction
         FROM villages
         WHERE owner_id = $1
         FOR UPDATE
@@ -185,8 +195,11 @@ pub async fn bootstrap(
         .await?;
 
         let pending = upgrades.iter().any(|u| u.completed_at.is_none());
+        let is_capital = village.is_capital;
+        let built_count = economy::built_building_count(&mut *tx, village.id).await?;
+        let faction = Faction::parse(&village.faction)?;
 
-        for &kind in economy::BUILDING_KINDS {
+        for &kind in faction::building_kinds(faction) {
             let level = buildings
                 .iter()
                 .find(|building| building.kind == kind)
@@ -212,12 +225,34 @@ pub async fn bootstrap(
                 Some(economy::upgrade_seconds(target))
             };
 
-            let requirements =
-                economy::requirement_status(&mut *tx, village.id, kind).await?;
+            let requirements = economy::requirement_status_for_base(
+                &mut *tx,
+                village.id,
+                kind,
+                is_capital,
+                faction,
+            )
+            .await?;
 
             let missing = requirements.iter().find(|r| !r.met);
 
-            let blocked_reason = if maxed {
+            let slot_blocked = if economy::is_command_center(kind) && !is_capital {
+                Some("Yalnızca ana üste".to_owned())
+            } else if !is_capital
+                && level == 0
+                && built_count >= economy::SECONDARY_BASE_MAX_BUILDINGS
+            {
+                Some(format!(
+                    "Üs limiti ({})",
+                    economy::SECONDARY_BASE_MAX_BUILDINGS
+                ))
+            } else {
+                None
+            };
+
+            let blocked_reason = if let Some(reason) = slot_blocked {
+                Some(reason)
+            } else if maxed {
                 Some("En yüksek seviye".to_owned())
             } else if let Some(requirement) = missing {
                 Some(format!(
@@ -270,6 +305,8 @@ pub async fn bootstrap(
 
             offers.push(BuildingOffer {
                 kind: kind.to_owned(),
+                name: faction::building_name(faction, kind).to_owned(),
+                description: faction::building_description(faction, kind).to_owned(),
                 level,
                 max_level,
                 cost_wood: cost.map(|c| c.wood),
@@ -295,8 +332,27 @@ pub async fn bootstrap(
         "offers": offers,
         "economy": economy_snapshot,
         "server_time": server_time,
+        "factions": [
+            {
+                "id": "usa",
+                "name": "USA",
+                "blurb": faction::starting_blurb(Faction::Usa),
+            },
+            {
+                "id": "china",
+                "name": "China",
+                "blurb": faction::starting_blurb(Faction::China),
+            },
+            {
+                "id": "gla",
+                "name": "GLA",
+                "blurb": faction::starting_blurb(Faction::Gla),
+            },
+        ],
         "rules": {
-            "seconds_per_target_level": 15
+            "seconds_per_target_level": 15,
+            "secondary_base_max_buildings": economy::SECONDARY_BASE_MAX_BUILDINGS,
+            "command_center_capital_only": true
         }
     })))
 }
@@ -305,9 +361,11 @@ pub async fn create_village(
     State(state): State<SharedState>,
     headers: HeaderMap,
     jar: CookieJar,
+    Json(input): Json<CreateVillageRequest>,
 ) -> Result<StatusCode, AppError> {
     check_origin(&state, &headers)?;
     let user = current_user(&state, &jar).await?;
+    let faction = Faction::parse(&input.faction)?;
 
     let world_id = Uuid::from_u128(1);
     let mut tx = state.db.begin().await?;
@@ -317,6 +375,27 @@ pub async fn create_village(
     sqlx::query("SELECT pg_advisory_xact_lock(731001::bigint)")
         .execute(&mut *tx)
         .await?;
+
+    let existing_faction = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT faction FROM users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(user.id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if let Some(existing) = existing_faction.as_deref() {
+        if existing != faction.as_str() {
+            return Err(AppError::BadRequest(
+                "Fraksiyonun zaten seçili; değiştirilemez.",
+            ));
+        }
+    } else {
+        sqlx::query("UPDATE users SET faction = $2, updated_at = NOW() WHERE id = $1")
+            .bind(user.id)
+            .bind(faction.as_str())
+            .execute(&mut *tx)
+            .await?;
+    }
 
     let existing_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM villages WHERE owner_id = $1")
         .bind(user.id)
@@ -361,9 +440,11 @@ pub async fn create_village(
                 world_id,
                 x,
                 y,
-                name
+                name,
+                is_capital,
+                faction
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7)
             RETURNING id
             "#,
         )
@@ -373,6 +454,7 @@ pub async fn create_village(
         .bind(position.0)
         .bind(position.1)
         .bind(village_name_from_account(&user.email))
+        .bind(faction.as_str())
         .fetch_one(&mut *tx)
         .await?
     };
@@ -380,6 +462,12 @@ pub async fn create_village(
     // Başlangıç kaynakları villages tablosunun default'undan gelir.
     // Binalar da aynı transaction içinde oluşturulur.
     for &kind in economy::BUILDING_KINDS {
+        let level = if faction::building_kinds(faction).contains(&kind) {
+            economy::starting_level(kind)
+        } else {
+            0
+        };
+
         sqlx::query(
             r#"
             INSERT INTO village_buildings (village_id, kind, level)
@@ -389,7 +477,7 @@ pub async fn create_village(
         )
         .bind(village_id)
         .bind(kind)
-        .bind(economy::starting_level(kind))
+        .bind(level)
         .execute(&mut *tx)
         .await?;
     }
@@ -459,7 +547,7 @@ pub async fn start_upgrade(
     // Kaynak harcaması ve kuyruk kontrolünü aynı köy kilidiyle koru.
     let village = sqlx::query_as::<_, Village>(
         r#"
-        SELECT id, name, wood, clay, iron
+        SELECT id, name, wood, clay, iron, is_capital, faction
         FROM villages
         WHERE owner_id = $1
         FOR UPDATE
@@ -515,7 +603,31 @@ pub async fn start_upgrade(
         return Err(AppError::BadRequest("Bina en yüksek seviyede."));
     }
 
-    economy::ensure_requirements(&mut *tx, village.id, &kind).await?;
+    economy::ensure_base_construction_rules(
+        &mut *tx,
+        village.id,
+        &kind,
+        level,
+        village.is_capital,
+    )
+    .await?;
+
+    let faction = Faction::parse(&village.faction)?;
+
+    if !faction::building_kinds(faction).contains(&kind.as_str()) {
+        return Err(AppError::BadRequest(
+            "Bu bina fraksiyonunda yok.",
+        ));
+    }
+
+    economy::ensure_requirements_for_base(
+        &mut *tx,
+        village.id,
+        &kind,
+        village.is_capital,
+        faction,
+    )
+    .await?;
 
     let target_level = level + 1;
     let cost = economy::upgrade_cost(target_level);

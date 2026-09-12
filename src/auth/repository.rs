@@ -15,6 +15,7 @@ pub struct CurrentUser {
     pub email: String,
     pub email_verified: bool,
     pub created_at: DateTime<Utc>,
+    pub faction: Option<String>,
 }
 
 pub async fn create_login_flow(
@@ -134,7 +135,8 @@ pub async fn find_session_user(
             u.id,
             u.email,
             u.email_verified,
-            u.created_at
+            u.created_at,
+            u.faction
         FROM sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = $1

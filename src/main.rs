@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod economy;
 mod error;
+mod faction;
 mod jobs;
 mod map;
 mod middleware;

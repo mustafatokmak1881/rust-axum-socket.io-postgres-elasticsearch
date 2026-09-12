@@ -4,23 +4,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#1c2c24">
-  <title>Koalisyon — Dünya Haritası</title>
+  <meta name="theme-color" content="#1a2218">
+  <title>Koalisyon — World Map</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/map.css">
   <script src="/assets/map.js" defer></script>
 </head>
 
-<body>
+<body class="theme-generals">
   <header class="header">
     <a href="/game" class="brand">
-      <span class="brand-mark">ᛟ</span>
-      <span>KOALİSYON<small>STRATEJİNİ KUR</small></span>
+      <span class="brand-mark">★</span>
+      <span>KOALİSYON<small>GENERALS STRATEGY</small></span>
     </a>
 
     <nav aria-label="Oyun menüsü">
-      <a href="/game">Köy merkezi</a>
+      <a href="/game">Command Center</a>
       <a href="/map" class="active" aria-current="page">
-        Dünya haritası
+        World Map
       </a>
     </nav>
 
@@ -43,9 +46,9 @@
   <main>
     <section class="heading">
       <div>
-        <span class="eyebrow">UFUKLARIN ÖTESİNDE</span>
-        <h1>Dünya haritası</h1>
-        <p>Köyünü bul. Komşularını tanı. Haritadaki yerini al.</p>
+        <span class="eyebrow">THEATER OF WAR</span>
+        <h1>World Map</h1>
+        <p>Locate bases. Scout factions. Strike across the grid.</p>
       </div>
 
       <form id="coordinate-form" class="coordinate-form">
@@ -71,7 +74,7 @@
             <span class="toolbar-divider">/</span>
             <span id="center-label">500 | 500</span>
           </div>
-          <span class="map-hint">Sürükle · Yakınlaştır · Köy seç</span>
+          <span class="map-hint">Drag · Zoom · Select base</span>
         </div>
 
         <div class="map-stage" id="map-stage">

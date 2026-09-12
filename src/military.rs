@@ -390,7 +390,7 @@ pub async fn start_recruit(
 
     if barracks_level < 1 {
         return Err(AppError::BadRequest(
-            "Mızrakçı eğitmek için kışla gerekli (Ana bina 3).",
+            "Mızrakçı eğitmek için kışla gerekli (Komuta Merkezi 3).",
         ));
     }
 

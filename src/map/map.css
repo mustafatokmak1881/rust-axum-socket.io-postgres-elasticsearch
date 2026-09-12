@@ -1208,3 +1208,32 @@ main {
 .army-report {
   color: #766039;
 }
+
+/* Generals theater overrides */
+body.theme-generals {
+  background:
+    radial-gradient(ellipse at 20% 0%, #2a3a2240, transparent 45%),
+    linear-gradient(180deg, #1a2218, #121710) !important;
+  color: #d7e0c8 !important;
+  font-family: "Rajdhani", "Segoe UI", sans-serif !important;
+}
+
+body.theme-generals .header {
+  background: linear-gradient(180deg, #2c3828, #1c261a) !important;
+  border-bottom: 1px solid #4a5a40 !important;
+  color: #d7e0c8 !important;
+}
+
+body.theme-generals .brand small {
+  color: #d4b44a !important;
+}
+
+body.theme-generals .eyebrow {
+  color: #9fc24a !important;
+}
+
+body.theme-generals h1 {
+  font-family: "Oswald", Impact, sans-serif !important;
+  letter-spacing: 0.06em !important;
+  color: #eef5d8 !important;
+}

@@ -4,8 +4,8 @@ const $ = (selector) => document.querySelector(selector);
 
 const definitions = {
   headquarters: {
-    name: "Ana bina",
-    description: "Köyün yönetim merkezi",
+    name: "Komuta Merkezi",
+    description: "Ana üssün komuta binası; yalnızca ilk üste kurulur",
     icon: `/assets/buildings/headquarters`,
     map: { left: "58%", top: "32%" },
   },
@@ -17,91 +17,124 @@ const definitions = {
     href: "#army",
   },
   stable: {
-    name: "Ahır",
-    description: "Atlı birliklerin yetiştirildiği yer",
+    name: "Havaalanı",
+    description: "Hava birliklerinin üretildiği yer",
     icon: `/assets/buildings/stable`,
     map: { left: "86%", top: "58%" },
   },
   workshop: {
-    name: "Atölye",
-    description: "Kuşatma silahlarının üretildiği yer",
+    name: "Savaş Fabrikası",
+    description: "Tank ve zırhlı araç üretimi",
     icon: `/assets/buildings/workshop`,
     map: { left: "72%", top: "62%" },
   },
   academy: {
-    name: "Akademi",
-    description: "Misyoner eğitimi ve fetih merkezi",
+    name: "Strateji Merkezi",
+    description: "Doktrin güçleri ve ileri teknolojiler",
     icon: `/assets/buildings/academy`,
     map: { left: "48%", top: "22%" },
   },
   smithy: {
-    name: "Demirci",
-    description: "Silah araştırma ve geliştirme",
+    name: "Cephanelik",
+    description: "Silah ve birim geliştirme",
     icon: `/assets/buildings/smithy`,
     map: { left: "38%", top: "40%" },
   },
   rally_point: {
-    name: "İçtima meydanı",
-    description: "Orduların toplandığı komuta noktası",
+    name: "Seferberlik Sahası",
+    description: "Orduların toplandığı çıkış noktası",
     icon: `/assets/buildings/rally_point`,
     map: { left: "50%", top: "55%" },
     href: "#army",
   },
   statue: {
-    name: "Heykel",
-    description: "Şövalye anıtı",
+    name: "Radar İstasyonu",
+    description: "Keşif ve erken uyarı",
     icon: `/assets/buildings/statue`,
     map: { left: "62%", top: "48%" },
   },
   market: {
-    name: "Pazar",
-    description: "Ticaret ve hammadde gönderimi",
+    name: "Tedarik Merkezi",
+    description: "Lojistik ve hammadde transferi",
     icon: `/assets/buildings/market`,
     map: { left: "34%", top: "70%" },
   },
   timber: {
-    name: "Oduncu",
-    description: "Odun üretimi",
+    name: "İkmal Deposu",
+    description: "Malzeme (odun) üretimi",
     icon: `/assets/buildings/timber`,
     map: { left: "18%", top: "42%" },
   },
   clay: {
-    name: "Kil ocağı",
-    description: "Kil üretimi",
+    name: "Petrol Rafinerisi",
+    description: "Yakıt (kil) üretimi",
     icon: `/assets/buildings/clay`,
     map: { left: "14%", top: "62%" },
   },
   iron: {
-    name: "Demir madeni",
-    description: "Demir üretimi",
+    name: "Maden Tesisi",
+    description: "Maden (demir) üretimi",
     icon: `/assets/buildings/iron`,
     map: { left: "22%", top: "78%" },
   },
   farm: {
-    name: "Çiftlik",
-    description: "Nüfus ve birlik beslemesi",
+    name: "Enerji Santrali",
+    description: "Nüfus / güç kapasitesi",
     icon: `/assets/buildings/farm`,
     map: { left: "42%", top: "78%" },
   },
   warehouse: {
-    name: "Ambar",
-    description: "Köyün kaynak deposu",
+    name: "Depo",
+    description: "Üssün kaynak deposu",
     icon: `/assets/buildings/warehouse`,
     map: { left: "27%", top: "52%" },
   },
   hiding_place: {
-    name: "Gizli depo",
-    description: "Yağmalanamayan gizlenmiş kaynaklar",
+    name: "Yeraltı Deposu",
+    description: "Yağmalanamayan gizli stoklar",
     icon: `/assets/buildings/hiding_place`,
     map: { left: "66%", top: "76%" },
   },
   wall: {
-    name: "Duvar",
-    description: "Köy savunmasını güçlendirir",
+    name: "Savunma Bataryası",
+    description: "Üs savunmasını güçlendirir",
     icon: `/assets/buildings/wall`,
     map: { left: "88%", top: "78%" },
   },
 };
+
+function syncDefinitionsFromOffers() {
+  for (const offer of snapshot?.offers || []) {
+    const current = definitions[offer.kind] || {
+      icon: `/assets/buildings/${offer.kind}`,
+      map: { left: "50%", top: "50%" },
+    };
+
+    definitions[offer.kind] = {
+      ...current,
+      name: offer.name || current.name || offer.kind,
+      description: offer.description || current.description || "",
+      icon: current.icon || `/assets/buildings/${offer.kind}`,
+    };
+  }
+}
+
+function applyFactionSelection(factionId) {
+  selectedFaction = factionId;
+
+  document.querySelectorAll(".faction-card").forEach((card) => {
+    const active = card.dataset.faction === factionId;
+    card.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+
+  const blurb = (snapshot?.factions || []).find((item) => item.id === factionId)?.blurb
+    || "";
+  const blurbEl = $("#faction-blurb");
+  if (blurbEl) blurbEl.textContent = blurb;
+
+  const createButton = $("#create-village");
+  if (createButton) createButton.disabled = !factionId;
+}
 
 function buildingIcon(definition) {
   return `<img
@@ -118,6 +151,7 @@ let mutating = false;
 let sessionExpired = false;
 let militarySnapshot = null;
 let militaryRefreshing = false;
+let selectedFaction = null;
 let hasVillage = false;
 const baseDocumentTitle = document.title;
 
@@ -302,13 +336,28 @@ function render() {
 
   if (!snapshot.village) {
     updateIncomingBadge(0);
+    if (selectedFaction) {
+      applyFactionSelection(selectedFaction);
+    } else {
+      const blurbEl = $("#faction-blurb");
+      if (blurbEl) {
+        blurbEl.textContent = "Devam etmek için bir fraksiyon seç.";
+      }
+      const createButton = $("#create-village");
+      if (createButton) createButton.disabled = true;
+    }
     return;
   }
+
+  syncDefinitionsFromOffers();
 
   const { village, buildings, upgrades, user, rules } = snapshot;
   const active = upgrades.find((upgrade) => !upgrade.completed_at);
 
-  $("#village-name").textContent = village.name;
+  const factionLabel = (village.faction || user.faction || "").toUpperCase();
+  $("#village-name").textContent = factionLabel
+    ? `${village.name} · ${factionLabel}`
+    : village.name;
   $("#wood").textContent = number(village.wood);
   $("#clay").textContent = number(village.clay);
   $("#iron").textContent = number(village.iron);
@@ -329,7 +378,11 @@ function render() {
   }
 
   $("#building-rows").innerHTML = (snapshot.offers || []).map((offer) => {
-    const definition = definitions[offer.kind];
+    const definition = definitions[offer.kind] || {
+      name: offer.name,
+      description: offer.description,
+      icon: `/assets/buildings/${offer.kind}`,
+    };
     if (!definition) return "";
 
     const maxed = offer.level >= offer.max_level;
@@ -351,10 +404,10 @@ function render() {
       <small class="production-description">
         ${number(offer.production_per_hour)}/${
         offer.kind === "clay"
-          ? "kil"
+          ? "fuel"
           : offer.kind === "iron"
-            ? "demir"
-            : "odun"
+            ? "munitions"
+            : "supplies"
       }/saat
         ${offer.next_production_per_hour !== null
         ? ` → ${number(offer.next_production_per_hour)}`
@@ -378,8 +431,8 @@ function render() {
           <span class="building-icon">${buildingIcon(definition)}</span>
 
           <div>
-            <strong>${escapeHtml(definition.name)}</strong>
-            <small>${escapeHtml(definition.description)}</small>
+            <strong>${escapeHtml(offer.name || definition.name)}</strong>
+            <small>${escapeHtml(offer.description || definition.description || "")}</small>
             ${production}
             ${requirements
         ? `<small class="building-requirements">${requirements}</small>`
@@ -643,7 +696,7 @@ function renderArmyPanel() {
   if (rows) {
     rows.innerHTML = `
       <tr>
-        <td><strong>Mızrakçı</strong></td>
+        <td><strong>Infantry</strong></td>
         <td>${number(army.home.spear || 0)}</td>
         <td>${number(army.away.spear || 0)}</td>
         <td>${number(army.training.spear || 0)}</td>
@@ -703,12 +756,12 @@ function renderArmyPanel() {
   if (hint) {
     if (!barracksReady) {
       hint.textContent =
-        "Mızrakçı eğitmek için kışla inşa et (Ana bina seviye 3 gerekir).";
+        "Train infantry: build Barracks (Command Center level 3).";
     } else if (training) {
       hint.textContent = "Eğitim tamamlanınca yeni emir verebilirsin.";
     } else {
       hint.textContent =
-        `Mızrakçı: ${militarySnapshot.units?.spear?.wood_cost ?? 50} / ${militarySnapshot.units?.spear?.clay_cost ?? 30} / ${militarySnapshot.units?.spear?.iron_cost ?? 10} (odun/kil/demir), 1 nüfus.`;
+        `Infantry: ${militarySnapshot.units?.spear?.wood_cost ?? 50} / ${militarySnapshot.units?.spear?.clay_cost ?? 30} / ${militarySnapshot.units?.spear?.iron_cost ?? 10} (Supplies/Fuel/Munitions), 1 pop.`;
     }
   }
 
@@ -961,12 +1014,26 @@ async function mutate(button, path, options, message) {
   }
 }
 
+document.querySelectorAll(".faction-card").forEach((card) => {
+  card.addEventListener("click", () => {
+    applyFactionSelection(card.dataset.faction);
+  });
+});
+
 $("#create-village").addEventListener("click", (event) => {
+  if (!selectedFaction) {
+    showMessage("Önce USA, China veya GLA seç.", true);
+    return;
+  }
+
   void mutate(
     event.currentTarget,
     "/api/villages",
-    { method: "POST" },
-    "Köyün kuruldu. Hoş geldin!",
+    {
+      method: "POST",
+      body: JSON.stringify({ faction: selectedFaction }),
+    },
+    `${selectedFaction.toUpperCase()} üssün kuruldu. Hoş geldin!`,
   );
 });
 
@@ -1043,7 +1110,7 @@ $("#rename-form").addEventListener("submit", (event) => {
       method: "PATCH",
       body: JSON.stringify({ name: $("#new-name").value.trim() }),
     },
-    "Köy adı güncellendi.",
+    "Base name updated.",
   );
 });
 

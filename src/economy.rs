@@ -7,8 +7,8 @@ use crate::error::AppError;
 
 const MICROS_PER_HOUR: i128 = 3_600_000_000;
 
-/// Koalisyon bina kataloğu (dünya ayarına bağlı
-/// tapınak ve gözetleme kulesi hariç).
+/// Koalisyon / Generals tarzı bina kataloğu.
+/// kind kimlikleri API/DB'de sabit; görünen adlar Generals temalı.
 pub const BUILDING_KINDS: &[&str] = &[
     "headquarters",
     "barracks",
@@ -28,8 +28,7 @@ pub const BUILDING_KINDS: &[&str] = &[
     "wall",
 ];
 
-/// Yeni köyde seviye 1 başlayan binalar (Koalisyon başlangıç düzeni).
-/// Oduncu, kil ocağı ve demir madeni oyuncu tarafından inşa edilir.
+/// Ana üs (is_capital) başlangıç düzeni.
 pub const STARTING_BUILDINGS: &[(&str, i32)] = &[
     ("headquarters", 1),
     ("rally_point", 1),
@@ -37,6 +36,13 @@ pub const STARTING_BUILDINGS: &[(&str, i32)] = &[
     ("warehouse", 1),
     ("hiding_place", 1),
 ];
+
+/// Ele geçirilen / ikincil üslerde komuta merkezi yok; en fazla bu kadar bina (seviye > 0).
+pub const SECONDARY_BASE_MAX_BUILDINGS: i64 = 5;
+
+pub fn is_command_center(kind: &str) -> bool {
+    kind == "headquarters"
+}
 
 // 1× dünya: oduncu / kil ocağı / demir madeni aynı üretim eğrisi.
 const RESOURCE_PRODUCTION: [i64; 31] = [
@@ -113,28 +119,6 @@ fn requirements(kind: &str) -> &'static [(&'static str, i32)] {
         "workshop" => &[("headquarters", 10), ("smithy", 10)],
         "academy" => &[("headquarters", 20), ("smithy", 20), ("market", 10)],
         _ => &[],
-    }
-}
-
-pub fn building_name(kind: &str) -> &'static str {
-    match kind {
-        "headquarters" => "Ana bina",
-        "barracks" => "Kışla",
-        "stable" => "Ahır",
-        "workshop" => "Atölye",
-        "academy" => "Akademi",
-        "smithy" => "Demirci",
-        "rally_point" => "İçtima meydanı",
-        "statue" => "Heykel",
-        "market" => "Pazar",
-        "timber" => "Oduncu",
-        "clay" => "Kil ocağı",
-        "iron" => "Demir madeni",
-        "farm" => "Çiftlik",
-        "warehouse" => "Ambar",
-        "hiding_place" => "Gizli depo",
-        "wall" => "Duvar",
-        _ => "Bilinmeyen bina",
     }
 }
 
@@ -282,14 +266,20 @@ pub struct Requirement {
     pub met: bool,
 }
 
-pub async fn requirement_status(
+pub async fn requirement_status_for_base(
     connection: &mut PgConnection,
     village_id: Uuid,
     kind: &str,
+    is_capital: bool,
+    faction: crate::faction::Faction,
 ) -> Result<Vec<Requirement>, AppError> {
     let mut result = Vec::new();
 
     for &(required_kind, required_level) in requirements(kind) {
+        if !is_capital && is_command_center(required_kind) {
+            continue;
+        }
+
         let current_level = sqlx::query_scalar::<_, i32>(
             r#"
             SELECT level
@@ -305,7 +295,7 @@ pub async fn requirement_status(
 
         result.push(Requirement {
             kind: required_kind.to_owned(),
-            name: building_name(required_kind).to_owned(),
+            name: crate::faction::building_name(faction, required_kind).to_owned(),
             required_level,
             current_level,
             met: current_level >= required_level,
@@ -315,17 +305,67 @@ pub async fn requirement_status(
     Ok(result)
 }
 
-pub async fn ensure_requirements(
+pub async fn ensure_requirements_for_base(
     connection: &mut PgConnection,
     village_id: Uuid,
     kind: &str,
+    is_capital: bool,
+    faction: crate::faction::Faction,
 ) -> Result<(), AppError> {
-    let requirements = requirement_status(connection, village_id, kind).await?;
+    let requirements =
+        requirement_status_for_base(connection, village_id, kind, is_capital, faction).await?;
 
     if requirements.iter().any(|requirement| !requirement.met) {
         return Err(AppError::BadRequest(
             "Bu bina için gerekli diğer bina seviyeleri sağlanmıyor.",
         ));
+    }
+
+    Ok(())
+}
+
+pub async fn built_building_count(
+    connection: &mut PgConnection,
+    village_id: Uuid,
+) -> Result<i64, AppError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM village_buildings
+        WHERE village_id = $1
+          AND level > 0
+          AND kind <> 'headquarters'
+        "#,
+    )
+    .bind(village_id)
+    .fetch_one(&mut *connection)
+    .await?)
+}
+
+/// İnşaat / yükseltme öncesi üs kuralları.
+/// - Komuta Merkezi yalnız ana üste
+/// - İkincil üste en fazla SECONDARY_BASE_MAX_BUILDINGS bina (HQ hariç)
+pub async fn ensure_base_construction_rules(
+    connection: &mut PgConnection,
+    village_id: Uuid,
+    kind: &str,
+    current_level: i32,
+    is_capital: bool,
+) -> Result<(), AppError> {
+    if is_command_center(kind) && !is_capital {
+        return Err(AppError::BadRequest(
+            "Komuta Merkezi yalnızca ana üste inşa edilebilir.",
+        ));
+    }
+
+    if !is_capital && current_level == 0 {
+        let built = built_building_count(connection, village_id).await?;
+
+        if built >= SECONDARY_BASE_MAX_BUILDINGS {
+            return Err(AppError::BadRequest(
+                "Bu üste en fazla 5 bina kurulabilir.",
+            ));
+        }
     }
 
     Ok(())

@@ -4,30 +4,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Koalisyon — Köy merkezi</title>
+  <meta name="theme-color" content="#1a2218">
+  <title>Koalisyon — Command Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/game.css">
   <script src="/assets/game.js" defer></script>
 </head>
 
-<body>
-  <div class="top-strip">KOALİSYON · GELİŞTİRME DÜNYASI 01</div>
+<body class="theme-generals">
+  <div class="top-strip">KOALİSYON · GENERALS THEATER · USA · CHINA · GLA</div>
 
   <div class="shell game-shell">
     <nav class="menu" aria-label="Oyun menüsü">
-      <a href="#overview" data-tab="overview">Köy merkezi</a>
-      <a href="/map">Dünya haritası</a>
-      <a href="#army" data-tab="army">Ordu</a>
-      <a href="#buildings" data-tab="buildings">Binalar</a>
-      <a href="#jobs" data-tab="jobs">Görevler</a>
-      <a href="#account" data-tab="account">Hesabım</a>
-      <button type="button" id="logout">Çıkış</button>
+      <a href="#overview" data-tab="overview">Command Center</a>
+      <a href="/map">World Map</a>
+      <a href="#army" data-tab="army">Army</a>
+      <a href="#buildings" data-tab="buildings">Buildings</a>
+      <a href="#jobs" data-tab="jobs">Orders</a>
+      <a href="#account" data-tab="account">Profile</a>
+      <button type="button" id="logout">Logout</button>
     </nav>
 
     <header class="hero compact">
-      <div class="hero-hills"></div>
+      <div class="hero-hills" aria-hidden="true"></div>
+      <div class="hero-scan" aria-hidden="true"></div>
       <div class="hero-title">
-        <h1>Koalisyon</h1>
-        <p>Stratejini kur, dünyayı fethet</p>
+        <span class="crest">◆ GENERALS MODE ◆</span>
+        <h1>KOALİSYON</h1>
+        <p>Build · Train · Conquer</p>
       </div>
     </header>
 
@@ -35,28 +41,41 @@
       <div id="message" class="notice" role="status" hidden></div>
 
       <section id="loading" class="panel">
-        <h2>Köyüne bağlanılıyor…</h2>
+        <h2>Connecting…</h2>
         <div class="panel-body">
-          <p>Oyuncu ve köy bilgileri yükleniyor.</p>
+          <p>Komutan ve üs verileri yükleniyor.</p>
           <button class="button" id="retry" type="button">
-            Yeniden dene
+            Retry
           </button>
         </div>
       </section>
 
       <section id="onboarding" class="panel" hidden>
-        <h2>Hoş geldin</h2>
+        <h2>Select Army</h2>
         <div class="panel-body onboarding-body">
-          <span class="onboarding-symbol">⚑</span>
-          <h3>İlk köyünle başla.</h3>
+          <span class="onboarding-symbol">★</span>
+          <h3>USA · China · GLA</h3>
           <p>
-            Köyünü kurarak 5.000 odun, kil ve demirle
-            gelişmeye başlayabilirsin.
-            Ana bina, içtima meydanı, çiftlik, ambar ve gizli depo
-            hazır gelir; kaynak binalarını sen inşa edersin.
+            Generals tarzı ordunu seç. Seçim kalıcıdır;
+            binalar fraksiyonuna göre değişir.
           </p>
-          <button id="create-village" class="button large" type="button">
-            İlk köyümü kur
+          <div class="faction-picker" role="radiogroup" aria-label="Fraksiyon">
+            <button type="button" class="faction-card" data-faction="usa" aria-pressed="false">
+              <strong>USA</strong>
+              <span>Command Center · War Factory · Airfield · Patriot</span>
+            </button>
+            <button type="button" class="faction-card" data-faction="china" aria-pressed="false">
+              <strong>China</strong>
+              <span>Propaganda · Nuclear Reactor · Gattling · Overlord</span>
+            </button>
+            <button type="button" class="faction-card" data-faction="gla" aria-pressed="false">
+              <strong>GLA</strong>
+              <span>Arms Dealer · Palace · Tunnel Network · Black Market</span>
+            </button>
+          </div>
+          <p id="faction-blurb" class="faction-blurb muted small"></p>
+          <button id="create-village" class="button large" type="button" disabled>
+            Deploy Base
           </button>
         </div>
       </section>
@@ -64,13 +83,13 @@
       <div id="game-content" hidden>
         <div class="village-bar">
           <div>
-            <small>YERLEŞİMİN</small>
+            <small>BASE</small>
             <strong id="village-name"></strong>
           </div>
           <div class="resource">
             <span class="resource-icon wood" aria-hidden="true"></span>
             <div>
-              <small>ODUN</small>
+              <small>SUPPLIES</small>
               <strong id="wood">0</strong>
               <span id="wood-rate" class="resource-rate"></span>
             </div>
@@ -78,7 +97,7 @@
           <div class="resource">
             <span class="resource-icon clay" aria-hidden="true"></span>
             <div>
-              <small>KİL</small>
+              <small>FUEL</small>
               <strong id="clay">0</strong>
               <span id="clay-rate" class="resource-rate"></span>
             </div>
@@ -86,67 +105,67 @@
           <div class="resource">
             <span class="resource-icon iron" aria-hidden="true"></span>
             <div>
-              <small>DEMİR</small>
+              <small>MUNITIONS</small>
               <strong id="iron">0</strong>
               <span id="iron-rate" class="resource-rate"></span>
             </div>
           </div>
           <div class="resource">
             <span>⌂</span>
-            <div><small>BİNA PUANI</small><strong id="points">0</strong></div>
+            <div><small>POWER</small><strong id="points">0</strong></div>
           </div>
           <a id="incoming-badge" class="incoming-badge" href="#incoming" hidden>
             <span class="incoming-badge-icon" aria-hidden="true">⚔</span>
             <span id="incoming-badge-count">0</span>
-            <span class="incoming-badge-label">Gelen saldırı</span>
+            <span class="incoming-badge-label">Incoming</span>
           </a>
         </div>
 
         <div class="game-layout">
           <aside class="side-panel">
-            <h3>Köy yönetimi</h3>
-            <a href="/map">» Dünya haritası</a>
-            <a href="#overview">» Genel bakış</a>
-            <a href="#army">» Ordu ve kışla</a>
-            <a href="#buildings">» Bina yükseltmeleri</a>
-            <a href="#jobs">» İnşaat geçmişi</a>
-            <a href="#account">» Köy adı ve hesap</a>
+            <h3>Command</h3>
+            <a href="/map">» World Map</a>
+            <a href="#overview">» Base Overview</a>
+            <a href="#army">» Army &amp; Barracks</a>
+            <a href="#buildings">» Construction</a>
+            <a href="#jobs">» Order Log</a>
+            <a href="#account">» Profile</a>
 
             <div class="side-note">
-              <strong>Üretim</strong>
+              <strong>Economy</strong>
               <p>
-                Oduncu, kil ocağı ve demir madeni seviyene göre
-                üç hammadde üretilir. Sayfa kapalıyken de devam eder.
+                Supplies, Fuel ve Munitions üretim binalarından akar.
+                Sayfa kapalıyken de üretim devam eder.
               </p>
             </div>
           </aside>
 
           <div class="screens">
             <section class="panel screen" data-screen="overview">
-              <h2>Köy merkezi</h2>
+              <h2>Command Center</h2>
               <div class="panel-body">
                 <div class="village-map">
                   <div class="map-title">
                     <span>KOALİSYON</span>
-                    <strong>Köyün kalbi</strong>
+                    <strong>Base Layout</strong>
                   </div>
 
                   <div id="village-map-buildings"></div>
 
-                  <div class="map-caption">Köy yerleşimi · Binalara tıklayabilirsin</div>
+                  <div class="map-caption">Tactical overview · Click buildings</div>
                 </div>
 
-                <h3 class="section-title">Devam eden inşaat</h3>
+                <h3 class="section-title">Construction queue</h3>
                 <div id="active-upgrade" class="queue-box"></div>
 
                 <section id="incoming" class="incoming-panel">
                   <h3 class="section-title">
                     <span class="army-section-icon incoming" aria-hidden="true">⚔</span>
-                    Gelen saldırılar
+                    Incoming attacks
                     <small id="incoming-section-count"></small>
                   </h3>
                   <div id="army-incoming-list" class="army-incoming-list">
-                    <p class="army-empty">Gelen saldırı yok.</p>
+                    <p class="army-empty">No incoming attacks.</p>
                   </div>
                 </section>
 
@@ -162,15 +181,15 @@
               <div class="panel-body">
                 <div class="army-summary">
                   <div>
-                    <small>ÇİFTLİK</small>
+                    <small>POWER</small>
                     <strong id="army-farm-usage">—</strong>
                   </div>
                   <div>
-                    <small>KIŞLA</small>
+                    <small>BARRACKS</small>
                     <strong id="army-barracks-level">—</strong>
                   </div>
                   <div>
-                    <small>KÖYDE</small>
+                    <small>AT BASE</small>
                     <strong id="army-home-total">—</strong>
                   </div>
                 </div>
@@ -181,7 +200,7 @@
                     <thead>
                       <tr>
                         <th>Birlik</th>
-                        <th>Köyde</th>
+                        <th>Home</th>
                         <th>Dışarıda</th>
                         <th>Eğitimde</th>
                         <th>Toplam</th>
@@ -195,7 +214,7 @@
                   </table>
                 </div>
 
-                <h3 class="section-title">Kışla — eğitim</h3>
+                <h3 class="section-title">Barracks — train</h3>
                 <div id="army-recruit-queue" class="queue-box" hidden></div>
 
                 <div id="army-recruit-panel" class="recruit-panel">
@@ -240,7 +259,7 @@
 
                 <p class="muted small">
                   Saldırı göndermek için dünya haritasını kullan.
-                  Mızrakçı: 50 odun / 30 kil / 10 demir / 1 nüfus.
+                  Unit cost: 50 Supplies / 30 Fuel / 10 Munitions / 1 pop.
                 </p>
               </div>
             </section>
@@ -250,7 +269,7 @@
 
               <div class="panel-body">
                 <div id="buildings-active-queue" hidden>
-                  <h3 class="section-title">Devam eden inşaat</h3>
+                  <h3 class="section-title">Construction queue</h3>
                   <div id="buildings-active-upgrade"></div>
                 </div>
 
@@ -277,7 +296,7 @@
                 <div class="info-box">
                   Kaynak binaları saatlik üretimi artırır.
                   Bina koşulları sunucuda kontrol edilir.
-                  Maliyetler üç hammadde (odun / kil / demir) olarak alınır.
+                  Costs use Supplies / Fuel / Munitions.
                 </div>
               </div>
             </section>
@@ -307,7 +326,7 @@
             </section>
 
             <section class="panel screen" data-screen="account" hidden>
-              <h2>Hesap ve köy ayarları</h2>
+              <h2>Profile &amp; base</h2>
               <div class="panel-body">
                 <dl class="account-details">
                   <dt>Google hesabı</dt>
@@ -316,10 +335,10 @@
                   <dd id="user-created"></dd>
                 </dl>
 
-                <h3 class="section-title">Köy adını değiştir</h3>
+                <h3 class="section-title">Rename base</h3>
 
                 <form id="rename-form">
-                  <label for="new-name">Yeni köy adı</label>
+                  <label for="new-name">Base name</label>
                   <div class="form-row">
                     <input id="new-name" name="name" required minlength="3" maxlength="32" autocomplete="off">
                     <button class="button" type="submit">Kaydet</button>
@@ -334,7 +353,7 @@
     </main>
 
     <footer>
-      KOALİSYON · Rust / Axum · PostgreSQL · BullMQ
+      KOALİSYON · GENERALS STRATEGY · USA · CHINA · GLA
       <span id="sync-status"></span>
     </footer>
   </div>
