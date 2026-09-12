@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { STLLoader } from "three/addons/loaders/STLLoader.js";
 
-const $ = (sel) => document.querySelector(sel);
+const $ = (selector) => document.querySelector(selector);
 
 const state = {
   ws: null,
@@ -181,12 +182,17 @@ function enterMatch(snapshot) {
   }
   $("#lobby-screen").hidden = true;
   $("#match-screen").hidden = false;
+  void setupMatchScene(snapshot);
+}
+
+async function setupMatchScene(snapshot) {
   updateResources(snapshot.resources);
   renderBuildList(snapshot.buildable || []);
   renderUnitList(snapshot.trainable || []);
+  await ensureBuildingModel();
   initThree(snapshot.map_size);
   rebuildMeshes();
-  toast("Match live — build from the left rail");
+  toast("Match live — WASD pan · scroll zoom · fixed Generals angle");
 }
 
 function updateResources(res) {
@@ -236,47 +242,109 @@ function applyDelta(msg) {
     upsertMesh(entity);
   }
   $("#match-caption").textContent =
-    `Tick ${msg.tick} · entities ${state.entities.size} · LMB place/select · RMB move selected`;
+    `Tick ${msg.tick} · ${state.entities.size} entities · WASD pan · scroll zoom`;
 }
 
 /* ---------- Three.js ---------- */
 
 let renderer, scene, camera, controls, ground, raycaster, pointer;
 let mapSize = 96;
+let buildingGeometry = null;
+let buildingModelPromise = null;
+const panKeys = new Set();
+
+/** Generals-style locked pitch (radians from top-down). */
+const CAMERA_PITCH = Math.PI / 3.35;
+
+async function ensureBuildingModel() {
+  if (buildingGeometry) return buildingGeometry;
+  if (buildingModelPromise) return buildingModelPromise;
+
+  buildingModelPromise = (async () => {
+    const loader = new STLLoader();
+    const geo = await loader.loadAsync("/assets/models/command-center.stl");
+    geo.computeVertexNormals();
+    geo.center();
+    geo.computeBoundingBox();
+    const box = geo.boundingBox;
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const target = 2.4;
+    const s = target / maxDim;
+    geo.scale(s, s, s);
+    geo.computeBoundingBox();
+    // Sit on the ground plane (Y-up).
+    geo.translate(0, -geo.boundingBox.min.y, 0);
+    buildingGeometry = geo;
+    return geo;
+  })();
+
+  try {
+    return await buildingModelPromise;
+  } catch (error) {
+    console.error(error);
+    buildingModelPromise = null;
+    toast("STL model failed to load — using cubes");
+    return null;
+  }
+}
 
 function initThree(size) {
   mapSize = size;
   const canvas = $("#viewport");
+
+  if (renderer) {
+    // Re-entering a match: dispose previous GL context lightly by clearing scene refs.
+    controls?.dispose();
+  }
+
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a2a14);
-  scene.fog = new THREE.Fog(0x1a2a14, 40, 120);
+  scene.fog = new THREE.Fog(0x1a2a14, 55, 140);
 
   camera = new THREE.PerspectiveCamera(
-    50,
+    42,
     canvas.clientWidth / canvas.clientHeight,
     0.1,
     500,
   );
-  camera.position.set(size / 2, 35, size / 2 + 28);
+
+  const cx = size / 2;
+  const cz = size / 2;
+  const dist = 38;
+  camera.position.set(
+    cx,
+    Math.sin(CAMERA_PITCH) * dist,
+    cz + Math.cos(CAMERA_PITCH) * dist,
+  );
 
   controls = new OrbitControls(camera, canvas);
-  controls.target.set(size / 2, 0, size / 2);
-  controls.maxPolarAngle = Math.PI * 0.45;
-  controls.minDistance = 8;
-  controls.maxDistance = 90;
+  controls.target.set(cx, 0, cz);
+  // Fixed Generals angle: no free rotate.
+  controls.enableRotate = false;
+  controls.enablePan = false;
+  controls.enableZoom = true;
+  controls.minDistance = 14;
+  controls.maxDistance = 70;
   controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.zoomSpeed = 0.9;
+  controls.minPolarAngle = CAMERA_PITCH;
+  controls.maxPolarAngle = CAMERA_PITCH;
+  controls.update();
 
-  const hemi = new THREE.HemisphereLight(0xc8d8a8, 0x1a2010, 1.1);
+  const hemi = new THREE.HemisphereLight(0xc8d8a8, 0x1a2010, 1.15);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xfff0c8, 0.85);
-  sun.position.set(30, 50, 10);
+  const sun = new THREE.DirectionalLight(0xfff0c8, 0.95);
+  sun.position.set(40, 60, 20);
   scene.add(sun);
 
-  const geo = new THREE.PlaneGeometry(size, size, size, size);
+  const geo = new THREE.PlaneGeometry(size, size, 1, 1);
   const mat = new THREE.MeshStandardMaterial({
     color: 0x3d5230,
     wireframe: false,
@@ -284,20 +352,57 @@ function initThree(size) {
   });
   ground = new THREE.Mesh(geo, mat);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.set(size / 2, 0, size / 2);
+  ground.position.set(cx, 0, cz);
   ground.receiveShadow = true;
   scene.add(ground);
 
   const grid = new THREE.GridHelper(size, size, 0x5a6a40, 0x2a3a20);
-  grid.position.set(size / 2, 0.02, size / 2);
+  grid.position.set(cx, 0.02, cz);
   scene.add(grid);
 
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
+  state.meshes.clear();
 
   window.addEventListener("resize", onResize);
   canvas.addEventListener("pointerdown", onPointerDown);
+  if (!initThree._keysBound) {
+    window.addEventListener("keydown", onPanKeyDown);
+    window.addEventListener("keyup", onPanKeyUp);
+    initThree._keysBound = true;
+  }
   animate();
+}
+
+function onPanKeyDown(event) {
+  const key = event.key.toLowerCase();
+  if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
+    panKeys.add(key);
+    event.preventDefault();
+  }
+}
+
+function onPanKeyUp(event) {
+  panKeys.delete(event.key.toLowerCase());
+}
+
+function applyKeyboardPan() {
+  if (!controls || !camera || panKeys.size === 0) return;
+
+  const speed = 0.35 * (controls.getDistance() / 30);
+  let dx = 0;
+  let dz = 0;
+  if (panKeys.has("w") || panKeys.has("arrowup")) dz -= speed;
+  if (panKeys.has("s") || panKeys.has("arrowdown")) dz += speed;
+  if (panKeys.has("a") || panKeys.has("arrowleft")) dx -= speed;
+  if (panKeys.has("d") || panKeys.has("arrowright")) dx += speed;
+  if (!dx && !dz) return;
+
+  // Pan on XZ while keeping the locked camera offset.
+  const offset = new THREE.Vector3().subVectors(camera.position, controls.target);
+  controls.target.x = Math.max(2, Math.min(mapSize - 2, controls.target.x + dx));
+  controls.target.z = Math.max(2, Math.min(mapSize - 2, controls.target.z + dz));
+  camera.position.copy(controls.target).add(offset);
 }
 
 function onResize() {
@@ -393,37 +498,58 @@ function onPointerDown(event) {
 
 function colorFor(entity) {
   if (entity.kind === "hq") return 0xe8c547;
-  if (entity.building) return entity.team === 0 ? 0x4a7a3a : 0x8a4a3a;
+  if (entity.building) return entity.team === 0 ? 0x5a8a45 : 0x9a5545;
   if (entity.kind.includes("tank")) return 0x6a7a50;
   return 0xb0c080;
 }
 
 function upsertMesh(entity) {
   let mesh = state.meshes.get(entity.id);
-  const h = entity.building ? (entity.kind === "hq" ? 2.4 : 1.4) : 0.7;
-  const w = entity.building ? (entity.kind === "hq" ? 2.2 : 1.2) : 0.55;
 
   if (!mesh) {
-    const geo = new THREE.BoxGeometry(w, h, w);
-    const mat = new THREE.MeshStandardMaterial({ color: colorFor(entity) });
-    mesh = new THREE.Mesh(geo, mat);
+    const mat = new THREE.MeshStandardMaterial({
+      color: colorFor(entity),
+      metalness: 0.15,
+      roughness: 0.72,
+    });
+
+    if (entity.building && buildingGeometry) {
+      mesh = new THREE.Mesh(buildingGeometry, mat);
+      // Temporary: every building uses command-center.stl until per-kind STLs exist.
+      const scale = entity.kind === "hq" ? 1.15 : 0.85;
+      mesh.scale.setScalar(scale);
+    } else if (entity.building) {
+      const h = entity.kind === "hq" ? 2.4 : 1.4;
+      const w = entity.kind === "hq" ? 2.2 : 1.2;
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), mat);
+    } else {
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.55), mat);
+    }
+
     mesh.userData.id = entity.id;
+    mesh.userData.building = !!entity.building;
     scene.add(mesh);
     state.meshes.set(entity.id, mesh);
 
     if (entity.flag) {
       const flag = new THREE.Mesh(
-        new THREE.BoxGeometry(0.15, 1.2, 0.4),
+        new THREE.BoxGeometry(0.12, 1.1, 0.35),
         new THREE.MeshStandardMaterial({ color: 0xf0d060 }),
       );
-      flag.position.set(0.7, h * 0.6, 0);
+      flag.position.set(0.9, 1.4, 0);
       mesh.add(flag);
     }
   }
 
-  mesh.position.set(entity.x, h / 2, entity.y);
+  if (mesh.userData.building) {
+    mesh.position.set(entity.x, 0, entity.y);
+  } else {
+    mesh.position.set(entity.x, 0.35, entity.y);
+  }
+
   mesh.material.color.setHex(colorFor(entity));
-  mesh.material.opacity = entity.progress != null && entity.progress < 1 ? 0.65 : 1;
+  const building = entity.progress != null && entity.progress < 1;
+  mesh.material.opacity = building ? 0.55 : 1;
   mesh.material.transparent = mesh.material.opacity < 1;
 }
 
@@ -436,6 +562,7 @@ function rebuildMeshes() {
 function animate() {
   requestAnimationFrame(animate);
   if (!renderer) return;
+  applyKeyboardPan();
   controls?.update();
   renderer.render(scene, camera);
 }
