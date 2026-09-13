@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -21,14 +22,20 @@ pub struct MatchHub {
     inner: Arc<HubInner>,
 }
 
+struct ConnSlot {
+    generation: u64,
+    tx: Outbox,
+}
+
 struct HubInner {
     redis: Redis,
     matches: DashMap<Uuid, Arc<RwLock<MatchRuntime>>>,
-    /// user_id -> connection outbox
-    connections: DashMap<Uuid, Outbox>,
+    /// user_id -> live websocket outbox (generation guards refresh races)
+    connections: DashMap<Uuid, ConnSlot>,
+    conn_epoch: AtomicU64,
     /// user_id -> lobby_id (legacy, unused in drop-in flow)
     user_lobby: DashMap<Uuid, Uuid>,
-    /// user_id -> match_id
+    /// user_id -> match_id (kept across disconnect for resume)
     user_match: DashMap<Uuid, Uuid>,
 }
 
@@ -48,18 +55,31 @@ impl MatchHub {
                 redis,
                 matches: DashMap::new(),
                 connections: DashMap::new(),
+                conn_epoch: AtomicU64::new(1),
                 user_lobby: DashMap::new(),
                 user_match: DashMap::new(),
             }),
         }
     }
 
-    pub fn register(&self, user_id: Uuid, tx: Outbox) {
-        self.inner.connections.insert(user_id, tx);
+    /// Returns a connection generation used to ignore stale unregister on refresh.
+    pub fn register(&self, user_id: Uuid, tx: Outbox) -> u64 {
+        let generation = self.inner.conn_epoch.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .connections
+            .insert(user_id, ConnSlot { generation, tx });
+        generation
     }
 
-    pub fn unregister(&self, user_id: Uuid) {
-        self.inner.connections.remove(&user_id);
+    pub fn unregister(&self, user_id: Uuid, generation: u64) {
+        let removed = self
+            .inner
+            .connections
+            .remove_if(&user_id, |_, slot| slot.generation == generation);
+        if removed.is_none() {
+            // A newer socket already owns this user — do not mark disconnected.
+            return;
+        }
         if let Some(match_id) = self.inner.user_match.get(&user_id).map(|e| *e) {
             if let Some(runtime) = self.inner.matches.get(&match_id) {
                 let runtime = runtime.clone();
@@ -70,6 +90,49 @@ impl MatchHub {
                     }
                 });
             }
+        }
+    }
+
+    /// If the user still belongs to a live match, re-send MatchStart snapshot.
+    pub async fn resume_match(&self, user_id: Uuid) -> bool {
+        let Some(match_id) = self.inner.user_match.get(&user_id).map(|e| *e) else {
+            return false;
+        };
+        let Some(runtime) = self.inner.matches.get(&match_id).map(|e| e.clone()) else {
+            self.inner.user_match.remove(&user_id);
+            return false;
+        };
+
+        let snapshot = {
+            let mut rt = runtime.write().await;
+            if rt.sim.ended {
+                drop(rt);
+                self.inner.user_match.remove(&user_id);
+                return false;
+            }
+            if !rt.sim.players.contains_key(&user_id) {
+                drop(rt);
+                self.inner.user_match.remove(&user_id);
+                return false;
+            }
+            if let Some(player) = rt.sim.players.get_mut(&user_id) {
+                player.connected = true;
+            }
+            rt.members.insert(user_id, ());
+            rt.sim.snapshot_for(user_id)
+        };
+
+        if let Some(snapshot) = snapshot {
+            self.send(
+                user_id,
+                ServerMsg::MatchStart {
+                    match_id,
+                    snapshot,
+                },
+            );
+            true
+        } else {
+            false
         }
     }
 
@@ -98,6 +161,7 @@ impl MatchHub {
                 if let Ok(welcome) = self.welcome(user_id).await {
                     self.send(user_id, welcome);
                 }
+                self.resume_match(user_id).await;
             }
             ClientMsg::Ping { n } => self.send(user_id, ServerMsg::Pong { n }),
             ClientMsg::CreateLobby {
@@ -105,11 +169,25 @@ impl MatchHub {
                 map_size,
                 ffa,
             } => {
+                if self.inner.user_match.contains_key(&user_id) {
+                    if self.resume_match(user_id).await {
+                        return Ok(());
+                    }
+                }
                 self.create_and_enter_match(user_id, max_players, map_size, ffa)
                     .await?;
             }
             ClientMsg::JoinLobby { lobby_id } => {
                 // lobby_id is the live match id (drop-in join).
+                if let Some(existing) = self.inner.user_match.get(&user_id).map(|e| *e) {
+                    if existing == lobby_id {
+                        let _ = self.resume_match(user_id).await;
+                        return Ok(());
+                    }
+                    if self.resume_match(user_id).await {
+                        return Err("Already in another match".into());
+                    }
+                }
                 self.join_match(user_id, lobby_id).await?;
             }
             ClientMsg::LeaveLobby => self.leave_lobby(user_id).await?,
@@ -477,8 +555,8 @@ impl MatchHub {
     }
 
     pub fn send(&self, user_id: Uuid, msg: ServerMsg) {
-        if let Some(tx) = self.inner.connections.get(&user_id) {
-            let _ = tx.send(msg);
+        if let Some(slot) = self.inner.connections.get(&user_id) {
+            let _ = slot.tx.send(msg);
         }
     }
 

@@ -39,15 +39,7 @@ async fn handle_socket(state: SharedState, user_id: uuid::Uuid, socket: WebSocke
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
 
-    state.hub.register(user_id, tx);
-
-    if let Ok(welcome) = state.hub.welcome(user_id).await {
-        let _ = sink
-            .send(Message::Text(
-                serde_json::to_string(&welcome).unwrap_or_default().into(),
-            ))
-            .await;
-    }
+    let conn_gen = state.hub.register(user_id, tx);
 
     let send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -74,7 +66,6 @@ async fn handle_socket(state: SharedState, user_id: uuid::Uuid, socket: WebSocke
                 }
             },
             Message::Ping(payload) => {
-                // axum handles most pings; ignore
                 let _ = payload;
             }
             Message::Close(_) => break,
@@ -82,6 +73,6 @@ async fn handle_socket(state: SharedState, user_id: uuid::Uuid, socket: WebSocke
         }
     }
 
-    state.hub.unregister(user_id);
+    state.hub.unregister(user_id, conn_gen);
     send_task.abort();
 }

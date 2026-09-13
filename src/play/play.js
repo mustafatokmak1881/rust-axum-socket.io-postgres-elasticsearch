@@ -18,6 +18,8 @@ const state = {
   selectedBuilding: null,
   faction: "usa",
   ready: false,
+  reconnectAttempt: 0,
+  matchEnded: false,
 };
 
 const factionColors = {
@@ -43,15 +45,56 @@ function send(msg) {
   }
 }
 
+function currentFullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+async function enterGameFullscreen() {
+  if (currentFullscreenElement()) return;
+  const el = document.documentElement;
+  try {
+    if (el.requestFullscreen) {
+      await el.requestFullscreen();
+    } else if (el.webkitRequestFullscreen) {
+      el.webkitRequestFullscreen();
+    }
+  } catch {
+    // Browsers may block until a user gesture; create/join clicks also call this.
+  }
+}
+
+async function exitGameFullscreen() {
+  if (!currentFullscreenElement()) return;
+  try {
+    if (document.exitFullscreen) {
+      await document.exitFullscreen();
+    } else if (document.webkitExitFullscreen) {
+      document.webkitExitFullscreen();
+    }
+  } catch {
+    // ignore
+  }
+}
+
 function connect() {
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   state.ws = ws;
 
-  ws.addEventListener("open", () => send({ t: "hello" }));
+  ws.addEventListener("open", () => {
+    state.reconnectAttempt = 0;
+    send({ t: "hello" });
+  });
   ws.addEventListener("close", () => {
-    toast("Disconnected — refreshing…");
-    setTimeout(() => location.reload(), 1500);
+    if (state.matchEnded) return;
+    const attempt = state.reconnectAttempt++;
+    const delay = Math.min(8000, 700 * 2 ** Math.min(attempt, 4));
+    toast(state.match ? "Bağlantı koptu — maça geri bağlanılıyor…" : "Yeniden bağlanılıyor…");
+    setTimeout(connect, delay);
   });
   ws.addEventListener("message", (event) => {
     let msg;
@@ -86,13 +129,22 @@ function onServer(msg) {
     case "open_matches":
       renderOpenMatches(msg.matches || []);
       break;
-    case "match_start":
+    case "match_start": {
+      const wasInMatch = Boolean(state.match);
+      const midGame = (msg.snapshot?.tick || 0) > 0;
       enterMatch(msg.snapshot);
+      if (wasInMatch || midGame) {
+        toast("Maça devam — kaldığın yerden");
+      } else {
+        toast("Match live — move mouse to screen edges to pan");
+      }
       break;
+    }
     case "delta":
       applyDelta(msg);
       break;
     case "match_end":
+      state.matchEnded = true;
       toast(`Match over: ${msg.reason} · +${msg.xp_gained} XP`);
       setTimeout(() => location.reload(), 4000);
       break;
@@ -182,6 +234,7 @@ function enterMatch(snapshot) {
   }
   $("#lobby-screen").hidden = true;
   $("#match-screen").hidden = false;
+  void enterGameFullscreen();
   void setupMatchScene(snapshot);
 }
 
@@ -194,7 +247,6 @@ async function setupMatchScene(snapshot) {
   const home = findOwnHome(snapshot);
   initThree(snapshot.map_size, terrain, home);
   rebuildMeshes();
-  toast("Match live — move mouse to screen edges to pan");
 }
 
 function findOwnHome(snapshot) {
@@ -721,6 +773,7 @@ function worldFromEvent(event) {
 }
 
 function onPointerDown(event) {
+  void enterGameFullscreen();
   const point = worldFromEvent(event);
   if (!point) return;
 
@@ -954,6 +1007,7 @@ $("#faction-row").addEventListener("click", (event) => {
 });
 
 $("#btn-create").addEventListener("click", () => {
+  void enterGameFullscreen();
   send({ t: "set_faction", faction: state.faction });
   send({
     t: "create_lobby",
@@ -965,6 +1019,7 @@ $("#btn-create").addEventListener("click", () => {
 });
 
 $("#btn-join").addEventListener("click", () => {
+  void enterGameFullscreen();
   joinMatchId($("#lobby-id").value);
 });
 
@@ -981,6 +1036,7 @@ $("#btn-refresh-lobbies").addEventListener("click", async () => {
 $("#open-lobbies").addEventListener("click", (event) => {
   const btn = event.target.closest("[data-join]");
   if (!btn) return;
+  void enterGameFullscreen();
   joinMatchId(btn.dataset.join);
 });
 
@@ -995,9 +1051,21 @@ $("#build-list").addEventListener("click", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && state.selectedBuild) {
+  if (event.key !== "Escape") return;
+  if (state.selectedBuild) {
     setBuildPlacement(null);
+    return;
   }
+  if (currentFullscreenElement()) {
+    void exitGameFullscreen();
+  }
+});
+
+document.addEventListener("fullscreenchange", () => {
+  onResize();
+});
+document.addEventListener("webkitfullscreenchange", () => {
+  onResize();
 });
 
 $("#unit-list").addEventListener("click", (event) => {
