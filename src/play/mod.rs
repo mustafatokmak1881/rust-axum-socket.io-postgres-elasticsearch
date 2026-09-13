@@ -18,6 +18,8 @@ pub fn router() -> Router<SharedState> {
             "/assets/models/command-center.stl",
             get(command_center_stl),
         )
+        .route("/assets/models/command-center.obj", get(command_center_obj))
+        .route("/assets/models/command-center.mtl", get(command_center_mtl))
         .route("/assets/models/barracks.stl", get(barracks_stl))
         .route("/assets/terrain.jpg", get(terrain_jpg))
 }
@@ -43,6 +45,26 @@ async fn command_center_stl() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_bytes!("../web/usa/command-center.stl").as_slice(),
+    )
+}
+
+async fn command_center_obj() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/command-center.obj").as_slice(),
+    )
+}
+
+async fn command_center_mtl() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/command-center.mtl").as_slice(),
     )
 }
 

@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -342,6 +344,8 @@ function applyDelta(msg) {
 let renderer, scene, camera, controls, ground, raycaster, pointer;
 let mapSize = 192;
 let buildingGeometries = Object.create(null);
+/** Pre-scaled OBJ/MTL groups (HQ etc.) — clone per entity. */
+let buildingTemplates = Object.create(null);
 let buildingModelsPromise = null;
 let ghostMesh = null;
 let fogOfWar = null;
@@ -357,13 +361,13 @@ const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 const CAMERA_PITCH = Math.PI / 3.35;
 const EDGE_SCROLL_PX = 160;
 
-const BUILDING_STL = {
-  hq: { url: "/assets/models/command-center.stl", target: 2.6 },
-  power_plant: { url: "/assets/models/command-center.stl", target: 2.2 },
-  supply: { url: "/assets/models/command-center.stl", target: 2.2 },
-  barracks: { url: "/assets/models/barracks.stl", target: 2.5 },
-  war_factory: { url: "/assets/models/command-center.stl", target: 2.4 },
-  turret: { url: "/assets/models/command-center.stl", target: 1.8 },
+const BUILDING_MODELS = {
+  hq: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 2.8 },
+  power_plant: { type: "stl", url: "/assets/models/command-center.stl", target: 2.2 },
+  supply: { type: "stl", url: "/assets/models/command-center.stl", target: 2.2 },
+  barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 2.5 },
+  war_factory: { type: "stl", url: "/assets/models/command-center.stl", target: 2.4 },
+  turret: { type: "stl", url: "/assets/models/command-center.stl", target: 1.8 },
 };
 
 async function prepareStlGeometry(url, targetSize) {
@@ -385,24 +389,101 @@ async function prepareStlGeometry(url, targetSize) {
   return geo;
 }
 
+async function prepareObjTemplate(objUrl, mtlUrl, targetSize) {
+  const mtlLoader = new MTLLoader();
+  const materials = await mtlLoader.loadAsync(mtlUrl);
+  materials.preload();
+  const objLoader = new OBJLoader();
+  objLoader.setMaterials(materials);
+  const root = await objLoader.loadAsync(objUrl);
+
+  root.traverse((child) => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        mat.side = THREE.FrontSide;
+        if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
+      }
+    }
+  });
+
+  // Fit + ground like STL path (Blender OBJ is usually Y-up already).
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+  root.position.sub(center);
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  root.scale.setScalar(targetSize / maxDim);
+  root.updateMatrixWorld(true);
+  const grounded = new THREE.Box3().setFromObject(root);
+  root.position.y -= grounded.min.y;
+
+  const wrapper = new THREE.Group();
+  wrapper.add(root);
+  wrapper.userData.keepMtlColors = true;
+  return wrapper;
+}
+
 function geometryForKind(kind) {
-  return buildingGeometries[kind] || buildingGeometries.hq || null;
+  return buildingGeometries[kind] || buildingGeometries.barracks || null;
+}
+
+function templateForKind(kind) {
+  return buildingTemplates[kind] || null;
+}
+
+function createBuildingMesh(kind, fallbackMat) {
+  const template = templateForKind(kind);
+  if (template) {
+    const mesh = template.clone(true);
+    mesh.userData.keepMtlColors = true;
+    mesh.userData.building = true;
+    return mesh;
+  }
+  const geo = geometryForKind(kind);
+  if (geo) {
+    return new THREE.Mesh(geo, fallbackMat);
+  }
+  const h = kind === "hq" ? 2.4 : 1.4;
+  const w = kind === "hq" ? 2.2 : 1.2;
+  return new THREE.Mesh(new THREE.BoxGeometry(w, h, w), fallbackMat);
+}
+
+function setBuildingOpacity(root, opacity) {
+  root.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    for (const mat of mats) {
+      mat.transparent = opacity < 1;
+      mat.opacity = opacity;
+      mat.depthWrite = opacity >= 1;
+    }
+  });
 }
 
 async function ensureBuildingModel() {
-  if (buildingGeometries.hq && buildingGeometries.barracks) return buildingGeometries;
+  if (buildingTemplates.hq && buildingGeometries.barracks) return true;
   if (buildingModelsPromise) return buildingModelsPromise;
 
   buildingModelsPromise = (async () => {
-    const unique = new Map();
-    for (const [kind, spec] of Object.entries(BUILDING_STL)) {
-      const key = `${spec.url}|${spec.target}`;
-      if (!unique.has(key)) {
-        unique.set(key, prepareStlGeometry(spec.url, spec.target));
+    const stlCache = new Map();
+    for (const [kind, spec] of Object.entries(BUILDING_MODELS)) {
+      if (spec.type === "obj") {
+        buildingTemplates[kind] = await prepareObjTemplate(spec.obj, spec.mtl, spec.target);
+      } else {
+        const key = `${spec.url}|${spec.target}`;
+        if (!stlCache.has(key)) {
+          stlCache.set(key, prepareStlGeometry(spec.url, spec.target));
+        }
+        buildingGeometries[kind] = await stlCache.get(key);
       }
-      buildingGeometries[kind] = await unique.get(key);
     }
-    return buildingGeometries;
+    return true;
   })();
 
   try {
@@ -410,7 +491,7 @@ async function ensureBuildingModel() {
   } catch (error) {
     console.error(error);
     buildingModelsPromise = null;
-    toast("STL model failed to load — using cubes");
+    toast("Building models failed to load — using fallbacks");
     return null;
   }
 }
@@ -811,11 +892,13 @@ function clearGhost() {
   if (!ghostMesh || !scene) return;
   scene.remove(ghostMesh);
   ghostMesh.traverse((obj) => {
-    // Shared STL geometries are kept cached — only dispose ghost-only geometry.
+    if (!obj.isMesh) return;
+    // Shared STL geometries stay cached.
     if (obj.geometry && !Object.values(buildingGeometries).includes(obj.geometry)) {
       obj.geometry.dispose?.();
     }
-    if (obj.material) {
+    // Only dispose materials we created for ghost (not shared template mats).
+    if (ghostMesh.userData.disposeMaterials && obj.material) {
       if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose?.());
       else obj.material.dispose?.();
     }
@@ -838,15 +921,9 @@ function ensureGhost(kind) {
     roughness: 0.8,
   });
 
-  let mesh;
-  const geo = geometryForKind(kind);
-  if (geo) {
-    mesh = new THREE.Mesh(geo, mat);
-  } else {
-    const h = kind === "hq" ? 2.4 : 1.4;
-    const w = kind === "hq" ? 2.2 : 1.2;
-    mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), mat);
-  }
+  const mesh = createBuildingMesh(kind, mat);
+  setBuildingOpacity(mesh, 0.38);
+  mesh.userData.disposeMaterials = !mesh.userData.keepMtlColors;
 
   // Soft tile footprint so placement cell is obvious.
   const pad = new THREE.Mesh(
@@ -1111,13 +1188,8 @@ function upsertMesh(entity) {
       roughness: 0.72,
     });
 
-    const geo = entity.building ? geometryForKind(entity.kind) : null;
-    if (geo) {
-      mesh = new THREE.Mesh(geo, mat);
-    } else if (entity.building) {
-      const h = entity.kind === "hq" ? 2.4 : 1.4;
-      const w = entity.kind === "hq" ? 2.2 : 1.2;
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), mat);
+    if (entity.building) {
+      mesh = createBuildingMesh(entity.kind, mat);
     } else {
       mesh = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.55), mat);
     }
@@ -1145,10 +1217,15 @@ function upsertMesh(entity) {
     mesh.position.set(entity.x, 0.35, entity.y);
   }
 
-  mesh.material.color.setHex(colors[0]);
   const building = entity.progress != null && entity.progress < 1;
-  mesh.material.opacity = building ? 0.55 : 1;
-  mesh.material.transparent = mesh.material.opacity < 1;
+  const opacity = building ? 0.55 : 1;
+  if (mesh.userData.keepMtlColors) {
+    setBuildingOpacity(mesh, opacity);
+  } else if (mesh.material) {
+    mesh.material.color.setHex(colors[0]);
+    mesh.material.opacity = opacity;
+    mesh.material.transparent = opacity < 1;
+  }
 
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;
