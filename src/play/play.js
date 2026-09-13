@@ -230,6 +230,7 @@ function escapeHtml(value) {
 function enterMatch(snapshot) {
   state.match = snapshot;
   state.entities.clear();
+  aoiRadius = Number(snapshot.aoi_radius) || 28;
   for (const entity of snapshot.entities || []) {
     state.entities.set(entity.id, entity);
   }
@@ -246,8 +247,15 @@ async function setupMatchScene(snapshot) {
   await ensureBuildingModel();
   const terrain = await loadTerrainTexture(snapshot.map_size);
   const home = findOwnHome(snapshot);
+  if (snapshot.focus) {
+    home.x = snapshot.focus[0];
+    home.z = snapshot.focus[1];
+  }
+  aoiRadius = Number(snapshot.aoi_radius) || aoiRadius;
+  lastFocusSent = { x: home.x, z: home.z };
   initThree(snapshot.map_size, terrain, home);
   rebuildMeshes();
+  send({ t: "set_focus", x: home.x, y: home.z });
 }
 
 function findOwnHome(snapshot) {
@@ -319,6 +327,10 @@ let mapSize = 192;
 let buildingGeometries = Object.create(null);
 let buildingModelsPromise = null;
 let ghostMesh = null;
+let fogOfWar = null;
+let aoiRadius = 28;
+let lastFocusSentAt = 0;
+let lastFocusSent = { x: 0, z: 0 };
 const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 
 /** Generals-style locked pitch (radians from vertical-ish). */
@@ -423,6 +435,76 @@ function makeFallbackTerrainTexture(mapSize) {
   return tex;
 }
 
+function createFogOfWar(size, focusX, focusZ, radius) {
+  const geo = new THREE.PlaneGeometry(size + 64, size + 64, 1, 1);
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: {
+      uFocus: { value: new THREE.Vector2(focusX, focusZ) },
+      uRadius: { value: radius },
+      uColor: { value: new THREE.Color(0x070b06) },
+      uEdge: { value: 4.5 },
+    },
+    vertexShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorldPos = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: `
+      uniform vec2 uFocus;
+      uniform float uRadius;
+      uniform vec3 uColor;
+      uniform float uEdge;
+      varying vec3 vWorldPos;
+      void main() {
+        float d = distance(vWorldPos.xz, uFocus);
+        // Soft fog beyond AOI; clear vision inside the circle.
+        float fog = smoothstep(uRadius - uEdge, uRadius + uEdge * 0.35, d);
+        // Extra dark far out so the limit reads clearly.
+        float deep = smoothstep(uRadius + uEdge, uRadius + uEdge * 4.0, d) * 0.22;
+        float alpha = fog * 0.78 + deep;
+        if (alpha < 0.02) discard;
+        // Faint ring at the vision edge.
+        float ring = 1.0 - smoothstep(0.0, 1.4, abs(d - uRadius));
+        vec3 col = mix(uColor, vec3(0.55, 0.62, 0.42), ring * 0.35 * fog);
+        gl_FragColor = vec4(col, alpha);
+      }
+    `,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(size / 2, 0.18, size / 2);
+  mesh.renderOrder = 8;
+  mesh.name = "fogOfWar";
+  return mesh;
+}
+
+function updateFogOfWar(focusX, focusZ) {
+  if (!fogOfWar?.material?.uniforms) return;
+  fogOfWar.material.uniforms.uFocus.value.set(focusX, focusZ);
+  fogOfWar.material.uniforms.uRadius.value = aoiRadius;
+}
+
+function syncVisionFocus() {
+  if (!controls || !state.match) return;
+  const x = controls.target.x;
+  const z = controls.target.z;
+  updateFogOfWar(x, z);
+
+  const now = performance.now();
+  if (now - lastFocusSentAt < 180) return;
+  const dx = x - lastFocusSent.x;
+  const dz = z - lastFocusSent.z;
+  if (dx * dx + dz * dz < 2.25) return;
+  lastFocusSentAt = now;
+  lastFocusSent = { x, z };
+  send({ t: "set_focus", x, y: z });
+}
+
 function scatterGroundDecor(scene, size) {
   const group = new THREE.Group();
   group.name = "groundDecor";
@@ -498,6 +580,7 @@ function initThree(size, terrainTexture, home) {
   mapSize = size;
   const canvas = $("#viewport");
   ghostMesh = null;
+  fogOfWar = null;
 
   if (renderer) {
     // Re-entering a match: dispose previous GL context lightly by clearing scene refs.
@@ -509,8 +592,9 @@ function initThree(size, terrainTexture, home) {
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1a2a14);
-  scene.fog = new THREE.Fog(0x1a2a14, Math.max(60, size * 0.55), Math.max(160, size * 1.4));
+  scene.background = new THREE.Color(0x12180e);
+  // Distant haze; vision limit is the fog-of-war disc.
+  scene.fog = new THREE.Fog(0x12180e, Math.max(70, aoiRadius * 2.2), Math.max(120, aoiRadius * 4.5));
 
   camera = new THREE.PerspectiveCamera(
     42,
@@ -578,6 +662,9 @@ function initThree(size, terrainTexture, home) {
   scene.add(grid);
 
   scatterGroundDecor(scene, size);
+
+  fogOfWar = createFogOfWar(size, lookX, lookZ, aoiRadius);
+  scene.add(fogOfWar);
 
   // Dark underlay past the playable map edge.
   const underlay = new THREE.Mesh(
@@ -994,6 +1081,7 @@ function animate() {
   if (!renderer) return;
   applyEdgePan();
   controls?.update();
+  syncVisionFocus();
   renderer.render(scene, camera);
 }
 

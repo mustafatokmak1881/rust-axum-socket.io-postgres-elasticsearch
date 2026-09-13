@@ -171,6 +171,8 @@ pub struct MatchSnapshot {
     pub you_name: String,
     pub team: u8,
     pub ffa: bool,
+    pub aoi_radius: f32,
+    pub focus: [f32; 2],
     pub resources: ResourcesView,
     pub entities: Vec<EntityView>,
     pub buildable: Vec<BuildableInfo>,

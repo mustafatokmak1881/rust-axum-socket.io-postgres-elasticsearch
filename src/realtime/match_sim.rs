@@ -547,6 +547,8 @@ impl MatchSim {
             you_name: player.label(),
             team: player.team,
             ffa: self.ffa,
+            aoi_radius: aoi::AOI_RADIUS,
+            focus,
             resources: player.resources.view(),
             entities,
             buildable: Self::buildable_info(),
