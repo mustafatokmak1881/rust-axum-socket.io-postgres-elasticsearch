@@ -358,20 +358,21 @@ let lastFocusSent = { x: 0, z: 0 };
 const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 
 /** Generals-style locked pitch (radians from vertical-ish). */
-const CAMERA_PITCH = Math.PI / 3.15;
-/** Close RTS camera — no wide pull-back. */
-const CAMERA_DIST = 18;
-const CAMERA_DIST_MIN = 14;
-const CAMERA_DIST_MAX = 20;
+const CAMERA_PITCH = Math.PI / 3.0;
+/** Very close RTS camera — almost no pull-back. */
+const CAMERA_DIST = 9;
+const CAMERA_DIST_MIN = 7;
+const CAMERA_DIST_MAX = 10;
+const CAMERA_FOV = 32;
 const EDGE_SCROLL_PX = 160;
 
 const BUILDING_MODELS = {
   hq: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.4 },
-  power_plant: { type: "stl", url: "/assets/models/command-center.stl", target: 1.1 },
-  supply: { type: "stl", url: "/assets/models/command-center.stl", target: 1.1 },
+  power_plant: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.1 },
+  supply: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.1 },
   barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 0.85 },
-  war_factory: { type: "stl", url: "/assets/models/command-center.stl", target: 1.2 },
-  turret: { type: "stl", url: "/assets/models/command-center.stl", target: 0.9 },
+  war_factory: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.2 },
+  turret: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 0.9 },
 };
 
 async function prepareStlGeometry(url, targetSize) {
@@ -393,28 +394,31 @@ async function prepareStlGeometry(url, targetSize) {
   return geo;
 }
 
-async function prepareObjTemplate(objUrl, mtlUrl, targetSize) {
+async function loadObjRoot(objUrl, mtlUrl) {
   const mtlLoader = new MTLLoader();
   const materials = await mtlLoader.loadAsync(mtlUrl);
   materials.preload();
   const objLoader = new OBJLoader();
   objLoader.setMaterials(materials);
   const root = await objLoader.loadAsync(objUrl);
-
   root.traverse((child) => {
-    if (child.isMesh) {
-      child.castShadow = true;
-      child.receiveShadow = true;
-      const mats = Array.isArray(child.material) ? child.material : [child.material];
-      for (const mat of mats) {
-        if (!mat) continue;
-        mat.side = THREE.FrontSide;
-        if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
-      }
+    if (!child.isMesh) return;
+    child.castShadow = true;
+    child.receiveShadow = true;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    for (const mat of mats) {
+      if (!mat) continue;
+      mat.side = THREE.FrontSide;
+      if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
     }
   });
+  return root;
+}
 
-  // Fit + ground like STL path (Blender OBJ is usually Y-up already).
+function fitObjRoot(root, targetSize) {
+  root.position.set(0, 0, 0);
+  root.scale.set(1, 1, 1);
+  root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(root);
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
@@ -426,7 +430,11 @@ async function prepareObjTemplate(objUrl, mtlUrl, targetSize) {
   root.updateMatrixWorld(true);
   const grounded = new THREE.Box3().setFromObject(root);
   root.position.y -= grounded.min.y;
+}
 
+function makeObjTemplate(sharedRoot, targetSize) {
+  const root = sharedRoot.clone(true);
+  fitObjRoot(root, targetSize);
   const wrapper = new THREE.Group();
   wrapper.add(root);
   wrapper.userData.keepMtlColors = true;
@@ -476,9 +484,14 @@ async function ensureBuildingModel() {
 
   buildingModelsPromise = (async () => {
     const stlCache = new Map();
+    const objBaseCache = new Map();
     for (const [kind, spec] of Object.entries(BUILDING_MODELS)) {
       if (spec.type === "obj") {
-        buildingTemplates[kind] = await prepareObjTemplate(spec.obj, spec.mtl, spec.target);
+        const key = `${spec.obj}|${spec.mtl}`;
+        if (!objBaseCache.has(key)) {
+          objBaseCache.set(key, await loadObjRoot(spec.obj, spec.mtl));
+        }
+        buildingTemplates[kind] = makeObjTemplate(objBaseCache.get(key), spec.target);
       } else {
         const key = `${spec.url}|${spec.target}`;
         if (!stlCache.has(key)) {
@@ -779,7 +792,7 @@ function initThree(size, terrainTexture, home) {
   scene.fog = new THREE.Fog(0x12180e, Math.max(70, aoiRadius * 2.2), Math.max(120, aoiRadius * 4.5));
 
   camera = new THREE.PerspectiveCamera(
-    42,
+    CAMERA_FOV,
     canvas.clientWidth / canvas.clientHeight,
     0.1,
     Math.max(800, size * 4),
@@ -1163,6 +1176,9 @@ function attachOwnerMarkings(mesh, entity) {
   const colors = entityColors(entity);
   const name = entity.owner_name || "Player";
   const sprite = makeNameSprite(name, colors);
+  if (!entity.building) {
+    sprite.scale.set(1.05, 0.26, 1);
+  }
   sprite.position.set(0, labelHeightFor(entity), 0);
   sprite.name = "ownerLabel";
   mesh.add(sprite);
@@ -1174,7 +1190,17 @@ function labelHeightFor(entity) {
   if (entity.building) {
     return entity.kind === "hq" ? 1.55 : 1.15;
   }
-  return 1.15;
+  return unitDims(entity.kind).h + 0.35;
+}
+
+function unitDims(kind) {
+  const k = String(kind || "");
+  // Vehicles a bit larger than infantry, still small vs buildings.
+  if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
+    return { w: 0.2, h: 0.12, d: 0.26 };
+  }
+  // Infantry / ranger / missile defender ≈ human scale
+  return { w: 0.07, h: 0.15, d: 0.07 };
 }
 
 function colorFor(entity) {
@@ -1195,7 +1221,8 @@ function upsertMesh(entity) {
     if (entity.building) {
       mesh = createBuildingMesh(entity.kind, mat);
     } else {
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.36, 0.28), mat);
+      const d = unitDims(entity.kind);
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(d.w, d.h, d.d), mat);
     }
 
     mesh.userData.id = entity.id;
@@ -1218,7 +1245,7 @@ function upsertMesh(entity) {
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
   } else {
-    mesh.position.set(entity.x, 0.2, entity.y);
+    mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
   }
 
   const building = entity.progress != null && entity.progress < 1;
@@ -1240,6 +1267,9 @@ function upsertMesh(entity) {
       label.material.map?.dispose();
       label.material.dispose();
       const sprite = makeNameSprite(entity.owner_name || "Player", colors);
+      if (!entity.building) {
+        sprite.scale.set(1.05, 0.26, 1);
+      }
       sprite.position.set(0, labelHeightFor(entity), 0);
       sprite.name = "ownerLabel";
       mesh.add(sprite);
