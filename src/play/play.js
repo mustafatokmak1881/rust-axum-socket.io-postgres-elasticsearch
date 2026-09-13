@@ -813,7 +813,7 @@ function onPointerDown(event) {
       x,
       y,
     });
-    // Stay in placement mode; ghost keeps following for the next build.
+    setBuildPlacement(null);
     return;
   }
 
