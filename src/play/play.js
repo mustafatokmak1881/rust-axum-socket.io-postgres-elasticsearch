@@ -895,10 +895,18 @@ function attachOwnerMarkings(mesh, entity) {
   const colors = entityColors(entity);
   const name = entity.owner_name || "Player";
   const sprite = makeNameSprite(name, colors);
-  sprite.position.set(0, entity.kind === "hq" ? 2.7 : 2.05, 0);
+  sprite.position.set(0, labelHeightFor(entity), 0);
   sprite.name = "ownerLabel";
   mesh.add(sprite);
   mesh.userData.ownerLabel = sprite;
+  mesh.userData.labelKey = `${name}|${colors.join(",")}`;
+}
+
+function labelHeightFor(entity) {
+  if (entity.building) {
+    return entity.kind === "hq" ? 2.7 : 2.05;
+  }
+  return 1.15;
 }
 
 function colorFor(entity) {
@@ -932,19 +940,7 @@ function upsertMesh(entity) {
     scene.add(mesh);
     state.meshes.set(entity.id, mesh);
 
-    if (entity.building) {
-      attachOwnerMarkings(mesh, entity);
-    } else {
-      // Units: tiny tricolor fin for ownership at a glance.
-      for (let i = 0; i < 3; i++) {
-        const fin = new THREE.Mesh(
-          new THREE.BoxGeometry(0.06, 0.18, 0.03),
-          new THREE.MeshStandardMaterial({ color: colors[i] }),
-        );
-        fin.position.set(-0.08 + i * 0.08, 0.48, 0.18);
-        mesh.add(fin);
-      }
-    }
+    attachOwnerMarkings(mesh, entity);
 
     if (entity.flag) {
       const flag = new THREE.Mesh(
@@ -969,14 +965,14 @@ function upsertMesh(entity) {
 
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;
-  if (label && entity.building) {
+  if (label) {
     const key = `${entity.owner_name}|${colors.join(",")}`;
     if (mesh.userData.labelKey !== key) {
       mesh.remove(label);
       label.material.map?.dispose();
       label.material.dispose();
       const sprite = makeNameSprite(entity.owner_name || "Player", colors);
-      sprite.position.set(0, entity.kind === "hq" ? 2.7 : 2.05, 0);
+      sprite.position.set(0, labelHeightFor(entity), 0);
       sprite.name = "ownerLabel";
       mesh.add(sprite);
       mesh.userData.ownerLabel = sprite;
