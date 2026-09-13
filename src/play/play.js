@@ -287,6 +287,32 @@ function findOwnHome(snapshot) {
   return { x: snapshot.map_size / 2, z: snapshot.map_size / 2 };
 }
 
+function centerCameraOnHq() {
+  if (!controls || !camera || !state.match) return;
+  let hq = null;
+  for (const entity of state.entities.values()) {
+    if (entity.owner === state.match.you && entity.kind === "hq") {
+      hq = entity;
+      break;
+    }
+  }
+  if (!hq) {
+    toast("Command Center not found");
+    return;
+  }
+  const lookX = hq.x;
+  const lookZ = hq.y;
+  const dist = CAMERA_DIST;
+  controls.target.set(lookX, 0, lookZ);
+  camera.position.set(
+    lookX,
+    Math.sin(CAMERA_PITCH) * dist,
+    lookZ + Math.cos(CAMERA_PITCH) * dist,
+  );
+  controls.update();
+  send({ t: "set_focus", x: lookX, y: lookZ });
+}
+
 function updateResources(res) {
   if (!res) return;
   $("#res-supplies").textContent = res.supplies;
@@ -1377,6 +1403,14 @@ window.addEventListener("keydown", (event) => {
     } else {
       setBuildPlacement(item.kind);
     }
+    return;
+  }
+
+  // H — center camera on own Command Center.
+  if (event.key === "h" || event.key === "H") {
+    if (!state.match) return;
+    event.preventDefault();
+    centerCameraOnHq();
   }
 });
 
