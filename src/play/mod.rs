@@ -14,10 +14,6 @@ pub fn router() -> Router<SharedState> {
         .route("/play", get(page::play))
         .route("/assets/play.css", get(stylesheet))
         .route("/assets/play.js", get(javascript))
-        .route(
-            "/assets/models/command-center.stl",
-            get(command_center_stl),
-        )
         .route("/assets/models/command-center.obj", get(command_center_obj))
         .route("/assets/models/command-center.mtl", get(command_center_mtl))
         .route("/assets/models/barracks.stl", get(barracks_stl))
@@ -35,16 +31,6 @@ async fn javascript() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
         include_str!("play.js"),
-    )
-}
-
-async fn command_center_stl() -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "model/stl"),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
-        ],
-        include_bytes!("../web/usa/command-center.stl").as_slice(),
     )
 }
 
