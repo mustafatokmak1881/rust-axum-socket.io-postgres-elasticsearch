@@ -103,15 +103,6 @@ impl ExploredMap {
         !was
     }
 
-    pub fn is_explored(&self, x: u16, y: u16) -> bool {
-        let Some(i) = self.index(x, y) else {
-            return false;
-        };
-        let word = i / 64;
-        let bit = i % 64;
-        self.bits[word] & (1u64 << bit) != 0
-    }
-
     /// Reveal a disc; returns newly explored packed cell indices (y * size + x).
     pub fn reveal_circle(&mut self, cx: f32, cy: f32, radius: f32) -> Vec<u16> {
         let mut newly = Vec::new();
