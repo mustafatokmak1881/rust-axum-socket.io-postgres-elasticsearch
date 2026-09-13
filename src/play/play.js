@@ -442,20 +442,30 @@ async function loadObjRoot(objUrl, mtlUrl) {
 }
 
 function fitObjRoot(root, targetSize) {
+  // Reset local transform so bbox is in true model space.
   root.position.set(0, 0, 0);
+  root.rotation.set(0, 0, 0);
   root.scale.set(1, 1, 1);
   root.updateMatrixWorld(true);
+
   const box = new THREE.Box3().setFromObject(root);
   const size = new THREE.Vector3();
   const center = new THREE.Vector3();
   box.getSize(size);
   box.getCenter(center);
-  root.position.sub(center);
+
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  root.scale.setScalar(targetSize / maxDim);
+  const s = targetSize / maxDim;
+
+  // Three.js matrix is T*R*S — scale first, then translate by -center*s
+  // so the visual center lands on the group origin (matches STL geo.center()).
+  root.scale.setScalar(s);
+  root.position.set(-center.x * s, -center.y * s, -center.z * s);
   root.updateMatrixWorld(true);
+
   const grounded = new THREE.Box3().setFromObject(root);
   root.position.y -= grounded.min.y;
+  root.updateMatrixWorld(true);
 }
 
 function makeObjTemplate(sharedRoot, targetSize) {
