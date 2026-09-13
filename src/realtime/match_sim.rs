@@ -217,6 +217,8 @@ pub fn buildables() -> &'static [BuildDef] {
 }
 
 pub fn trainables() -> &'static [UnitDef] {
+    // Scale: HQ visual ~1.4 world units ≈ ~20 m → 1 wu ≈ 14 m.
+    // Speeds are world-units / second (applied each tick as speed * dt).
     &[
         UnitDef {
             unit: "ranger",
@@ -228,7 +230,8 @@ pub fn trainables() -> &'static [UnitDef] {
             train_ms: 4_000,
             hp: 120.0,
             damage: 12.0,
-            speed: 4.5,
+            // ~5 m/s jog → ≈ 0.35 wu/s
+            speed: 0.35,
             range: 4.0,
         },
         UnitDef {
@@ -241,7 +244,8 @@ pub fn trainables() -> &'static [UnitDef] {
             train_ms: 5_000,
             hp: 100.0,
             damage: 18.0,
-            speed: 3.8,
+            // heavier infantry ~4 m/s
+            speed: 0.28,
             range: 7.0,
         },
         UnitDef {
@@ -254,7 +258,8 @@ pub fn trainables() -> &'static [UnitDef] {
             train_ms: 10_000,
             hp: 500.0,
             damage: 40.0,
-            speed: 3.2,
+            // combat pace ~8 m/s
+            speed: 0.55,
             range: 5.5,
         },
         UnitDef {
@@ -267,7 +272,7 @@ pub fn trainables() -> &'static [UnitDef] {
             train_ms: 10_000,
             hp: 500.0,
             damage: 40.0,
-            speed: 3.2,
+            speed: 0.55,
             range: 5.5,
         },
     ]
