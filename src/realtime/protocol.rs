@@ -78,6 +78,8 @@ pub enum ServerMsg {
         removed: Vec<Uuid>,
         resources: Option<ResourcesView>,
         focus_hint: Option<[f32; 2]>,
+        /// Newly explored cell indices (y * map_size + x).
+        explored_new: Vec<u16>,
     },
     MatchEnd {
         match_id: Uuid,
@@ -173,6 +175,8 @@ pub struct MatchSnapshot {
     pub ffa: bool,
     pub aoi_radius: f32,
     pub focus: [f32; 2],
+    /// Packed little-endian u64 words of explored cells (row-major).
+    pub explored: Vec<u8>,
     pub resources: ResourcesView,
     pub entities: Vec<EntityView>,
     pub buildable: Vec<BuildableInfo>,

@@ -428,7 +428,8 @@ impl MatchHub {
                     if rt.sim.tick % match_sim::BROADCAST_EVERY as u64 == 0 {
                         let member_ids: Vec<Uuid> = rt.members.keys().copied().collect();
                         for uid in member_ids {
-                            let (entities, removed, resources) = rt.sim.delta_for(uid);
+                            let (entities, removed, resources, explored_new) =
+                                rt.sim.delta_for(uid);
                             let focus = rt.sim.players.get(&uid).map(|p| p.focus);
                             hub.send(
                                 uid,
@@ -438,6 +439,7 @@ impl MatchHub {
                                     removed,
                                     resources,
                                     focus_hint: focus,
+                                    explored_new,
                                 },
                             );
                         }

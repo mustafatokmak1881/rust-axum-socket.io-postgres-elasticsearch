@@ -78,18 +78,20 @@
     <section id="match-screen" class="screen" hidden>
       <canvas id="viewport"></canvas>
 
-      <aside class="build-rail" id="build-rail">
-        <header>Structures</header>
-        <div id="build-list"></div>
-        <footer id="build-detail">Select a structure (1–9) or click, then place on the map.</footer>
-      </aside>
+      <div class="match-dock">
+        <aside class="build-rail" id="build-rail">
+          <header>Structures <span class="hint">1–9</span></header>
+          <div id="build-list"></div>
+          <footer id="build-detail">Select, then click map</footer>
+        </aside>
 
-      <aside class="unit-rail" id="unit-rail">
-        <header>Production</header>
-        <div id="unit-list"></div>
-      </aside>
+        <aside class="unit-rail" id="unit-rail">
+          <header>Production</header>
+          <div id="unit-list"></div>
+        </aside>
+      </div>
 
-      <div class="match-caption" id="match-caption">Edge-scroll · Scroll zoom · Fixed angle · LMB place · RMB move</div>
+      <div class="match-caption" id="match-caption">Edge-scroll · Scroll zoom · LMB place · RMB move</div>
       <div class="status-toast" id="toast" hidden></div>
     </section>
   </div>

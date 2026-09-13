@@ -25,8 +25,10 @@ pub struct PlayerState {
     pub focus: [f32; 2],
     pub alive: bool,
     pub connected: bool,
-    /// Entity ids last acknowledged in this player's AOI (enter/leave sync).
+    /// Entity ids last acknowledged in this player's vision (enter/leave sync).
     pub aoi_known: HashSet<Uuid>,
+    /// Permanent explored shroud (Generals-style).
+    pub explored: aoi::ExploredMap,
 }
 
 impl PlayerState {
@@ -336,6 +338,7 @@ impl MatchSim {
                     alive: true,
                     connected: true,
                     aoi_known: HashSet::new(),
+                    explored: aoi::ExploredMap::new(map_size),
                 },
             );
 
@@ -365,6 +368,7 @@ impl MatchSim {
                     dirty: true,
                 },
             );
+            sim.reveal_vision_for(user_id);
         }
 
         sim
@@ -464,6 +468,7 @@ impl MatchSim {
                 alive: true,
                 connected: true,
                 aoi_known: HashSet::new(),
+                explored: aoi::ExploredMap::new(self.map_size),
             },
         );
 
@@ -493,6 +498,7 @@ impl MatchSim {
                 dirty: true,
             },
         );
+        self.reveal_vision_for(user_id);
 
         Ok(())
     }
@@ -538,7 +544,7 @@ impl MatchSim {
     pub fn snapshot_for(&self, user_id: Uuid) -> Option<MatchSnapshot> {
         let player = self.players.values().find(|p| p.is(user_id))?;
         let focus = player.focus;
-        let entities = aoi::visible_entities(self.entities.values(), focus[0], focus[1], user_id)
+        let entities = aoi::visible_entities(self.entities.values(), user_id)
             .into_iter()
             .map(|e| self.entity_view(e))
             .collect();
@@ -553,11 +559,30 @@ impl MatchSim {
             ffa: self.ffa,
             aoi_radius: aoi::AOI_RADIUS,
             focus,
+            explored: player.explored.to_bytes(),
             resources: player.resources.view(),
             entities,
             buildable: Self::buildable_info(),
             trainable: Self::trainable_info(),
         })
+    }
+
+    /// Stamp current unit/building vision into the player's explored map.
+    pub fn reveal_vision_for(&mut self, user_id: Uuid) -> Vec<u16> {
+        let sources: Vec<(f32, f32, f32)> = self
+            .entities
+            .values()
+            .filter(|e| e.owner == user_id && aoi::entity_provides_vision(e))
+            .map(|e| (e.x, e.y, aoi::vision_radius(e)))
+            .collect();
+        let Some(player) = self.players.get_mut(&user_id) else {
+            return Vec::new();
+        };
+        let mut newly = Vec::new();
+        for (x, y, radius) in sources {
+            newly.extend(player.explored.reveal_circle(x, y, radius));
+        }
+        newly
     }
 
     pub fn place_building(
@@ -644,6 +669,7 @@ impl MatchSim {
         self.stream_jobs.push_back(StreamJob {
             due_tick: self.tick + (def.build_ms as u64 / (1000 / TICK_HZ as u64)).max(1),
         });
+        self.reveal_vision_for(user_id);
 
         Ok(())
     }
@@ -965,32 +991,38 @@ impl MatchSim {
         }
     }
 
-    pub fn delta_for(&mut self, user_id: Uuid) -> (Vec<EntityView>, Vec<Uuid>, Option<ResourcesView>) {
+    pub fn delta_for(
+        &mut self,
+        user_id: Uuid,
+    ) -> (
+        Vec<EntityView>,
+        Vec<Uuid>,
+        Option<ResourcesView>,
+        Vec<u16>,
+    ) {
+        let explored_new = self.reveal_vision_for(user_id);
+
         let Some(player) = self.players.get(&user_id) else {
-            return (vec![], vec![], None);
+            return (vec![], vec![], None, explored_new);
         };
-        let focus = player.focus;
         let resources = Some(player.resources.view());
         let previously_known = player.aoi_known.clone();
 
-        let visible_ids: HashSet<Uuid> =
-            aoi::visible_entities(self.entities.values(), focus[0], focus[1], user_id)
-                .into_iter()
-                .map(|e| e.id)
-                .collect();
+        let visible_ids: HashSet<Uuid> = aoi::visible_entities(self.entities.values(), user_id)
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
 
         let mut entities = Vec::new();
         for id in &visible_ids {
             let Some(entity) = self.entities.get(id) else {
                 continue;
             };
-            let entered_aoi = !previously_known.contains(id);
-            // Always push newly visible entities (fixes buildings that finished
-            // dirty while outside another player's vision).
+            let entered_vision = !previously_known.contains(id);
             if entity.dirty
                 || entity.unit
                 || entity.build_remaining_ms > 0
-                || entered_aoi
+                || entered_vision
             {
                 entities.push(self.entity_view(entity));
             }
@@ -998,6 +1030,9 @@ impl MatchSim {
 
         let mut removed = self.removed.clone();
         for id in previously_known.difference(&visible_ids) {
+            if self.entities.get(id).is_some_and(|e| e.owner == user_id) {
+                continue;
+            }
             removed.push(*id);
         }
 
@@ -1005,7 +1040,7 @@ impl MatchSim {
             player.aoi_known = visible_ids;
         }
 
-        (entities, removed, resources)
+        (entities, removed, resources, explored_new)
     }
 
     /// After reconnect, force the next deltas to re-send everything currently visible.

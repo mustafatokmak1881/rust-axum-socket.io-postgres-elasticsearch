@@ -269,8 +269,9 @@ async function setupMatchScene(snapshot) {
   aoiRadius = Number(snapshot.aoi_radius) || aoiRadius;
   lastFocusSent = { x: home.x, z: home.z };
   initThree(snapshot.map_size, terrain, home);
+  loadExploredFromSnapshot(snapshot);
   rebuildMeshes();
-  send({ t: "set_focus", x: home.x, y: home.z });
+  refreshLiveVision();
 }
 
 function findOwnHome(snapshot) {
@@ -319,6 +320,7 @@ function renderUnitList(items) {
 
 function applyDelta(msg) {
   updateResources(msg.resources);
+  applyExploredNew(msg.explored_new);
   for (const id of msg.removed || []) {
     state.entities.delete(id);
     const mesh = state.meshes.get(id);
@@ -332,7 +334,7 @@ function applyDelta(msg) {
     upsertMesh(entity);
   }
   $("#match-caption").textContent =
-    `Tick ${msg.tick} · ${state.entities.size} entities · edge-scroll`;
+    `Tick ${msg.tick} · ${state.entities.size} entities · vision fog`;
 }
 
 /* ---------- Three.js ---------- */
@@ -343,7 +345,10 @@ let buildingGeometries = Object.create(null);
 let buildingModelsPromise = null;
 let ghostMesh = null;
 let fogOfWar = null;
-let aoiRadius = 28;
+let fogExploredData = null; // Uint8Array size*size — 0/1 explored
+let fogVisionData = null;   // Uint8Array size*size — 0/1 currently visible
+let fogDataTexture = null;
+let aoiRadius = 20;
 let lastFocusSentAt = 0;
 let lastFocusSent = { x: 0, z: 0 };
 const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
@@ -450,16 +455,99 @@ function makeFallbackTerrainTexture(mapSize) {
   return tex;
 }
 
-function createFogOfWar(size, focusX, focusZ, radius) {
-  const geo = new THREE.PlaneGeometry(size + 64, size + 64, 1, 1);
+function visionRadiusFor(entity) {
+  if (entity.kind === "hq") return 20;
+  if (entity.building) return 13;
+  if (entity.unit) return 11;
+  return 0;
+}
+
+function unpackExploredBytes(bytes, size) {
+  const cells = size * size;
+  const out = new Uint8Array(cells);
+  if (!bytes || !bytes.length) return out;
+  // Server sends little-endian u64 words.
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  for (let i = 0; i < cells; i++) {
+    const word = Math.floor(i / 64);
+    const bit = i % 64;
+    const byteIndex = word * 8 + Math.floor(bit / 8);
+    const bitInByte = bit % 8;
+    if (byteIndex >= view.length) break;
+    if ((view[byteIndex] >> bitInByte) & 1) out[i] = 255;
+  }
+  return out;
+}
+
+function applyExploredNew(indices) {
+  if (!fogExploredData || !indices?.length) return;
+  for (const idx of indices) {
+    if (idx >= 0 && idx < fogExploredData.length) fogExploredData[idx] = 255;
+  }
+  if (fogDataTexture) fogDataTexture.needsUpdate = true;
+}
+
+function stampVisionCircle(data, size, cx, cy, radius) {
+  const r = Math.ceil(radius);
+  const ix = Math.floor(cx);
+  const iy = Math.floor(cy);
+  const r2 = radius * radius;
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const x = ix + dx;
+      const y = iy + dy;
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      const fx = x + 0.5 - cx;
+      const fy = y + 0.5 - cy;
+      if (fx * fx + fy * fy > r2) continue;
+      data[y * size + x] = 255;
+    }
+  }
+}
+
+function refreshLiveVision() {
+  if (!fogVisionData || !fogExploredData || !fogDataTexture) return;
+  fogVisionData.fill(0);
+  const you = state.match?.you;
+  for (const entity of state.entities.values()) {
+    if (entity.owner !== you) continue;
+    const radius = visionRadiusFor(entity);
+    if (!radius) continue;
+    stampVisionCircle(fogVisionData, mapSize, entity.x, entity.y, radius);
+    // Client-side explore while moving (server confirms via explored_new).
+    stampVisionCircle(fogExploredData, mapSize, entity.x, entity.y, radius);
+  }
+
+  // Pack into RGBA texture: R=explored, G=visible
+  const tex = fogDataTexture.image?.data;
+  if (!tex) return;
+  for (let i = 0; i < mapSize * mapSize; i++) {
+    const o = i * 4;
+    tex[o] = fogExploredData[i];
+    tex[o + 1] = fogVisionData[i];
+    tex[o + 2] = 0;
+    tex[o + 3] = 255;
+  }
+  fogDataTexture.needsUpdate = true;
+}
+
+function createFogOfWar(size) {
+  fogExploredData = new Uint8Array(size * size);
+  fogVisionData = new Uint8Array(size * size);
+  const rgba = new Uint8Array(size * size * 4);
+  fogDataTexture = new THREE.DataTexture(rgba, size, size, THREE.RGBAFormat);
+  fogDataTexture.magFilter = THREE.NearestFilter;
+  fogDataTexture.minFilter = THREE.NearestFilter;
+  fogDataTexture.flipY = false;
+  fogDataTexture.needsUpdate = true;
+
+  const geo = new THREE.PlaneGeometry(size, size, 1, 1);
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     uniforms: {
-      uFocus: { value: new THREE.Vector2(focusX, focusZ) },
-      uRadius: { value: radius },
-      uColor: { value: new THREE.Color(0x070b06) },
-      uEdge: { value: 4.5 },
+      uMap: { value: fogDataTexture },
+      uSize: { value: size },
     },
     vertexShader: `
       varying vec3 vWorldPos;
@@ -470,54 +558,48 @@ function createFogOfWar(size, focusX, focusZ, radius) {
       }
     `,
     fragmentShader: `
-      uniform vec2 uFocus;
-      uniform float uRadius;
-      uniform vec3 uColor;
-      uniform float uEdge;
+      uniform sampler2D uMap;
+      uniform float uSize;
       varying vec3 vWorldPos;
       void main() {
-        float d = distance(vWorldPos.xz, uFocus);
-        // Soft fog beyond AOI; clear vision inside the circle.
-        float fog = smoothstep(uRadius - uEdge, uRadius + uEdge * 0.35, d);
-        // Extra dark far out so the limit reads clearly.
-        float deep = smoothstep(uRadius + uEdge, uRadius + uEdge * 4.0, d) * 0.22;
-        float alpha = fog * 0.78 + deep;
-        if (alpha < 0.02) discard;
-        // Faint ring at the vision edge.
-        float ring = 1.0 - smoothstep(0.0, 1.4, abs(d - uRadius));
-        vec3 col = mix(uColor, vec3(0.55, 0.62, 0.42), ring * 0.35 * fog);
-        gl_FragColor = vec4(col, alpha);
+        vec2 uv = vec2(vWorldPos.x, vWorldPos.z) / uSize;
+        if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
+          gl_FragColor = vec4(0.02, 0.03, 0.02, 0.92);
+          return;
+        }
+        vec4 sample = texture2D(uMap, uv);
+        float explored = sample.r;
+        float visible = sample.g;
+        if (explored < 0.5) {
+          gl_FragColor = vec4(0.02, 0.03, 0.02, 0.92);
+          return;
+        }
+        if (visible < 0.5) {
+          gl_FragColor = vec4(0.05, 0.07, 0.04, 0.62);
+          return;
+        }
+        discard;
       }
     `,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(size / 2, 0.18, size / 2);
+  mesh.position.set(size / 2, 0.2, size / 2);
   mesh.renderOrder = 8;
   mesh.name = "fogOfWar";
   return mesh;
 }
 
-function updateFogOfWar(focusX, focusZ) {
-  if (!fogOfWar?.material?.uniforms) return;
-  fogOfWar.material.uniforms.uFocus.value.set(focusX, focusZ);
-  fogOfWar.material.uniforms.uRadius.value = aoiRadius;
-}
-
-function syncVisionFocus() {
-  if (!controls || !state.match) return;
-  const x = controls.target.x;
-  const z = controls.target.z;
-  updateFogOfWar(x, z);
-
-  const now = performance.now();
-  if (now - lastFocusSentAt < 180) return;
-  const dx = x - lastFocusSent.x;
-  const dz = z - lastFocusSent.z;
-  if (dx * dx + dz * dz < 2.25) return;
-  lastFocusSentAt = now;
-  lastFocusSent = { x, z };
-  send({ t: "set_focus", x, y: z });
+function loadExploredFromSnapshot(snapshot) {
+  const size = snapshot.map_size || mapSize;
+  let bytes = snapshot.explored;
+  if (typeof bytes === "string") {
+    // unlikely; ignore
+    bytes = [];
+  }
+  fogExploredData = unpackExploredBytes(bytes, size);
+  if (fogDataTexture) fogDataTexture.needsUpdate = true;
+  refreshLiveVision();
 }
 
 function scatterGroundDecor(scene, size) {
@@ -678,7 +760,7 @@ function initThree(size, terrainTexture, home) {
 
   scatterGroundDecor(scene, size);
 
-  fogOfWar = createFogOfWar(size, lookX, lookZ, aoiRadius);
+  fogOfWar = createFogOfWar(size);
   scene.add(fogOfWar);
 
   // Dark underlay past the playable map edge.
@@ -700,25 +782,20 @@ function initThree(size, terrainTexture, home) {
 
   window.addEventListener("resize", onResize);
   canvas.addEventListener("pointerdown", onPointerDown);
-  canvas.addEventListener("pointermove", onEdgePointerMove);
-  canvas.addEventListener("pointerleave", onEdgePointerLeave);
+  if (!onEdgePointerMove._bound) {
+    window.addEventListener("pointermove", onEdgePointerMove);
+    onEdgePointerMove._bound = true;
+  }
   animate();
 }
 
 function onEdgePointerMove(event) {
-  const canvas = $("#viewport");
-  const rect = canvas.getBoundingClientRect();
-  edgeMouse.x = event.clientX - rect.left;
-  edgeMouse.y = event.clientY - rect.top;
-  edgeMouse.w = rect.width;
-  edgeMouse.h = rect.height;
-  edgeMouse.inside = true;
+  edgeMouse.x = event.clientX;
+  edgeMouse.y = event.clientY;
+  edgeMouse.w = window.innerWidth;
+  edgeMouse.h = window.innerHeight;
+  edgeMouse.inside = Boolean(state.match) && !$("#match-screen")?.hidden;
   updateGhostPreview(event);
-}
-
-function onEdgePointerLeave() {
-  edgeMouse.inside = false;
-  if (ghostMesh) ghostMesh.visible = false;
 }
 
 function myColors() {
@@ -840,10 +917,16 @@ function applyEdgePan() {
   } else if (edgeMouse.x > edgeMouse.w - e) {
     dx += edgeSpeed * (1 - (edgeMouse.w - edgeMouse.x) / e);
   }
+  // Leave bottom HUD mostly alone — prefer side/top edge scroll.
+  const bottomDead = 150;
   if (edgeMouse.y < e) {
     dz -= edgeSpeed * (1 - edgeMouse.y / e);
-  } else if (edgeMouse.y > edgeMouse.h - e) {
-    dz += edgeSpeed * (1 - (edgeMouse.h - edgeMouse.y) / e);
+  } else if (edgeMouse.y > edgeMouse.h - e && edgeMouse.y > edgeMouse.h - bottomDead) {
+    // only scroll down when truly near bottom edge strip
+    const edgeY = edgeMouse.h - edgeMouse.y;
+    if (edgeY < 56) {
+      dz += edgeSpeed * (1 - edgeY / 56);
+    }
   }
 
   if (!dx && !dz) return;
@@ -1096,7 +1179,7 @@ function animate() {
   if (!renderer) return;
   applyEdgePan();
   controls?.update();
-  syncVisionFocus();
+  refreshLiveVision();
   renderer.render(scene, camera);
 }
 
