@@ -81,10 +81,10 @@ pub struct Resources {
 impl Resources {
     pub fn starter() -> Self {
         Self {
-            supplies: 5000,
-            fuel: 5000,
-            munitions: 5000,
-            power: 100,
+            supplies: 50_000,
+            fuel: 50_000,
+            munitions: 50_000,
+            power: 1_000,
             power_used: 0,
         }
     }
