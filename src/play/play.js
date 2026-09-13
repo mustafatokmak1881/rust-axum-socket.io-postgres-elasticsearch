@@ -321,7 +321,7 @@ const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 
 /** Generals-style locked pitch (radians from vertical-ish). */
 const CAMERA_PITCH = Math.PI / 3.35;
-const EDGE_SCROLL_PX = 42;
+const EDGE_SCROLL_PX = 96;
 
 const BUILDING_STL = {
   hq: { url: "/assets/models/command-center.stl", target: 2.6 },
