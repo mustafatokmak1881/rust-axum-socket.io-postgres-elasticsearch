@@ -16,6 +16,7 @@ const state = {
   selectedBuild: null,
   selectedUnits: [],
   selectedBuilding: null,
+  buildable: [],
   faction: "usa",
   ready: false,
   reconnectAttempt: 0,
@@ -269,11 +270,12 @@ function updateResources(res) {
 }
 
 function renderBuildList(items) {
-  $("#build-list").innerHTML = items
+  state.buildable = items || [];
+  $("#build-list").innerHTML = state.buildable
     .map(
-      (item) => `
-      <button type="button" class="build-item" data-kind="${escapeHtml(item.kind)}">
-        <strong>${escapeHtml(item.name)}</strong>
+      (item, index) => `
+      <button type="button" class="build-item" data-kind="${escapeHtml(item.kind)}" data-hotkey="${index + 1}">
+        <strong><span class="hotkey">${index + 1}</span> ${escapeHtml(item.name)}</strong>
         <small>${item.cost_supplies}/${item.cost_fuel}/${item.cost_munitions} · ${Math.round(item.build_ms / 1000)}s</small>
       </button>`,
     )
@@ -1050,13 +1052,34 @@ $("#build-list").addEventListener("click", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  if (state.selectedBuild) {
-    setBuildPlacement(null);
+  if (event.key === "Escape") {
+    if (state.selectedBuild) {
+      setBuildPlacement(null);
+      return;
+    }
+    if (currentFullscreenElement()) {
+      void exitGameFullscreen();
+    }
     return;
   }
-  if (currentFullscreenElement()) {
-    void exitGameFullscreen();
+
+  // Ignore shortcuts while typing in inputs.
+  const tag = event.target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) {
+    return;
+  }
+
+  // 1-9 select building from the build list for placement.
+  if (event.key >= "1" && event.key <= "9") {
+    const index = Number(event.key) - 1;
+    const item = state.buildable[index];
+    if (!item || !state.match) return;
+    event.preventDefault();
+    if (state.selectedBuild === item.kind) {
+      setBuildPlacement(null);
+    } else {
+      setBuildPlacement(item.kind);
+    }
   }
 });
 

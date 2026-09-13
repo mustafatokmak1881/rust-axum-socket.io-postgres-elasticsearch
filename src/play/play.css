@@ -240,6 +240,19 @@ input {
   color: #f0e8c0;
 }
 
+.build-item .hotkey {
+  display: inline-block;
+  min-width: 1.1em;
+  margin-right: 4px;
+  padding: 0 4px;
+  border: 1px solid #5a6a40;
+  background: #121810;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+}
+
 .build-item small, .unit-item small {
   color: #8a9a78;
   font-size: 10px;
