@@ -358,16 +358,20 @@ let lastFocusSent = { x: 0, z: 0 };
 const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 
 /** Generals-style locked pitch (radians from vertical-ish). */
-const CAMERA_PITCH = Math.PI / 3.35;
+const CAMERA_PITCH = Math.PI / 3.15;
+/** Close RTS camera — no wide pull-back. */
+const CAMERA_DIST = 18;
+const CAMERA_DIST_MIN = 14;
+const CAMERA_DIST_MAX = 20;
 const EDGE_SCROLL_PX = 160;
 
 const BUILDING_MODELS = {
-  hq: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 2.8 },
-  power_plant: { type: "stl", url: "/assets/models/command-center.stl", target: 2.2 },
-  supply: { type: "stl", url: "/assets/models/command-center.stl", target: 2.2 },
-  barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 2.5 },
-  war_factory: { type: "stl", url: "/assets/models/command-center.stl", target: 2.4 },
-  turret: { type: "stl", url: "/assets/models/command-center.stl", target: 1.8 },
+  hq: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.4 },
+  power_plant: { type: "stl", url: "/assets/models/command-center.stl", target: 1.1 },
+  supply: { type: "stl", url: "/assets/models/command-center.stl", target: 1.1 },
+  barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 0.85 },
+  war_factory: { type: "stl", url: "/assets/models/command-center.stl", target: 1.2 },
+  turret: { type: "stl", url: "/assets/models/command-center.stl", target: 0.9 },
 };
 
 async function prepareStlGeometry(url, targetSize) {
@@ -785,7 +789,7 @@ function initThree(size, terrainTexture, home) {
   const lookZ = home?.z ?? size / 2;
   const cx = size / 2;
   const cz = size / 2;
-  const dist = Math.min(48, size * 0.28);
+  const dist = CAMERA_DIST;
   camera.position.set(
     lookX,
     Math.sin(CAMERA_PITCH) * dist,
@@ -798,11 +802,11 @@ function initThree(size, terrainTexture, home) {
   controls.enableRotate = false;
   controls.enablePan = false;
   controls.enableZoom = true;
-  controls.minDistance = 12;
-  controls.maxDistance = Math.max(90, size * 0.85);
+  controls.minDistance = CAMERA_DIST_MIN;
+  controls.maxDistance = CAMERA_DIST_MAX;
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.zoomSpeed = 1.05;
+  controls.zoomSpeed = 0.55;
   controls.minPolarAngle = CAMERA_PITCH;
   controls.maxPolarAngle = CAMERA_PITCH;
   controls.update();
@@ -1168,7 +1172,7 @@ function attachOwnerMarkings(mesh, entity) {
 
 function labelHeightFor(entity) {
   if (entity.building) {
-    return entity.kind === "hq" ? 2.7 : 2.05;
+    return entity.kind === "hq" ? 1.55 : 1.15;
   }
   return 1.15;
 }
@@ -1191,7 +1195,7 @@ function upsertMesh(entity) {
     if (entity.building) {
       mesh = createBuildingMesh(entity.kind, mat);
     } else {
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.55), mat);
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.36, 0.28), mat);
     }
 
     mesh.userData.id = entity.id;
@@ -1214,7 +1218,7 @@ function upsertMesh(entity) {
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
   } else {
-    mesh.position.set(entity.x, 0.35, entity.y);
+    mesh.position.set(entity.x, 0.2, entity.y);
   }
 
   const building = entity.progress != null && entity.progress < 1;
