@@ -25,6 +25,8 @@ pub struct PlayerState {
     pub focus: [f32; 2],
     pub alive: bool,
     pub connected: bool,
+    /// Entity ids last acknowledged in this player's AOI (enter/leave sync).
+    pub aoi_known: HashSet<Uuid>,
 }
 
 impl PlayerState {
@@ -333,6 +335,7 @@ impl MatchSim {
                     focus: [x, y],
                     alive: true,
                     connected: true,
+                    aoi_known: HashSet::new(),
                 },
             );
 
@@ -460,6 +463,7 @@ impl MatchSim {
                 focus: [x, y],
                 alive: true,
                 connected: true,
+                aoi_known: HashSet::new(),
             },
         );
 
@@ -967,15 +971,48 @@ impl MatchSim {
         };
         let focus = player.focus;
         let resources = Some(player.resources.view());
+        let previously_known = player.aoi_known.clone();
 
-        let entities = aoi::visible_entities(self.entities.values(), focus[0], focus[1], user_id)
-            .into_iter()
-            .filter(|e| e.dirty || e.unit || e.build_remaining_ms > 0)
-            .map(|e| self.entity_view(e))
-            .collect();
+        let visible_ids: HashSet<Uuid> =
+            aoi::visible_entities(self.entities.values(), focus[0], focus[1], user_id)
+                .into_iter()
+                .map(|e| e.id)
+                .collect();
 
-        let removed = self.removed.clone();
+        let mut entities = Vec::new();
+        for id in &visible_ids {
+            let Some(entity) = self.entities.get(id) else {
+                continue;
+            };
+            let entered_aoi = !previously_known.contains(id);
+            // Always push newly visible entities (fixes buildings that finished
+            // dirty while outside another player's vision).
+            if entity.dirty
+                || entity.unit
+                || entity.build_remaining_ms > 0
+                || entered_aoi
+            {
+                entities.push(self.entity_view(entity));
+            }
+        }
+
+        let mut removed = self.removed.clone();
+        for id in previously_known.difference(&visible_ids) {
+            removed.push(*id);
+        }
+
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.aoi_known = visible_ids;
+        }
+
         (entities, removed, resources)
+    }
+
+    /// After reconnect, force the next deltas to re-send everything currently visible.
+    pub fn force_aoi_resync(&mut self, user_id: Uuid) {
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.aoi_known.clear();
+        }
     }
 
     pub fn clear_frame_flags(&mut self) {

@@ -118,6 +118,7 @@ impl MatchHub {
             if let Some(player) = rt.sim.players.get_mut(&user_id) {
                 player.connected = true;
             }
+            rt.sim.force_aoi_resync(user_id);
             rt.members.insert(user_id, ());
             rt.sim.snapshot_for(user_id)
         };

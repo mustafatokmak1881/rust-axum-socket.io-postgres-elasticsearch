@@ -227,9 +227,24 @@ function escapeHtml(value) {
   );
 }
 
+function clearWorldMeshes() {
+  if (!state.meshes.size) return;
+  for (const mesh of state.meshes.values()) {
+    if (scene) scene.remove(mesh);
+    mesh.traverse?.((obj) => {
+      if (obj.material) {
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose?.());
+        else obj.material.dispose?.();
+      }
+    });
+  }
+  state.meshes.clear();
+}
+
 function enterMatch(snapshot) {
   state.match = snapshot;
   state.entities.clear();
+  clearWorldMeshes();
   aoiRadius = Number(snapshot.aoi_radius) || 28;
   for (const entity of snapshot.entities || []) {
     state.entities.set(entity.id, entity);
