@@ -321,7 +321,7 @@ const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
 
 /** Generals-style locked pitch (radians from vertical-ish). */
 const CAMERA_PITCH = Math.PI / 3.35;
-const EDGE_SCROLL_PX = 96;
+const EDGE_SCROLL_PX = 160;
 
 const BUILDING_STL = {
   hq: { url: "/assets/models/command-center.stl", target: 2.6 },
@@ -729,7 +729,7 @@ function applyEdgePan() {
   let dx = 0;
   let dz = 0;
   const e = EDGE_SCROLL_PX;
-  const edgeSpeed = 0.7 * (controls.getDistance() / 26);
+  const edgeSpeed = 1.05 * (controls.getDistance() / 26);
 
   if (edgeMouse.x < e) {
     dx -= edgeSpeed * (1 - edgeMouse.x / e);
@@ -853,27 +853,30 @@ function entityColors(entity) {
 
 function makeNameSprite(text, colors) {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 64;
+  canvas.width = 192;
+  canvas.height = 48;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Tricolor identity bar
-  const bandW = canvas.width / 3;
+  // Compact tricolor strip above the name
+  const barW = 54;
+  const barH = 3;
+  const barX = (canvas.width - barW) / 2;
+  const bandW = barW / 3;
   for (let i = 0; i < 3; i++) {
     ctx.fillStyle = `#${(colors[i] >>> 0).toString(16).padStart(6, "0")}`;
-    ctx.fillRect(i * bandW, 0, bandW, 10);
+    ctx.fillRect(barX + i * bandW, 4, bandW, barH);
   }
 
-  ctx.font = "bold 22px Segoe UI, Tahoma, sans-serif";
+  ctx.font = "bold 16px Segoe UI, Tahoma, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(0,0,0,0.85)";
   ctx.fillStyle = "#f4f1e8";
-  const label = String(text || "?").slice(0, 18);
-  ctx.strokeText(label, canvas.width / 2, 38);
-  ctx.fillText(label, canvas.width / 2, 38);
+  const label = String(text || "?").slice(0, 16);
+  ctx.strokeText(label, canvas.width / 2, 28);
+  ctx.fillText(label, canvas.width / 2, 28);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
@@ -883,7 +886,7 @@ function makeNameSprite(text, colors) {
     depthTest: false,
   });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(3.2, 0.8, 1);
+  sprite.scale.set(1.85, 0.46, 1);
   sprite.center.set(0.5, 0);
   return sprite;
 }
@@ -892,7 +895,7 @@ function attachOwnerMarkings(mesh, entity) {
   const colors = entityColors(entity);
   const name = entity.owner_name || "Player";
   const sprite = makeNameSprite(name, colors);
-  sprite.position.set(0, entity.kind === "hq" ? 3.2 : 2.4, 0);
+  sprite.position.set(0, entity.kind === "hq" ? 2.7 : 2.05, 0);
   sprite.name = "ownerLabel";
   mesh.add(sprite);
   mesh.userData.ownerLabel = sprite;
@@ -932,13 +935,13 @@ function upsertMesh(entity) {
     if (entity.building) {
       attachOwnerMarkings(mesh, entity);
     } else {
-      // Units: small tricolor fin for ownership at a glance.
+      // Units: tiny tricolor fin for ownership at a glance.
       for (let i = 0; i < 3; i++) {
         const fin = new THREE.Mesh(
-          new THREE.BoxGeometry(0.12, 0.35, 0.05),
+          new THREE.BoxGeometry(0.06, 0.18, 0.03),
           new THREE.MeshStandardMaterial({ color: colors[i] }),
         );
-        fin.position.set(-0.18 + i * 0.18, 0.55, 0.2);
+        fin.position.set(-0.08 + i * 0.08, 0.48, 0.18);
         mesh.add(fin);
       }
     }
@@ -973,7 +976,7 @@ function upsertMesh(entity) {
       label.material.map?.dispose();
       label.material.dispose();
       const sprite = makeNameSprite(entity.owner_name || "Player", colors);
-      sprite.position.set(0, entity.kind === "hq" ? 3.2 : 2.4, 0);
+      sprite.position.set(0, entity.kind === "hq" ? 2.7 : 2.05, 0);
       sprite.name = "ownerLabel";
       mesh.add(sprite);
       mesh.userData.ownerLabel = sprite;
