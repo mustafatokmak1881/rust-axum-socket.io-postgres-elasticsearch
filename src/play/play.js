@@ -470,11 +470,24 @@ function fitObjRoot(root, targetSize) {
 
 function makeObjTemplate(sharedRoot, targetSize) {
   const root = sharedRoot.clone(true);
+  detachMaterials(root);
   fitObjRoot(root, targetSize);
   const wrapper = new THREE.Group();
   wrapper.add(root);
   wrapper.userData.keepMtlColors = true;
   return wrapper;
+}
+
+/** Force unique materials so opacity/ghost never leaks across buildings. */
+function detachMaterials(root) {
+  root.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    if (Array.isArray(child.material)) {
+      child.material = child.material.map((mat) => (mat ? mat.clone() : mat));
+    } else {
+      child.material = child.material.clone();
+    }
+  });
 }
 
 function geometryForKind(kind) {
@@ -489,6 +502,9 @@ function createBuildingMesh(kind, fallbackMat) {
   const template = templateForKind(kind);
   if (template) {
     const mesh = template.clone(true);
+    // clone() can still share materials with the template in nested OBJ groups —
+    // detach again so each placed/ghost building owns its materials.
+    detachMaterials(mesh);
     mesh.userData.keepMtlColors = true;
     mesh.userData.building = true;
     return mesh;
@@ -507,9 +523,11 @@ function setBuildingOpacity(root, opacity) {
     if (!child.isMesh || !child.material) return;
     const mats = Array.isArray(child.material) ? child.material : [child.material];
     for (const mat of mats) {
+      if (!mat) continue;
       mat.transparent = opacity < 1;
       mat.opacity = opacity;
       mat.depthWrite = opacity >= 1;
+      mat.needsUpdate = true;
     }
   });
 }
@@ -976,7 +994,8 @@ function ensureGhost(kind) {
 
   const mesh = createBuildingMesh(kind, mat);
   setBuildingOpacity(mesh, 0.38);
-  mesh.userData.disposeMaterials = !mesh.userData.keepMtlColors;
+  // Materials were detached for this ghost — safe to dispose on clear.
+  mesh.userData.disposeMaterials = true;
 
   // Soft tile footprint so placement cell is obvious.
   const pad = new THREE.Mesh(
@@ -1284,14 +1303,19 @@ function upsertMesh(entity) {
     mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
   }
 
-  const building = entity.progress != null && entity.progress < 1;
-  const opacity = building ? 0.55 : 1;
+  const constructing = entity.progress != null && entity.progress < 1;
+  const opacity = constructing ? 0.55 : 1;
   if (mesh.userData.keepMtlColors) {
-    setBuildingOpacity(mesh, opacity);
+    // Only touch this instance's materials (detached at create time).
+    if (mesh.userData.lastOpacity !== opacity) {
+      setBuildingOpacity(mesh, opacity);
+      mesh.userData.lastOpacity = opacity;
+    }
   } else if (mesh.material) {
     mesh.material.color.setHex(colors[0]);
     mesh.material.opacity = opacity;
     mesh.material.transparent = opacity < 1;
+    mesh.material.depthWrite = opacity >= 1;
   }
 
   // Refresh label if owner name/colors changed (rare).

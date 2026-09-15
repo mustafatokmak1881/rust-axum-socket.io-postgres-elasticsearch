@@ -1070,11 +1070,14 @@ impl MatchSim {
             .unwrap_or_else(|| ("Unknown".into(), [0x888888, 0x555555, 0x333333]));
 
         let progress = if entity.build_remaining_ms > 0 {
-            Some(1.0 - (entity.build_remaining_ms as f32 / 15_000.0).min(1.0))
+            let total = buildables()
+                .iter()
+                .find(|b| b.kind == entity.kind)
+                .map(|b| b.build_ms as f32)
+                .unwrap_or(15_000.0);
+            Some(1.0 - (entity.build_remaining_ms as f32 / total).min(1.0))
         } else {
-            entity.train_queue.front().map(|j| {
-                1.0 - (j.remaining_ms as f32 / 12_000.0).min(1.0)
-            })
+            None
         };
 
         EntityView {
