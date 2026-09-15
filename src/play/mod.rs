@@ -16,6 +16,8 @@ pub fn router() -> Router<SharedState> {
         .route("/assets/play.js", get(javascript))
         .route("/assets/models/command-center.obj", get(command_center_obj))
         .route("/assets/models/command-center.mtl", get(command_center_mtl))
+        .route("/assets/models/war-factory.obj", get(war_factory_obj))
+        .route("/assets/models/war-factory.mtl", get(war_factory_mtl))
         .route("/assets/models/barracks.stl", get(barracks_stl))
         .route("/assets/terrain.jpg", get(terrain_jpg))
 }
@@ -51,6 +53,26 @@ async fn command_center_mtl() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_bytes!("../web/usa/command-center.mtl").as_slice(),
+    )
+}
+
+async fn war_factory_obj() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/war-factory.obj").as_slice(),
+    )
+}
+
+async fn war_factory_mtl() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/war-factory.mtl").as_slice(),
     )
 }
 
