@@ -2034,18 +2034,20 @@ function upsertMesh(entity) {
     if (prevX != null && prevZ != null) {
       const dx = entity.x - prevX;
       const dz = entity.y - prevZ;
+      // Ignore tiny network/float jitter — only real steps count as walking.
       const moved2 = dx * dx + dz * dz;
-      mesh.userData.moving = moved2 > 1e-8;
-      if (moved2 > 1e-8) {
-        // Face travel direction; smooth toward it in animate().
+      if (moved2 > 2.5e-5) {
+        mesh.userData.moving = true;
         mesh.userData.faceYaw = Math.atan2(dx, dz);
+        mesh.userData.moveSeenAt = performance.now();
+      } else {
+        mesh.userData.moving = false;
       }
     } else {
       mesh.userData.moving = false;
     }
     mesh.userData.lastX = entity.x;
     mesh.userData.lastZ = entity.y;
-    mesh.userData.moveSeenAt = performance.now();
   } else {
     mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
   }
@@ -2146,8 +2148,8 @@ function updateInfantryWalk(mesh, dt, now) {
 
   // Keep walking briefly between network ticks so the cycle doesn't stutter.
   const recentlyMoved =
-    mesh.userData.moving ||
-    (mesh.userData.moveSeenAt && now - mesh.userData.moveSeenAt < 180);
+    mesh.userData.moving === true ||
+    (mesh.userData.moveSeenAt != null && now - mesh.userData.moveSeenAt < 140);
 
   if (recentlyMoved) {
     mesh.userData.walkPhase = (mesh.userData.walkPhase || 0) + dt * 11;

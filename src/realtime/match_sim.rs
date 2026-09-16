@@ -966,6 +966,21 @@ impl MatchSim {
             };
 
             let self_r = unit_radius(&entity.kind);
+
+            // Idle defense: as soon as an enemy enters weapon range, acquire them.
+            if entity.target.is_none()
+                && entity.move_to.is_none()
+                && entity.damage > 0.0
+                && entity.range > 0.0
+            {
+                if let Some(tid) =
+                    self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range)
+                {
+                    entity.target = Some(tid);
+                    entity.dirty = true;
+                }
+            }
+
             let mut goal = entity.move_to;
             let mut hold_for_attack = false;
             if let Some(tid) = entity.target {
@@ -980,8 +995,11 @@ impl MatchSim {
                         entity.detour = None;
                         entity.detour_ttl = 0;
                         entity.stuck_frames = 0;
-                    } else {
+                    } else if entity.move_to.is_none() {
+                        // Chase only when idle (auto-acquire / attack order), not while marching.
                         goal = Some((t.x, t.y));
+                    } else {
+                        // Keep walking the given path; still shoot if somehow in range later.
                     }
                 } else {
                     entity.target = None;
@@ -1158,6 +1176,20 @@ impl MatchSim {
                 entity.attack_cooldown_ms = entity.attack_cooldown_ms.saturating_sub(dt_ms);
             }
 
+            // Opportunity fire while moving: engage any in-range enemy without abandoning the march.
+            if entity.target.is_none()
+                && entity.move_to.is_some()
+                && entity.damage > 0.0
+                && entity.range > 0.0
+            {
+                if let Some(tid) =
+                    self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range)
+                {
+                    entity.target = Some(tid);
+                    entity.dirty = true;
+                }
+            }
+
             if let Some(tid) = entity.target {
                 if let Some(target) = self.entities.get(&tid) {
                     let dx = target.x - entity.x;
@@ -1177,13 +1209,16 @@ impl MatchSim {
                             t.hp -= dmg;
                             t.dirty = true;
                             // Auto-retaliate when hit and attacker is already in range.
-                            if t.unit && t.damage > 0.0 && t.target.is_none() {
+                            if t.unit && t.damage > 0.0 {
                                 let rdx = fx - t.x;
                                 let rdy = fy - t.y;
                                 let rdist = (rdx * rdx + rdy * rdy).sqrt();
                                 if rdist <= t.range {
                                     t.target = Some(from_id);
-                                    t.move_to = None;
+                                    // Don't clear their move unless they were idle — keep march if any.
+                                    if t.move_to.is_none() {
+                                        // stand and fight
+                                    }
                                 }
                             }
                         }
@@ -1196,7 +1231,12 @@ impl MatchSim {
                             y1: ty,
                             kind,
                         });
+                    } else if dist > entity.range && entity.move_to.is_some() {
+                        // Lost opportunity target while marching — drop so we can re-acquire later.
+                        entity.target = None;
                     }
+                } else {
+                    entity.target = None;
                 }
             }
 
@@ -1225,6 +1265,23 @@ impl MatchSim {
         }
 
         self.check_victory();
+    }
+
+    /// Nearest living enemy unit currently inside `range` of (x, y).
+    fn find_enemy_in_range(&self, team: u8, x: f32, y: f32, range: f32) -> Option<Uuid> {
+        let mut best: Option<(Uuid, f32)> = None;
+        for other in self.entities.values() {
+            if other.team == team || !other.unit || other.hp <= 0.0 || other.damage <= 0.0 {
+                continue;
+            }
+            let dx = other.x - x;
+            let dy = other.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist <= range && best.map(|(_, d)| dist < d).unwrap_or(true) {
+                best = Some((other.id, dist));
+            }
+        }
+        best.map(|(id, _)| id)
     }
 
     fn collides_at(
