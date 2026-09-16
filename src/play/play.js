@@ -1097,21 +1097,16 @@ function ensureGhost(kind) {
 }
 
 function buildingRadius(kind) {
-  switch (kind) {
-    case "hq":
-      return 1.35;
-    case "war_factory":
-      return 1.15;
-    case "barracks":
-      return 0.95;
-    case "power_plant":
-    case "supply":
-      return 1.0;
-    case "turret":
-      return 0.7;
-    default:
-      return 0.95;
-  }
+  // Half-footprint from BUILDING_MODELS target (must match server building_radius).
+  const visual = {
+    hq: 1.4,
+    war_factory: 1.35,
+    barracks: 0.85,
+    power_plant: 1.1,
+    supply: 1.1,
+    turret: 0.9,
+  }[kind] ?? 1.0;
+  return visual * 0.42;
 }
 
 function canPlaceBuildingAt(kind, tileX, tileY) {
@@ -1123,7 +1118,7 @@ function canPlaceBuildingAt(kind, tileX, tileY) {
     const otherR = buildingRadius(entity.kind);
     const dx = entity.x - fx;
     const dy = entity.y - fy;
-    const minDist = placeR + otherR + 0.15;
+    const minDist = placeR + otherR + 0.04;
     if (dx * dx + dy * dy < minDist * minDist) return false;
   }
   return true;

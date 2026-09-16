@@ -285,22 +285,34 @@ pub fn trainables() -> &'static [UnitDef] {
     ]
 }
 
-pub fn building_radius(kind: &str) -> f32 {
+/// Client `BUILDING_MODELS[].target` — max visual dimension after fit.
+fn building_visual_size(kind: &str) -> f32 {
     match kind {
-        "hq" => 1.35,
-        "war_factory" => 1.15,
-        "barracks" => 0.95,
-        "power_plant" | "supply" => 1.0,
-        "turret" => 0.7,
-        _ => 0.95,
+        "hq" => 1.4,
+        "war_factory" => 1.35,
+        "barracks" => 0.85,
+        "power_plant" | "supply" => 1.1,
+        "turret" => 0.9,
+        _ => 1.0,
     }
 }
 
+/// Horizontal collision radius from visual size (not a fat generic circle).
+pub fn building_radius(kind: &str) -> f32 {
+    // Footprint is roughly square; half-extent ≈ 0.40–0.45 of fitted max dim.
+    building_visual_size(kind) * 0.42
+}
+
+/// Matches client `unitDims` half-extent on the ground plane.
 pub fn unit_radius(kind: &str) -> f32 {
     if kind.contains("tank") {
-        0.38
+        // box ~0.20 × 0.26 → ~0.13
+        0.13
+    } else if kind.contains("missile") {
+        0.05
     } else {
-        0.22
+        // ranger / infantry box ~0.07 × 0.07
+        0.045
     }
 }
 
@@ -310,8 +322,13 @@ fn entity_radius(entity: &Entity) -> f32 {
     } else if entity.unit {
         unit_radius(&entity.kind)
     } else {
-        0.2
+        0.05
     }
+}
+
+/// Tiny gap so meshes don't Z-fight when brushing past.
+fn collision_pad() -> f32 {
+    0.04
 }
 
 pub struct MatchSim {
@@ -665,7 +682,7 @@ impl MatchSim {
             let other_r = building_radius(&e.kind);
             let dx = e.x - fx;
             let dy = e.y - fy;
-            let min_dist = place_r + other_r + 0.15;
+            let min_dist = place_r + other_r + collision_pad();
             dx * dx + dy * dy < min_dist * min_dist
         });
         if blocked {
@@ -1180,7 +1197,7 @@ impl MatchSim {
             }
             // Under-construction buildings still block.
             let other_r = entity_radius(other);
-            let min_d = self_r + other_r;
+            let min_d = self_r + other_r + collision_pad();
             let dx = other.x - x;
             let dy = other.y - y;
             if dx * dx + dy * dy < min_d * min_d {
@@ -1320,15 +1337,18 @@ impl MatchSim {
         extra_solid: Option<(f32, f32, f32)>,
     ) -> (f32, f32) {
         let map = self.map_size as f32;
+        let base = extra_solid
+            .map(|(_, _, er)| er + radius + collision_pad() + 0.15)
+            .unwrap_or(radius + 0.8);
         for k in 0..48 {
             let ang = k as f32 * 0.7;
-            let dist = 1.4 + (k as f32) * 0.22;
+            let dist = base + (k as f32) * 0.18;
             let x = (bx + ang.cos() * dist).clamp(0.5, map - 0.5);
             let y = (by + ang.sin() * dist).clamp(0.5, map - 0.5);
             if let Some((ex, ey, er)) = extra_solid {
                 let dx = ex - x;
                 let dy = ey - y;
-                let min_d = radius + er;
+                let min_d = radius + er + collision_pad();
                 if dx * dx + dy * dy < min_d * min_d {
                     continue;
                 }
@@ -1338,8 +1358,8 @@ impl MatchSim {
             }
         }
         (
-            (bx + 1.6).clamp(0.5, map - 0.5),
-            (by + 1.6).clamp(0.5, map - 0.5),
+            (bx + base + 0.4).clamp(0.5, map - 0.5),
+            (by + base + 0.4).clamp(0.5, map - 0.5),
         )
     }
 
@@ -1366,7 +1386,7 @@ impl MatchSim {
                 let dx = a.x - b.x;
                 let dy = a.y - b.y;
                 let dist = (dx * dx + dy * dy).sqrt();
-                let min_d = ar + br;
+                let min_d = ar + br + collision_pad();
                 if dist >= min_d || dist < 1e-4 {
                     continue;
                 }
