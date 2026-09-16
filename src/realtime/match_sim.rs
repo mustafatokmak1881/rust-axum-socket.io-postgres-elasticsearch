@@ -1561,6 +1561,7 @@ impl MatchSim {
             if entity.dirty
                 || entity.unit
                 || entity.build_remaining_ms > 0
+                || !entity.train_queue.is_empty()
                 || entered_vision
             {
                 entities.push(self.entity_view(entity));
@@ -1614,6 +1615,20 @@ impl MatchSim {
             None
         };
 
+        let train_progress = if entity.build_remaining_ms == 0 {
+            entity.train_queue.front().map(|job| {
+                let total = trainables()
+                    .iter()
+                    .find(|u| u.unit == job.unit)
+                    .map(|u| u.train_ms as f32)
+                    .unwrap_or(5_000.0)
+                    .max(1.0);
+                1.0 - (job.remaining_ms as f32 / total).min(1.0)
+            })
+        } else {
+            None
+        };
+
         EntityView {
             id: entity.id,
             kind: entity.kind.clone(),
@@ -1629,6 +1644,7 @@ impl MatchSim {
             unit: entity.unit,
             flag: entity.flag.clone(),
             progress,
+            train_progress,
         }
     }
 }

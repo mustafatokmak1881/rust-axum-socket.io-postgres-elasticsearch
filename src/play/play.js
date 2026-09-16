@@ -1371,6 +1371,148 @@ function labelHeightFor(entity) {
   return unitDims(entity.kind).h + 0.35;
 }
 
+function activeLoadProgress(entity) {
+  if (entity.progress != null && entity.progress < 1) {
+    return { pct: entity.progress, label: "BUILD" };
+  }
+  if (entity.train_progress != null && entity.train_progress < 1) {
+    return { pct: entity.train_progress, label: "TRAIN" };
+  }
+  return null;
+}
+
+function makeProgressSprite(pct, label) {
+  const percent = Math.max(0, Math.min(100, Math.round(pct * 100)));
+  const canvas = document.createElement("canvas");
+  canvas.width = 160;
+  canvas.height = 40;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const barX = 12;
+  const barY = 18;
+  const barW = 136;
+  const barH = 10;
+
+  ctx.fillStyle = "rgba(0,0,0,0.72)";
+  ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
+
+  ctx.fillStyle = "rgba(40,48,36,0.95)";
+  ctx.fillRect(barX, barY, barW, barH);
+
+  const fillW = Math.max(2, Math.round((barW * percent) / 100));
+  let c0 = "#6a9a3a";
+  let c1 = "#c8e86a";
+  if (label === "HP") {
+    if (percent <= 30) {
+      c0 = "#8a2020";
+      c1 = "#e85a4a";
+    } else if (percent <= 60) {
+      c0 = "#8a6a18";
+      c1 = "#e8c84a";
+    } else {
+      c0 = "#2f7a38";
+      c1 = "#7dcc5a";
+    }
+  }
+  const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+  grad.addColorStop(0, c0);
+  grad.addColorStop(1, c1);
+  ctx.fillStyle = grad;
+  ctx.fillRect(barX, barY, fillW, barH);
+
+  ctx.font = "bold 12px Rajdhani, Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.fillStyle = "#f4f1e8";
+  const text = `${label} ${percent}%`;
+  ctx.strokeText(text, canvas.width / 2, 10);
+  ctx.fillText(text, canvas.width / 2, 10);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.55, 0.39, 1);
+  sprite.center.set(0.5, 0);
+  sprite.name = "progressBar";
+  return sprite;
+}
+
+function clearSpriteBar(mesh, key) {
+  const existing = mesh.userData[key];
+  if (!existing) return;
+  mesh.remove(existing);
+  existing.material.map?.dispose();
+  existing.material.dispose();
+  mesh.userData[key] = null;
+  mesh.userData[`${key}Key`] = null;
+}
+
+function updateProgressBar(mesh, entity) {
+  const load = activeLoadProgress(entity);
+  const existing = mesh.userData.progressBar;
+
+  if (!load) {
+    clearSpriteBar(mesh, "progressBar");
+    return;
+  }
+
+  const percent = Math.round(load.pct * 100);
+  const key = `${load.label}:${percent}`;
+  if (mesh.userData.progressBarKey === key && existing) return;
+
+  clearSpriteBar(mesh, "progressBar");
+
+  const sprite = makeProgressSprite(load.pct, load.label);
+  const baseH = labelHeightFor(entity);
+  sprite.position.set(0, Math.max(0.55, baseH - 0.42), 0);
+  mesh.add(sprite);
+  mesh.userData.progressBar = sprite;
+  mesh.userData.progressBarKey = key;
+}
+
+function updateHpBar(mesh, entity) {
+  const maxHp = Number(entity.max_hp) || 0;
+  const hp = Number(entity.hp) || 0;
+  const ratio = maxHp > 0 ? hp / maxHp : 1;
+
+  // Only show when damaged — full HP stays clean.
+  if (!(ratio < 1) || maxHp <= 0) {
+    clearSpriteBar(mesh, "hpBar");
+    return;
+  }
+
+  const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+  const key = `HP:${percent}`;
+  const existing = mesh.userData.hpBar;
+  if (mesh.userData.hpBarKey === key && existing) return;
+
+  clearSpriteBar(mesh, "hpBar");
+
+  const sprite = makeProgressSprite(ratio, "HP");
+  sprite.name = "hpBar";
+  const baseH = labelHeightFor(entity);
+  const load = activeLoadProgress(entity);
+  // Sit under the build/train bar when both are visible.
+  const y = load
+    ? Math.max(0.28, baseH - 0.82)
+    : Math.max(0.45, baseH - 0.42);
+  if (!entity.building) {
+    sprite.scale.set(0.95, 0.24, 1);
+  }
+  sprite.position.set(0, y, 0);
+  mesh.add(sprite);
+  mesh.userData.hpBar = sprite;
+  mesh.userData.hpBarKey = key;
+}
+
 function unitDims(kind) {
   const k = String(kind || "");
   // Vehicles a bit larger than infantry, still small vs buildings.
@@ -1462,6 +1604,9 @@ function upsertMesh(entity) {
     mesh.material.transparent = opacity < 1;
     mesh.material.depthWrite = opacity >= 1;
   }
+
+  updateProgressBar(mesh, entity);
+  updateHpBar(mesh, entity);
 
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;

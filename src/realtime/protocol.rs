@@ -162,6 +162,9 @@ pub struct EntityView {
     pub unit: bool,
     pub flag: Option<String>,
     pub progress: Option<f32>,
+    /// 0..1 while this building is training a unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub train_progress: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
