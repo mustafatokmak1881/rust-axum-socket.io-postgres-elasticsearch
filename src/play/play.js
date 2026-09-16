@@ -1848,7 +1848,6 @@ function upsertMesh(entity) {
 
   updateProgressBar(mesh, entity);
   updateHpBar(mesh, entity);
-  updateAttackFlash(mesh);
 
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;
@@ -1918,38 +1917,6 @@ function smoothUnitFacing(mesh, dt) {
   mesh.rotation.y = cur + diff * turn;
 }
 
-function pulseAttackerFlash(mesh) {
-  if (!mesh) return;
-  mesh.userData.flashUntil = performance.now() + 220;
-  mesh.userData.flashPhase = 0;
-}
-
-function updateAttackFlash(mesh) {
-  const until = mesh.userData.flashUntil || 0;
-  const now = performance.now();
-  const flashing = now < until;
-  const pulse = flashing ? 0.55 + 0.45 * Math.sin(now * 0.055) : 0;
-
-  mesh.traverse((obj) => {
-    const mat = obj.material;
-    if (!mat || !mat.emissive) return;
-    if (!obj.userData._baseEmissive) {
-      obj.userData._baseEmissive = mat.emissive.getHex();
-      obj.userData._baseEmissiveIntensity = mat.emissiveIntensity || 0;
-    }
-    if (flashing) {
-      mat.emissive.setHex(0xffcc66);
-      mat.emissiveIntensity = pulse;
-    } else if (mesh.userData.flashUntil) {
-      mat.emissive.setHex(obj.userData._baseEmissive);
-      mat.emissiveIntensity = obj.userData._baseEmissiveIntensity;
-    }
-  });
-  if (!flashing && mesh.userData.flashUntil) {
-    mesh.userData.flashUntil = 0;
-  }
-}
-
 function spawnShotFx(shot) {
   if (!scene) return;
   const fromMesh = state.meshes.get(shot.from);
@@ -1961,11 +1928,6 @@ function spawnShotFx(shot) {
     (fromEnt && fromEnt.owner === you) || (toEnt && toEnt.owner === you);
 
   faceMeshToward(fromMesh, shot.x1, shot.y1);
-  pulseAttackerFlash(fromMesh);
-  // Stronger blink when someone is shooting at your stuff.
-  if (toEnt?.owner === you && fromMesh) {
-    fromMesh.userData.flashUntil = performance.now() + 380;
-  }
 
   const start = fromMesh
     ? worldMuzzlePoint(fromMesh)
@@ -2057,10 +2019,6 @@ function updateCombatFx(now) {
     fx.flash.scale.setScalar(1 + t * 1.8);
     fx.impact.material.opacity = fade * 0.9;
     fx.impact.scale.setScalar(1 + t * 2.2);
-  }
-
-  for (const mesh of state.meshes.values()) {
-    if (mesh.userData.flashUntil) updateAttackFlash(mesh);
   }
 }
 
