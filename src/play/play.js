@@ -1381,65 +1381,104 @@ function activeLoadProgress(entity) {
   return null;
 }
 
-function makeProgressSprite(pct, label) {
+function makeProgressSprite(pct, label, compact = false) {
   const percent = Math.max(0, Math.min(100, Math.round(pct * 100)));
+  const scale = 4; // hi-res canvas so zoom stays sharp
   const canvas = document.createElement("canvas");
-  canvas.width = 160;
-  canvas.height = 40;
+  canvas.width = 160 * scale;
+  canvas.height = 36 * scale;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.scale(scale, scale);
+  ctx.imageSmoothingEnabled = true;
 
-  const barX = 12;
-  const barY = 18;
-  const barW = 136;
-  const barH = 10;
+  const barX = 18;
+  const barY = 16;
+  const barW = 124;
+  const barH = 6;
+  const r = 3;
 
-  ctx.fillStyle = "rgba(0,0,0,0.72)";
-  ctx.fillRect(barX - 2, barY - 2, barW + 4, barH + 4);
+  const roundRect = (x, y, w, h, rad) => {
+    const rr = Math.min(rad, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  };
 
-  ctx.fillStyle = "rgba(40,48,36,0.95)";
-  ctx.fillRect(barX, barY, barW, barH);
+  // Soft backdrop
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  roundRect(barX - 3, 2, barW + 6, 30, 5);
+  ctx.fill();
 
-  const fillW = Math.max(2, Math.round((barW * percent) / 100));
-  let c0 = "#6a9a3a";
-  let c1 = "#c8e86a";
+  // Track
+  ctx.fillStyle = "rgba(18,22,16,0.92)";
+  roundRect(barX, barY, barW, barH, r);
+  ctx.fill();
+
+  const fillW = Math.max(2, (barW * percent) / 100);
+  let c0 = "#5f9234";
+  let c1 = "#b6dc62";
   if (label === "HP") {
     if (percent <= 30) {
-      c0 = "#8a2020";
-      c1 = "#e85a4a";
+      c0 = "#7a1c1c";
+      c1 = "#e24d3f";
     } else if (percent <= 60) {
-      c0 = "#8a6a18";
-      c1 = "#e8c84a";
+      c0 = "#7a6214";
+      c1 = "#e0bf3d";
     } else {
-      c0 = "#2f7a38";
-      c1 = "#7dcc5a";
+      c0 = "#287034";
+      c1 = "#6fc252";
     }
+  } else if (label === "TRAIN") {
+    c0 = "#2f6a8a";
+    c1 = "#6ec4e8";
   }
   const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
   grad.addColorStop(0, c0);
   grad.addColorStop(1, c1);
   ctx.fillStyle = grad;
-  ctx.fillRect(barX, barY, fillW, barH);
+  roundRect(barX, barY, fillW, barH, r);
+  ctx.fill();
 
-  ctx.font = "bold 12px Rajdhani, Segoe UI, sans-serif";
+  // Thin highlight on the fill
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  roundRect(barX, barY, fillW, 2, 1);
+  ctx.fill();
+
+  ctx.font = "600 11px Rajdhani, Segoe UI, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = "rgba(0,0,0,0.85)";
-  ctx.fillStyle = "#f4f1e8";
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "rgba(0,0,0,0.75)";
+  ctx.fillStyle = "#f6f3ea";
   const text = `${label} ${percent}%`;
-  ctx.strokeText(text, canvas.width / 2, 10);
-  ctx.fillText(text, canvas.width / 2, 10);
+  ctx.strokeText(text, 80, 9);
+  ctx.fillText(text, 80, 9);
 
   const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.anisotropy = 4;
   texture.needsUpdate = true;
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
     depthTest: false,
+    sizeAttenuation: true,
   });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(1.55, 0.39, 1);
+  // Smaller in-world footprint; texture is high-res so it stays crisp.
+  if (compact) {
+    sprite.scale.set(0.72, 0.16, 1);
+  } else {
+    sprite.scale.set(0.95, 0.21, 1);
+  }
   sprite.center.set(0.5, 0);
   sprite.name = "progressBar";
   return sprite;
@@ -1470,9 +1509,9 @@ function updateProgressBar(mesh, entity) {
 
   clearSpriteBar(mesh, "progressBar");
 
-  const sprite = makeProgressSprite(load.pct, load.label);
+  const sprite = makeProgressSprite(load.pct, load.label, false);
   const baseH = labelHeightFor(entity);
-  sprite.position.set(0, Math.max(0.55, baseH - 0.42), 0);
+  sprite.position.set(0, Math.max(0.5, baseH - 0.36), 0);
   mesh.add(sprite);
   mesh.userData.progressBar = sprite;
   mesh.userData.progressBarKey = key;
@@ -1496,17 +1535,14 @@ function updateHpBar(mesh, entity) {
 
   clearSpriteBar(mesh, "hpBar");
 
-  const sprite = makeProgressSprite(ratio, "HP");
+  const compact = !entity.building;
+  const sprite = makeProgressSprite(ratio, "HP", compact);
   sprite.name = "hpBar";
   const baseH = labelHeightFor(entity);
   const load = activeLoadProgress(entity);
-  // Sit under the build/train bar when both are visible.
   const y = load
-    ? Math.max(0.28, baseH - 0.82)
-    : Math.max(0.45, baseH - 0.42);
-  if (!entity.building) {
-    sprite.scale.set(0.95, 0.24, 1);
-  }
+    ? Math.max(0.22, baseH - 0.62)
+    : Math.max(0.38, baseH - 0.36);
   sprite.position.set(0, y, 0);
   mesh.add(sprite);
   mesh.userData.hpBar = sprite;
