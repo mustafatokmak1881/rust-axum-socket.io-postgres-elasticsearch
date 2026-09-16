@@ -1986,6 +1986,13 @@ function createRangerMesh(teamColor) {
 
   g.add(torso);
   g.userData.unitHeight = 0.24;
+  g.userData.walk = {
+    leftLeg: g.getObjectByName("leftLeg"),
+    rightLeg: g.getObjectByName("rightLeg"),
+    leftArm: torso.getObjectByName("leftArm"),
+    rightArm: torso.getObjectByName("rightArm"),
+    torso,
+  };
   return g;
 }
 
@@ -2153,13 +2160,27 @@ function upsertMesh(entity) {
     }
   }
 
+  const syncKey = [
+    entity.x.toFixed(2),
+    entity.y.toFixed(2),
+    Math.round(entity.hp || 0),
+    entity.progress == null ? "-" : Math.round(entity.progress * 100),
+    entity.train_progress == null ? "-" : Math.round(entity.train_progress * 100),
+    colors[0],
+  ].join("|");
+  if (mesh.userData.syncKey === syncKey) return;
+  mesh.userData.syncKey = syncKey;
+
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
   } else if (mesh.userData.isUnitRig) {
     const prevX = mesh.userData.lastX;
     const prevZ = mesh.userData.lastZ;
     mesh.position.set(entity.x, 0, entity.y);
-    tintUnitMesh(mesh, colors);
+    if (mesh.userData.lastTint !== colors[0]) {
+      tintUnitMesh(mesh, colors);
+      mesh.userData.lastTint = colors[0];
+    }
     if (prevX != null && prevZ != null) {
       const dx = entity.x - prevX;
       const dz = entity.y - prevZ;
@@ -2268,11 +2289,18 @@ function smoothUnitFacing(mesh, dt) {
 
 function updateInfantryWalk(mesh, dt, now) {
   if (!mesh?.userData?.isInfantry) return;
-  const leftLeg = mesh.getObjectByName("leftLeg");
-  const rightLeg = mesh.getObjectByName("rightLeg");
-  const leftArm = mesh.getObjectByName("leftArm");
-  const rightArm = mesh.getObjectByName("rightArm");
-  const torso = mesh.getObjectByName("torso");
+  let walk = mesh.userData.walk;
+  if (!walk?.leftLeg || !walk?.rightLeg) {
+    walk = {
+      leftLeg: mesh.getObjectByName("leftLeg"),
+      rightLeg: mesh.getObjectByName("rightLeg"),
+      leftArm: mesh.getObjectByName("leftArm"),
+      rightArm: mesh.getObjectByName("rightArm"),
+      torso: mesh.getObjectByName("torso"),
+    };
+    mesh.userData.walk = walk;
+  }
+  const { leftLeg, rightLeg, leftArm, rightArm, torso } = walk;
   if (!leftLeg || !rightLeg) return;
 
   // Keep walking briefly between network ticks so the cycle doesn't stutter.

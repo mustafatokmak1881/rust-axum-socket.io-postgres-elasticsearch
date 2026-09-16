@@ -985,12 +985,15 @@ impl MatchSim {
             };
 
             let self_r = unit_radius(&entity.kind);
+            // Player move orders win: never auto-fight or stop while marching.
+            let obeying_move = entity.move_to.is_some();
 
-            // Idle defense: as soon as an enemy enters weapon range, acquire them.
-            if entity.target.is_none()
-                && entity.move_to.is_none()
+            // Idle defense only — not while executing a move order.
+            if !obeying_move
+                && entity.target.is_none()
                 && entity.damage > 0.0
                 && entity.range > 0.0
+                && self.tick % 2 == 0
             {
                 if let Some(tid) =
                     self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range)
@@ -1008,17 +1011,15 @@ impl MatchSim {
                     let tdy = t.y - entity.y;
                     let tdist = (tdx * tdx + tdy * tdy).sqrt();
                     let stop_at = (entity.range - 0.35).max(self_r + entity_radius(t) * 0.35);
-                    if tdist <= stop_at {
+                    if !obeying_move && tdist <= stop_at {
                         hold_for_attack = true;
                         goal = None;
                         entity.detour = None;
                         entity.detour_ttl = 0;
                         entity.stuck_frames = 0;
-                    } else if entity.move_to.is_none() {
-                        // Chase only when idle (auto-acquire / attack order), not while marching.
+                    } else if !obeying_move {
+                        // Chase attack target only when not under a move order.
                         goal = Some((t.x, t.y));
-                    } else {
-                        // Keep walking the given path; still shoot if somehow in range later.
                     }
                 } else {
                     entity.target = None;
@@ -1195,18 +1196,9 @@ impl MatchSim {
                 entity.attack_cooldown_ms = entity.attack_cooldown_ms.saturating_sub(dt_ms);
             }
 
-            // Opportunity fire while moving: engage any in-range enemy without abandoning the march.
-            if entity.target.is_none()
-                && entity.move_to.is_some()
-                && entity.damage > 0.0
-                && entity.range > 0.0
-            {
-                if let Some(tid) =
-                    self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range)
-                {
-                    entity.target = Some(tid);
-                    entity.dirty = true;
-                }
+            // While obeying a move order: do not auto-acquire or linger in fights.
+            if obeying_move {
+                entity.target = None;
             }
 
             if let Some(tid) = entity.target {
@@ -1227,17 +1219,17 @@ impl MatchSim {
                         if let Some(t) = self.entities.get_mut(&tid) {
                             t.hp -= dmg;
                             t.dirty = true;
-                            // Auto-retaliate when hit and attacker is already in range.
-                            if t.unit && t.damage > 0.0 {
+                            // Retaliate only if idle (no move/attack order already in progress).
+                            if t.unit
+                                && t.damage > 0.0
+                                && t.move_to.is_none()
+                                && t.target.is_none()
+                            {
                                 let rdx = fx - t.x;
                                 let rdy = fy - t.y;
                                 let rdist = (rdx * rdx + rdy * rdy).sqrt();
                                 if rdist <= t.range {
                                     t.target = Some(from_id);
-                                    // Don't clear their move unless they were idle — keep march if any.
-                                    if t.move_to.is_none() {
-                                        // stand and fight
-                                    }
                                 }
                             }
                         }
@@ -1250,9 +1242,6 @@ impl MatchSim {
                             y1: ty,
                             kind,
                         });
-                    } else if dist > entity.range && entity.move_to.is_some() {
-                        // Lost opportunity target while marching — drop so we can re-acquire later.
-                        entity.target = None;
                     }
                 } else {
                     entity.target = None;
@@ -1513,13 +1502,21 @@ impl MatchSim {
     }
 
     fn separate_units(&mut self, dt_ms: u32) {
+        // Soft separation is expensive O(n²); every other tick is enough visually.
+        if self.tick % 2 == 1 {
+            return;
+        }
         let ids: Vec<Uuid> = self
             .entities
             .values()
             .filter(|e| e.unit)
             .map(|e| e.id)
             .collect();
-        let strength = 2.8 * (dt_ms as f32 / 1000.0);
+        if ids.len() < 2 {
+            return;
+        }
+        // Compensate for half-rate so push strength stays similar.
+        let strength = 2.8 * (dt_ms as f32 / 1000.0) * 2.0;
         let mut pushes: HashMap<Uuid, (f32, f32)> = HashMap::new();
 
         for (i, &a_id) in ids.iter().enumerate() {
@@ -1650,7 +1647,6 @@ impl MatchSim {
             };
             let entered_vision = !previously_known.contains(id);
             if entity.dirty
-                || entity.unit
                 || entity.build_remaining_ms > 0
                 || !entity.train_queue.is_empty()
                 || entered_vision
