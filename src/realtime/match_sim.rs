@@ -736,8 +736,8 @@ impl MatchSim {
                 target: None,
                 move_to: None,
                 speed: 0.0,
-                damage: if def.kind == "turret" { 25.0 } else { 0.0 },
-                range: if def.kind == "turret" { 10.0 } else { 0.0 },
+                damage: 0.0,
+                range: 0.0,
                 attack_cooldown_ms: 0,
                 dirty: true,
                 stuck_frames: 0,
@@ -949,56 +949,7 @@ impl MatchSim {
                 }
             }
 
-            // Turrets auto-acquire.
-            if entity.kind == "turret" && entity.build_remaining_ms == 0 {
-                if entity.attack_cooldown_ms > 0 {
-                    entity.attack_cooldown_ms =
-                        entity.attack_cooldown_ms.saturating_sub(dt_ms);
-                } else {
-                    let team = entity.team;
-                    let range = entity.range;
-                    let ex = entity.x;
-                    let ey = entity.y;
-                    let dmg = entity.damage;
-                    let mut best: Option<(Uuid, f32)> = None;
-                    for other in self.entities.values() {
-                        if other.team == team || !other.unit {
-                            continue;
-                        }
-                        let dx = other.x - ex;
-                        let dy = other.y - ey;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist <= range {
-                            if best.map(|(_, d)| dist < d).unwrap_or(true) {
-                                best = Some((other.id, dist));
-                            }
-                        }
-                    }
-                    if let Some((tid, _)) = best {
-                        let (tx, ty) = self
-                            .entities
-                            .get(&tid)
-                            .map(|t| (t.x, t.y))
-                            .unwrap_or((ex, ey));
-                        if let Some(t) = self.entities.get_mut(&tid) {
-                            t.hp -= dmg;
-                            t.dirty = true;
-                        }
-                        entity.attack_cooldown_ms = 700;
-                        entity.dirty = true;
-                        self.shots.push(ShotEvent {
-                            from: entity.id,
-                            to: tid,
-                            x0: ex,
-                            y0: ey,
-                            x1: tx,
-                            y1: ty,
-                            kind: entity.kind.clone(),
-                        });
-                    }
-                }
-            }
-
+            // Buildings do not fire for now — only units (soldiers/tanks) attack.
             self.entities.insert(id, entity);
         }
 
@@ -1225,6 +1176,16 @@ impl MatchSim {
                         if let Some(t) = self.entities.get_mut(&tid) {
                             t.hp -= dmg;
                             t.dirty = true;
+                            // Auto-retaliate when hit and attacker is already in range.
+                            if t.unit && t.damage > 0.0 && t.target.is_none() {
+                                let rdx = fx - t.x;
+                                let rdy = fy - t.y;
+                                let rdist = (rdx * rdx + rdy * rdy).sqrt();
+                                if rdist <= t.range {
+                                    t.target = Some(from_id);
+                                    t.move_to = None;
+                                }
+                            }
                         }
                         self.shots.push(ShotEvent {
                             from: from_id,
