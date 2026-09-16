@@ -3,8 +3,6 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -264,7 +262,6 @@ async function setupMatchScene(snapshot) {
   renderBuildList(snapshot.buildable || []);
   renderUnitList(snapshot.trainable || []);
   await ensureBuildingModel();
-  await ensureUnitModels();
   const terrain = await loadTerrainTexture(snapshot.map_size);
   const home = findOwnHome(snapshot);
   if (snapshot.focus) {
@@ -366,7 +363,6 @@ function applyDelta(msg) {
     state.entities.set(entity.id, entity);
     if (scene) upsertMesh(entity);
   }
-  if (unitModelsReady) refreshFallbackUnitMeshes();
   $("#match-caption").textContent =
     `Tick ${msg.tick} · ${state.entities.size} entities · vision fog`;
 }
@@ -381,10 +377,6 @@ let buildingTemplates = Object.create(null);
 let buildingModelsPromise = null;
 /** True after OBJ/STL templates are ready — avoid permanent fallback boxes. */
 let buildingModelsReady = false;
-/** Pre-scaled unit GLTF templates — clone per entity. */
-let unitTemplates = Object.create(null);
-let unitModelsPromise = null;
-let unitModelsReady = false;
 let ghostMesh = null;
 let fogOfWar = null;
 let fogExploredData = null; // Uint8Array size*size — 0/1 explored
@@ -411,12 +403,6 @@ const BUILDING_MODELS = {
   barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 0.85 },
   war_factory: { type: "obj", obj: "/assets/models/war-factory.obj", mtl: "/assets/models/war-factory.mtl", target: 1.35 },
   turret: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 0.9 },
-};
-
-/** Unit GLTF packs under /assets/models/... */
-const UNIT_MODELS = {
-  // Barracks ~0.85 — skinned ranger sized to read clearly on the field.
-  ranger: { type: "gltf", url: "/assets/models/ranger/scene.gltf", target: 1.0 },
 };
 
 async function prepareStlGeometry(url, targetSize) {
@@ -624,174 +610,6 @@ async function ensureBuildingModel() {
     toast("Building models failed to load — using fallbacks");
     return null;
   }
-}
-
-async function loadGltfRoot(url) {
-  const loader = new GLTFLoader();
-  const gltf = await loader.loadAsync(url);
-  const root = gltf.scene || gltf.scenes?.[0];
-  if (!root) throw new Error(`No scene in ${url}`);
-  root.updateMatrixWorld(true);
-  root.traverse((child) => {
-    if (!child.isMesh) return;
-    child.castShadow = true;
-    child.receiveShadow = true;
-    child.frustumCulled = false;
-    const mats = Array.isArray(child.material) ? child.material : [child.material];
-    for (const mat of mats) {
-      if (!mat) continue;
-      mat.side = THREE.FrontSide;
-      if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
-      if (mat.emissiveMap) mat.emissiveMap.colorSpace = THREE.SRGBColorSpace;
-    }
-  });
-  return root;
-}
-
-/** Fit using mesh geometry bounds (bone AABBs inflate skinned models badly). */
-function fitSkinnedRoot(root, targetSize) {
-  root.position.set(0, 0, 0);
-  root.rotation.set(0, 0, 0);
-  root.scale.set(1, 1, 1);
-  root.updateMatrixWorld(true);
-
-  const box = new THREE.Box3();
-  let hasMesh = false;
-  root.traverse((child) => {
-    if (!child.isMesh || !child.geometry) return;
-    child.geometry.computeBoundingBox();
-    if (!child.geometry.boundingBox) return;
-    const b = child.geometry.boundingBox.clone();
-    b.applyMatrix4(child.matrixWorld);
-    box.union(b);
-    hasMesh = true;
-  });
-  if (!hasMesh || box.isEmpty()) {
-    fitObjRoot(root, targetSize);
-    return;
-  }
-
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-  box.getSize(size);
-  box.getCenter(center);
-  const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const s = targetSize / maxDim;
-  root.scale.setScalar(s);
-  root.position.set(-center.x * s, -center.y * s, -center.z * s);
-  root.updateMatrixWorld(true);
-
-  const grounded = new THREE.Box3();
-  root.traverse((child) => {
-    if (!child.isMesh || !child.geometry?.boundingBox) return;
-    const b = child.geometry.boundingBox.clone();
-    b.applyMatrix4(child.matrixWorld);
-    grounded.union(b);
-  });
-  if (!grounded.isEmpty()) {
-    root.position.y -= grounded.min.y;
-    root.updateMatrixWorld(true);
-  }
-}
-
-function makeGltfTemplate(sharedRoot, targetSize) {
-  // Skinned Sketchfab models must use SkeletonUtils.clone — Object3D.clone breaks bones.
-  const root = SkeletonUtils.clone(sharedRoot);
-  fitSkinnedRoot(root, targetSize);
-  const wrapper = new THREE.Group();
-  wrapper.add(root);
-  wrapper.userData.keepMtlColors = true;
-  wrapper.userData.modelHeight = targetSize;
-  wrapper.userData.skinned = true;
-  return wrapper;
-}
-
-async function ensureUnitModels() {
-  if (unitModelsReady && unitTemplates.ranger) return true;
-  if (unitModelsPromise) return unitModelsPromise;
-
-  unitModelsPromise = (async () => {
-    const gltfCache = new Map();
-    for (const [kind, spec] of Object.entries(UNIT_MODELS)) {
-      if (spec.type !== "gltf") continue;
-      if (!gltfCache.has(spec.url)) {
-        gltfCache.set(spec.url, await loadGltfRoot(spec.url));
-      }
-      unitTemplates[kind] = makeGltfTemplate(gltfCache.get(spec.url), spec.target);
-    }
-    unitModelsReady = true;
-    return true;
-  })();
-
-  try {
-    const ok = await unitModelsPromise;
-    // Replace any red box fallbacks that spawned while the GLTF was loading.
-    refreshFallbackUnitMeshes();
-    return ok;
-  } catch (error) {
-    console.error(error);
-    unitModelsPromise = null;
-    unitModelsReady = false;
-    toast("Ranger model failed — using box fallback");
-    return null;
-  }
-}
-
-function refreshFallbackUnitMeshes() {
-  if (!scene || !unitModelsReady) return;
-  for (const entity of state.entities.values()) {
-    if (entity.building) continue;
-    if (!UNIT_MODELS[entity.kind] || !unitTemplates[entity.kind]) continue;
-    const existing = state.meshes.get(entity.id);
-    if (existing && !existing.userData.isFallback && existing.userData.unitModel) {
-      continue;
-    }
-    if (existing) {
-      scene.remove(existing);
-      disposeMeshTree(existing);
-      state.meshes.delete(entity.id);
-    }
-    upsertMesh(entity);
-  }
-}
-
-function createUnitMesh(kind, fallbackMat) {
-  const template = unitTemplates[kind];
-  if (template) {
-    const mesh = SkeletonUtils.clone(template);
-    mesh.traverse((child) => {
-      if (!child.isMesh || !child.material) return;
-      child.frustumCulled = false;
-      child.castShadow = true;
-      child.receiveShadow = true;
-      const mats = Array.isArray(child.material) ? child.material : [child.material];
-      for (const mat of mats) {
-        if (!mat) continue;
-        if (mat.opacity != null && mat.opacity < 0.05) mat.opacity = 1;
-        mat.transparent = Boolean(mat.transparent && (mat.opacity ?? 1) < 1);
-        mat.depthWrite = !mat.transparent;
-        mat.side = THREE.FrontSide;
-        mat.needsUpdate = true;
-      }
-    });
-    mesh.userData.keepMtlColors = true;
-    mesh.userData.unitModel = true;
-    mesh.userData.isFallback = false;
-    mesh.userData.skipBuildingOpacity = true;
-    mesh.userData.modelHeight = template.userData.modelHeight || UNIT_MODELS[kind]?.target || 0.3;
-    mesh.frustumCulled = false;
-    mesh.visible = true;
-    return mesh;
-  }
-  const d = unitDims(kind);
-  // Temporary obvious marker until GLTF is ready (then refreshFallbackUnitMeshes replaces it).
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(d.w, d.h, d.d),
-    fallbackMat,
-  );
-  mesh.userData.isFallback = true;
-  mesh.userData.modelHeight = d.h;
-  return mesh;
 }
 
 async function loadTerrainTexture(mapSize) {
@@ -1555,10 +1373,6 @@ function labelHeightFor(entity) {
   if (entity.building) {
     return entity.kind === "hq" ? 1.55 : 1.15;
   }
-  const mesh = state.meshes.get(entity.id);
-  if (mesh?.userData?.modelHeight) {
-    return mesh.userData.modelHeight + 0.12;
-  }
   return unitDims(entity.kind).h + 0.35;
 }
 
@@ -1568,7 +1382,7 @@ function unitDims(kind) {
   if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
     return { w: 0.2, h: 0.12, d: 0.26 };
   }
-  // Infantry / ranger / missile defender ≈ human scale
+  // Infantry / ranger / missile defender ≈ human scale (simple box for now)
   return { w: 0.07, h: 0.15, d: 0.07 };
 }
 
@@ -1594,23 +1408,14 @@ function buildingHasProperModel(kind) {
   return Boolean(templateForKind(kind) || geometryForKind(kind));
 }
 
-function unitHasProperModel(kind) {
-  return Boolean(unitTemplates[kind]);
-}
-
 function upsertMesh(entity) {
   if (!scene) return;
 
   let mesh = state.meshes.get(entity.id);
   const colors = entityColors(entity);
 
-  // Replace temporary colored boxes once real OBJ/STL/GLTF templates are ready.
-  if (
-    mesh &&
-    mesh.userData.isFallback &&
-    ((entity.building && buildingHasProperModel(entity.kind)) ||
-      (!entity.building && unitHasProperModel(entity.kind)))
-  ) {
+  // Replace temporary building boxes once real OBJ/STL templates are ready.
+  if (mesh && entity.building && mesh.userData.isFallback && buildingHasProperModel(entity.kind)) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
     state.meshes.delete(entity.id);
@@ -1618,11 +1423,9 @@ function upsertMesh(entity) {
   }
 
   if (!mesh) {
-    // Wait for building models when possible — avoids permanent tower boxes.
     if (entity.building && !buildingHasProperModel(entity.kind) && !buildingModelsReady) {
       return;
     }
-    // Units: allow a temporary fallback box; refreshFallbackUnitMeshes swaps GLTF in.
 
     const mat = new THREE.MeshStandardMaterial({
       color: colors[0],
@@ -1633,7 +1436,8 @@ function upsertMesh(entity) {
     if (entity.building) {
       mesh = createBuildingMesh(entity.kind, mat);
     } else {
-      mesh = createUnitMesh(entity.kind, mat);
+      const d = unitDims(entity.kind);
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(d.w, d.h, d.d), mat);
     }
 
     mesh.userData.id = entity.id;
@@ -1646,18 +1450,13 @@ function upsertMesh(entity) {
 
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
-  } else if (mesh.userData.unitModel) {
-    // Grounded GLTF (feet on terrain).
-    mesh.position.set(entity.x, 0, entity.y);
   } else {
     mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
   }
 
   const constructing = entity.progress != null && entity.progress < 1;
   const opacity = constructing ? 0.55 : 1;
-  if (mesh.userData.unitModel || mesh.userData.skipBuildingOpacity) {
-    // Unit GLTF: never force building ghost opacity.
-  } else if (mesh.userData.keepMtlColors) {
+  if (mesh.userData.keepMtlColors) {
     if (mesh.userData.lastOpacity !== opacity) {
       setBuildingOpacity(mesh, opacity);
       mesh.userData.lastOpacity = opacity;

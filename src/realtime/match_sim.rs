@@ -299,8 +299,6 @@ pub fn building_radius(kind: &str) -> f32 {
 pub fn unit_radius(kind: &str) -> f32 {
     if kind.contains("tank") {
         0.38
-    } else if kind == "ranger" {
-        0.32
     } else {
         0.22
     }
