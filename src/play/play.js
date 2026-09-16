@@ -352,14 +352,16 @@ function applyDelta(msg) {
   for (const id of msg.removed || []) {
     state.entities.delete(id);
     const mesh = state.meshes.get(id);
-    if (mesh) {
+    if (mesh && scene) {
       scene.remove(mesh);
+      state.meshes.delete(id);
+    } else {
       state.meshes.delete(id);
     }
   }
   for (const entity of msg.entities || []) {
     state.entities.set(entity.id, entity);
-    upsertMesh(entity);
+    if (scene) upsertMesh(entity);
   }
   $("#match-caption").textContent =
     `Tick ${msg.tick} · ${state.entities.size} entities · vision fog`;
@@ -373,6 +375,8 @@ let buildingGeometries = Object.create(null);
 /** Pre-scaled OBJ/MTL groups (HQ etc.) — clone per entity. */
 let buildingTemplates = Object.create(null);
 let buildingModelsPromise = null;
+/** True after OBJ/STL templates are ready — avoid permanent fallback boxes. */
+let buildingModelsReady = false;
 let ghostMesh = null;
 let fogOfWar = null;
 let fogExploredData = null; // Uint8Array size*size — 0/1 explored
@@ -502,38 +506,77 @@ function createBuildingMesh(kind, fallbackMat) {
   const template = templateForKind(kind);
   if (template) {
     const mesh = template.clone(true);
-    // clone() can still share materials with the template in nested OBJ groups —
-    // detach again so each placed/ghost building owns its materials.
     detachMaterials(mesh);
+    rememberBaseOpacities(mesh);
     mesh.userData.keepMtlColors = true;
     mesh.userData.building = true;
+    mesh.userData.modelKind = kind;
+    mesh.userData.isFallback = false;
     return mesh;
   }
   const geo = geometryForKind(kind);
   if (geo) {
-    return new THREE.Mesh(geo, fallbackMat);
+    const mesh = new THREE.Mesh(geo, fallbackMat);
+    mesh.userData.building = true;
+    mesh.userData.modelKind = kind;
+    mesh.userData.isFallback = false;
+    return mesh;
   }
+  // Temporary placeholder only — replaced once models finish loading.
   const h = kind === "hq" ? 2.4 : 1.4;
   const w = kind === "hq" ? 2.2 : 1.2;
-  return new THREE.Mesh(new THREE.BoxGeometry(w, h, w), fallbackMat);
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), fallbackMat);
+  mesh.userData.building = true;
+  mesh.userData.modelKind = kind;
+  mesh.userData.isFallback = true;
+  return mesh;
 }
 
 function setBuildingOpacity(root, opacity) {
   root.traverse((child) => {
     if (!child.isMesh || !child.material) return;
+    // Don't ghost name sprites / cosmetic markers.
+    if (child.userData?.skipBuildingOpacity) return;
+    if (child.isSprite) return;
     const mats = Array.isArray(child.material) ? child.material : [child.material];
     for (const mat of mats) {
       if (!mat) continue;
-      mat.transparent = opacity < 1;
-      mat.opacity = opacity;
-      mat.depthWrite = opacity >= 1;
+      // Preserve MTL alpha for glass etc. when fully built.
+      if (opacity >= 1) {
+        const base =
+          child.userData.baseOpacity != null ? child.userData.baseOpacity : 1;
+        mat.opacity = base;
+        mat.transparent = base < 1;
+        mat.depthWrite = base >= 1;
+      } else {
+        if (child.userData.baseOpacity == null) {
+          child.userData.baseOpacity = mat.opacity ?? 1;
+        }
+        mat.transparent = true;
+        mat.opacity = opacity * (child.userData.baseOpacity ?? 1);
+        mat.depthWrite = false;
+      }
       mat.needsUpdate = true;
     }
   });
 }
 
+function rememberBaseOpacities(root) {
+  root.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    const mat = mats[0];
+    if (mat && child.userData.baseOpacity == null) {
+      child.userData.baseOpacity = mat.opacity ?? 1;
+    }
+  });
+}
+
 async function ensureBuildingModel() {
-  if (buildingTemplates.hq && buildingGeometries.barracks) return true;
+  if (buildingTemplates.hq && buildingGeometries.barracks) {
+    buildingModelsReady = true;
+    return true;
+  }
   if (buildingModelsPromise) return buildingModelsPromise;
 
   buildingModelsPromise = (async () => {
@@ -554,6 +597,7 @@ async function ensureBuildingModel() {
         buildingGeometries[kind] = await stlCache.get(key);
       }
     }
+    buildingModelsReady = true;
     return true;
   })();
 
@@ -562,6 +606,7 @@ async function ensureBuildingModel() {
   } catch (error) {
     console.error(error);
     buildingModelsPromise = null;
+    buildingModelsReady = false;
     toast("Building models failed to load — using fallbacks");
     return null;
   }
@@ -1262,11 +1307,49 @@ function colorFor(entity) {
   return entityColors(entity)[0];
 }
 
+function disposeMeshTree(mesh) {
+  if (!mesh) return;
+  mesh.traverse((obj) => {
+    if (obj.geometry) obj.geometry.dispose?.();
+    if (obj.material) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const mat of mats) {
+        mat.map?.dispose?.();
+        mat.dispose?.();
+      }
+    }
+  });
+}
+
+function buildingHasProperModel(kind) {
+  return Boolean(templateForKind(kind) || geometryForKind(kind));
+}
+
 function upsertMesh(entity) {
+  if (!scene) return;
+
   let mesh = state.meshes.get(entity.id);
   const colors = entityColors(entity);
 
+  // Replace temporary colored boxes once real OBJ/STL templates are ready.
+  if (
+    mesh &&
+    entity.building &&
+    mesh.userData.isFallback &&
+    buildingHasProperModel(entity.kind)
+  ) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
   if (!mesh) {
+    // Wait for models when possible — avoids permanent blue/player-colored towers.
+    if (entity.building && !buildingHasProperModel(entity.kind) && !buildingModelsReady) {
+      return;
+    }
+
     const mat = new THREE.MeshStandardMaterial({
       color: colors[0],
       metalness: 0.15,
@@ -1287,12 +1370,14 @@ function upsertMesh(entity) {
 
     attachOwnerMarkings(mesh, entity);
 
-    if (entity.flag) {
+    // Cosmetic flag: tiny banner on HQ only (old 1.1-tall box looked like blue towers).
+    if (entity.flag && entity.kind === "hq") {
       const flag = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 1.1, 0.35),
+        new THREE.BoxGeometry(0.06, 0.35, 0.18),
         new THREE.MeshStandardMaterial({ color: colors[2] }),
       );
-      flag.position.set(0.9, 1.4, 0);
+      flag.position.set(0.55, 1.55, 0);
+      flag.userData.skipBuildingOpacity = true;
       mesh.add(flag);
     }
   }
@@ -1306,7 +1391,6 @@ function upsertMesh(entity) {
   const constructing = entity.progress != null && entity.progress < 1;
   const opacity = constructing ? 0.55 : 1;
   if (mesh.userData.keepMtlColors) {
-    // Only touch this instance's materials (detached at create time).
     if (mesh.userData.lastOpacity !== opacity) {
       setBuildingOpacity(mesh, opacity);
       mesh.userData.lastOpacity = opacity;
