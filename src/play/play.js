@@ -363,6 +363,7 @@ function applyDelta(msg) {
     state.entities.set(entity.id, entity);
     if (scene) upsertMesh(entity);
   }
+  playShots(msg.shots || []);
   $("#match-caption").textContent =
     `Tick ${msg.tick} · ${state.entities.size} entities · vision fog`;
 }
@@ -1368,7 +1369,7 @@ function labelHeightFor(entity) {
   if (entity.building) {
     return entity.kind === "hq" ? 1.55 : 1.15;
   }
-  return unitDims(entity.kind).h + 0.35;
+  return (unitDims(entity.kind).h || 0.22) + 0.28;
 }
 
 function activeLoadProgress(entity) {
@@ -1553,10 +1554,191 @@ function unitDims(kind) {
   const k = String(kind || "");
   // Vehicles a bit larger than infantry, still small vs buildings.
   if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
-    return { w: 0.2, h: 0.12, d: 0.26 };
+    return { w: 0.22, h: 0.14, d: 0.32 };
   }
-  // Infantry / ranger / missile defender ≈ human scale (simple box for now)
-  return { w: 0.07, h: 0.15, d: 0.07 };
+  if (k.includes("missile")) {
+    return { w: 0.08, h: 0.16, d: 0.08 };
+  }
+  // Ranger / infantry — low-poly humanoid height
+  return { w: 0.09, h: 0.22, d: 0.09 };
+}
+
+function matStd(color, opts = {}) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    metalness: opts.metalness ?? 0.2,
+    roughness: opts.roughness ?? 0.7,
+    emissive: opts.emissive ?? 0x000000,
+    emissiveIntensity: opts.emissiveIntensity ?? 0,
+  });
+}
+
+function createRangerMesh(teamColor) {
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
+  g.userData.tintParts = [];
+
+  const camo = 0x4a5c38;
+  const dark = 0x2a3224;
+  const boot = 0x1a1814;
+  const skin = 0xc4a882;
+  const gun = 0x2c2c2c;
+  const accent = teamColor >>> 0;
+
+  const add = (geo, mat, x, y, z, sx = 1, sy = 1, sz = 1, tint = false) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.scale.set(sx, sy, sz);
+    if (tint) g.userData.tintParts.push(m);
+    g.add(m);
+    return m;
+  };
+
+  // Legs
+  add(new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), -0.018, 0.035, 0);
+  add(new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), 0.018, 0.035, 0);
+  add(new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), -0.018, 0.01, 0.005);
+  add(new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), 0.018, 0.01, 0.005);
+
+  // Torso + vest
+  add(new THREE.BoxGeometry(0.07, 0.08, 0.045), matStd(camo), 0, 0.11, 0);
+  const vest = add(
+    new THREE.BoxGeometry(0.074, 0.05, 0.05),
+    matStd(dark),
+    0,
+    0.105,
+    0.002,
+  );
+  // Team stripe on vest
+  add(
+    new THREE.BoxGeometry(0.076, 0.012, 0.052),
+    matStd(accent, { roughness: 0.55 }),
+    0,
+    0.12,
+    0.003,
+    1,
+    1,
+    1,
+    true,
+  );
+
+  // Arms
+  add(new THREE.BoxGeometry(0.022, 0.06, 0.022), matStd(camo), -0.048, 0.105, 0.01);
+  add(new THREE.BoxGeometry(0.022, 0.055, 0.022), matStd(camo), 0.048, 0.1, 0.02);
+
+  // Head + helmet
+  add(new THREE.BoxGeometry(0.038, 0.038, 0.038), matStd(skin), 0, 0.168, 0);
+  add(new THREE.BoxGeometry(0.046, 0.022, 0.05), matStd(dark), 0, 0.185, 0.002);
+  add(new THREE.BoxGeometry(0.048, 0.01, 0.02), matStd(accent, { roughness: 0.5 }), 0, 0.178, 0.018, 1, 1, 1, true);
+
+  // Backpack / radio
+  add(new THREE.BoxGeometry(0.04, 0.045, 0.025), matStd(dark), 0, 0.115, -0.032);
+
+  // Rifle (held across body, muzzle toward +Z)
+  const rifle = new THREE.Group();
+  rifle.name = "muzzleRoot";
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.02, 0.04), matStd(0x3a2a1a));
+  stock.position.set(0.03, 0.1, -0.01);
+  rifle.add(stock);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.016, 0.1), matStd(gun, { metalness: 0.55, roughness: 0.4 }));
+  body.position.set(0.035, 0.105, 0.04);
+  rifle.add(body);
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.06), matStd(0x111111, { metalness: 0.7, roughness: 0.35 }));
+  barrel.position.set(0.035, 0.108, 0.11);
+  rifle.add(barrel);
+  // Muzzle tip marker (local +Z forward)
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0.035, 0.108, 0.145);
+  rifle.add(tip);
+  g.add(rifle);
+
+  g.userData.unitHeight = 0.22;
+  void vest;
+  return g;
+}
+
+function createMissileDefenderMesh(teamColor) {
+  const g = createRangerMesh(teamColor);
+  // Swap rifle for a thicker tube launcher on the shoulder
+  const old = g.getObjectByName("muzzleRoot");
+  if (old) g.remove(old);
+  const launcher = new THREE.Group();
+  launcher.name = "muzzleRoot";
+  const tube = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.016, 0.018, 0.14, 6),
+    matStd(0x3a4034, { metalness: 0.35, roughness: 0.55 }),
+  );
+  tube.rotation.x = Math.PI / 2;
+  tube.position.set(0.02, 0.14, 0.04);
+  launcher.add(tube);
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0.02, 0.14, 0.12);
+  launcher.add(tip);
+  g.add(launcher);
+  return g;
+}
+
+function createTankMesh(teamColor) {
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
+  g.userData.tintParts = [];
+
+  const hull = 0x4a5538;
+  const track = 0x222018;
+  const accent = teamColor >>> 0;
+
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    if (tint) g.userData.tintParts.push(m);
+    g.add(m);
+    return m;
+  };
+
+  add(new THREE.BoxGeometry(0.2, 0.07, 0.28), matStd(hull), 0, 0.06, 0);
+  add(new THREE.BoxGeometry(0.04, 0.05, 0.3), matStd(track), -0.12, 0.035, 0);
+  add(new THREE.BoxGeometry(0.04, 0.05, 0.3), matStd(track), 0.12, 0.035, 0);
+  add(new THREE.BoxGeometry(0.18, 0.02, 0.06), matStd(accent, { roughness: 0.5 }), 0, 0.1, -0.08, 0, 0, 0, true);
+
+  const turret = new THREE.Group();
+  turret.name = "muzzleRoot";
+  const cupola = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.14), matStd(0x3d4730));
+  cupola.position.set(0, 0.12, -0.02);
+  turret.add(cupola);
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.012, 0.015, 0.22, 6),
+    matStd(0x1a1a16, { metalness: 0.65, roughness: 0.4 }),
+  );
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.set(0, 0.125, 0.12);
+  turret.add(barrel);
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0, 0.125, 0.24);
+  turret.add(tip);
+  g.add(turret);
+
+  g.userData.unitHeight = 0.16;
+  return g;
+}
+
+function createUnitMesh(kind, teamColor) {
+  const k = String(kind || "");
+  if (k.includes("tank")) return createTankMesh(teamColor);
+  if (k.includes("missile")) return createMissileDefenderMesh(teamColor);
+  return createRangerMesh(teamColor);
+}
+
+function tintUnitMesh(mesh, colors) {
+  const parts = mesh.userData.tintParts;
+  if (!parts?.length) return;
+  const c = colors[0] >>> 0;
+  for (const p of parts) {
+    if (p.material?.color) p.material.color.setHex(c);
+  }
 }
 
 function colorFor(entity) {
@@ -1595,6 +1777,14 @@ function upsertMesh(entity) {
     mesh = null;
   }
 
+  // Upgrade old unit boxes to low-poly rigs after a client reload.
+  if (mesh && entity.unit && !mesh.userData.isUnitRig) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
   if (!mesh) {
     if (entity.building && !buildingHasProperModel(entity.kind) && !buildingModelsReady) {
       return;
@@ -1609,12 +1799,12 @@ function upsertMesh(entity) {
     if (entity.building) {
       mesh = createBuildingMesh(entity.kind, mat);
     } else {
-      const d = unitDims(entity.kind);
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(d.w, d.h, d.d), mat);
+      mesh = createUnitMesh(entity.kind, colors[0]);
     }
 
     mesh.userData.id = entity.id;
     mesh.userData.building = !!entity.building;
+    mesh.userData.unit = !!entity.unit;
     scene.add(mesh);
     state.meshes.set(entity.id, mesh);
 
@@ -1623,6 +1813,9 @@ function upsertMesh(entity) {
 
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
+  } else if (mesh.userData.isUnitRig) {
+    mesh.position.set(entity.x, 0, entity.y);
+    tintUnitMesh(mesh, colors);
   } else {
     mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
   }
@@ -1643,6 +1836,7 @@ function upsertMesh(entity) {
 
   updateProgressBar(mesh, entity);
   updateHpBar(mesh, entity);
+  updateAttackFlash(mesh);
 
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;
@@ -1671,12 +1865,185 @@ function rebuildMeshes() {
   }
 }
 
+/* ---------- Combat FX ---------- */
+
+const activeFx = [];
+
+function worldMuzzlePoint(mesh) {
+  const tip = mesh?.getObjectByName?.("muzzle");
+  if (tip) {
+    const p = new THREE.Vector3();
+    tip.getWorldPosition(p);
+    return p;
+  }
+  return new THREE.Vector3(
+    mesh.position.x,
+    (mesh.userData.unitHeight || 0.15) * 0.7,
+    mesh.position.z,
+  );
+}
+
+function faceMeshToward(mesh, x1, z1) {
+  if (!mesh || mesh.userData.building) return;
+  const dx = x1 - mesh.position.x;
+  const dz = z1 - mesh.position.z;
+  if (dx * dx + dz * dz < 1e-6) return;
+  mesh.rotation.y = Math.atan2(dx, dz);
+}
+
+function pulseAttackerFlash(mesh) {
+  if (!mesh) return;
+  mesh.userData.flashUntil = performance.now() + 220;
+  mesh.userData.flashPhase = 0;
+}
+
+function updateAttackFlash(mesh) {
+  const until = mesh.userData.flashUntil || 0;
+  const now = performance.now();
+  const flashing = now < until;
+  const pulse = flashing ? 0.55 + 0.45 * Math.sin(now * 0.055) : 0;
+
+  mesh.traverse((obj) => {
+    const mat = obj.material;
+    if (!mat || !mat.emissive) return;
+    if (!obj.userData._baseEmissive) {
+      obj.userData._baseEmissive = mat.emissive.getHex();
+      obj.userData._baseEmissiveIntensity = mat.emissiveIntensity || 0;
+    }
+    if (flashing) {
+      mat.emissive.setHex(0xffcc66);
+      mat.emissiveIntensity = pulse;
+    } else if (mesh.userData.flashUntil) {
+      mat.emissive.setHex(obj.userData._baseEmissive);
+      mat.emissiveIntensity = obj.userData._baseEmissiveIntensity;
+    }
+  });
+  if (!flashing && mesh.userData.flashUntil) {
+    mesh.userData.flashUntil = 0;
+  }
+}
+
+function spawnShotFx(shot) {
+  if (!scene) return;
+  const fromMesh = state.meshes.get(shot.from);
+  const toMesh = state.meshes.get(shot.to);
+  const you = state.match?.you;
+  const fromEnt = state.entities.get(shot.from);
+  const toEnt = state.entities.get(shot.to);
+  const involvesYou =
+    (fromEnt && fromEnt.owner === you) || (toEnt && toEnt.owner === you);
+
+  faceMeshToward(fromMesh, shot.x1, shot.y1);
+  pulseAttackerFlash(fromMesh);
+  // Stronger blink when someone is shooting at your stuff.
+  if (toEnt?.owner === you && fromMesh) {
+    fromMesh.userData.flashUntil = performance.now() + 380;
+  }
+
+  const start = fromMesh
+    ? worldMuzzlePoint(fromMesh)
+    : new THREE.Vector3(shot.x0, 0.12, shot.y0);
+  const end = toMesh
+    ? new THREE.Vector3(
+        toMesh.position.x,
+        (toMesh.userData.unitHeight || (toMesh.userData.building ? 0.6 : 0.12)) * 0.55,
+        toMesh.position.z,
+      )
+    : new THREE.Vector3(shot.x1, 0.12, shot.y1);
+
+  const kind = String(shot.kind || "");
+  const isTank = kind.includes("tank");
+  const isMissile = kind.includes("missile") || kind === "turret";
+
+  // Tracer streak
+  const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
+  const mat = new THREE.LineBasicMaterial({
+    color: isTank ? 0xff9933 : isMissile ? 0x66ddff : 0xffe066,
+    transparent: true,
+    opacity: involvesYou ? 0.95 : 0.7,
+    depthTest: true,
+  });
+  const line = new THREE.Line(geo, mat);
+  scene.add(line);
+
+  // Muzzle flash sprite (simple bright sphere)
+  const flash = new THREE.Mesh(
+    new THREE.SphereGeometry(isTank ? 0.06 : 0.035, 6, 6),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff2a8,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    }),
+  );
+  flash.position.copy(start);
+  scene.add(flash);
+
+  // Impact spark
+  const impact = new THREE.Mesh(
+    new THREE.SphereGeometry(isTank ? 0.05 : 0.03, 6, 6),
+    new THREE.MeshBasicMaterial({
+      color: 0xff5533,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    }),
+  );
+  impact.position.copy(end);
+  scene.add(impact);
+
+  activeFx.push({
+    line,
+    flash,
+    impact,
+    born: performance.now(),
+    life: isTank ? 220 : 160,
+  });
+}
+
+function playShots(shots) {
+  for (const shot of shots || []) {
+    spawnShotFx(shot);
+  }
+}
+
+function updateCombatFx(now) {
+  for (let i = activeFx.length - 1; i >= 0; i--) {
+    const fx = activeFx[i];
+    const t = (now - fx.born) / fx.life;
+    if (t >= 1) {
+      scene?.remove(fx.line);
+      scene?.remove(fx.flash);
+      scene?.remove(fx.impact);
+      fx.line.geometry.dispose();
+      fx.line.material.dispose();
+      fx.flash.geometry.dispose();
+      fx.flash.material.dispose();
+      fx.impact.geometry.dispose();
+      fx.impact.material.dispose();
+      activeFx.splice(i, 1);
+      continue;
+    }
+    const fade = 1 - t;
+    fx.line.material.opacity = fade * 0.85;
+    fx.flash.material.opacity = fade;
+    fx.flash.scale.setScalar(1 + t * 1.8);
+    fx.impact.material.opacity = fade * 0.9;
+    fx.impact.scale.setScalar(1 + t * 2.2);
+  }
+
+  for (const mesh of state.meshes.values()) {
+    if (mesh.userData.flashUntil) updateAttackFlash(mesh);
+  }
+}
+
 function animate() {
   requestAnimationFrame(animate);
   if (!renderer) return;
   applyEdgePan();
   controls?.update();
   refreshLiveVision();
+  updateCombatFx(performance.now());
   renderer.render(scene, camera);
 }
 

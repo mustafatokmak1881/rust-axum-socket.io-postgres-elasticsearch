@@ -80,6 +80,9 @@ pub enum ServerMsg {
         focus_hint: Option<[f32; 2]>,
         /// Newly explored cell indices (y * map_size + x).
         explored_new: Vec<u16>,
+        /// Attacks that happened since the last broadcast (muzzle / tracer FX).
+        #[serde(default)]
+        shots: Vec<ShotEvent>,
     },
     MatchEnd {
         match_id: Uuid,
@@ -135,6 +138,17 @@ pub struct LobbyView {
     pub ffa: bool,
     pub phase: String,
     pub slots: Vec<LobbySlot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShotEvent {
+    pub from: Uuid,
+    pub to: Uuid,
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

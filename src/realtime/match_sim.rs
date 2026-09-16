@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::aoi;
 use super::protocol::{
-    BuildableInfo, EntityView, MatchSnapshot, ResourcesView, TrainableInfo,
+    BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ShotEvent, TrainableInfo,
 };
 
 pub const TICK_HZ: u32 = 20;
@@ -308,13 +308,12 @@ pub fn building_radius(kind: &str) -> f32 {
 /// Matches client `unitDims` half-extent on the ground plane.
 pub fn unit_radius(kind: &str) -> f32 {
     if kind.contains("tank") {
-        // box ~0.20 × 0.26 → ~0.13
-        0.13
+        0.14
     } else if kind.contains("missile") {
         0.05
     } else {
-        // ranger / infantry box ~0.07 × 0.07
-        0.045
+        // ranger / infantry low-poly footprint
+        0.05
     }
 }
 
@@ -341,6 +340,8 @@ pub struct MatchSim {
     pub players: HashMap<Uuid, PlayerState>,
     pub entities: HashMap<Uuid, Entity>,
     pub removed: Vec<Uuid>,
+    /// Shots fired since last client broadcast (cleared in clear_frame_flags).
+    pub shots: Vec<ShotEvent>,
     pub ended: bool,
     pub winner_team: Option<u8>,
     pub end_reason: String,
@@ -371,6 +372,7 @@ impl MatchSim {
             players: HashMap::new(),
             entities: HashMap::new(),
             removed: Vec::new(),
+            shots: Vec::new(),
             ended: false,
             winner_team: None,
             end_reason: String::new(),
@@ -973,12 +975,26 @@ impl MatchSim {
                         }
                     }
                     if let Some((tid, _)) = best {
+                        let (tx, ty) = self
+                            .entities
+                            .get(&tid)
+                            .map(|t| (t.x, t.y))
+                            .unwrap_or((ex, ey));
                         if let Some(t) = self.entities.get_mut(&tid) {
                             t.hp -= dmg;
                             t.dirty = true;
                         }
                         entity.attack_cooldown_ms = 700;
                         entity.dirty = true;
+                        self.shots.push(ShotEvent {
+                            from: entity.id,
+                            to: tid,
+                            x0: ex,
+                            y0: ey,
+                            x1: tx,
+                            y1: ty,
+                            kind: entity.kind.clone(),
+                        });
                     }
                 }
             }
@@ -1200,10 +1216,25 @@ impl MatchSim {
                         entity.attack_cooldown_ms = 800;
                         entity.dirty = true;
                         let dmg = entity.damage;
+                        let tx = target.x;
+                        let ty = target.y;
+                        let fx = entity.x;
+                        let fy = entity.y;
+                        let kind = entity.kind.clone();
+                        let from_id = entity.id;
                         if let Some(t) = self.entities.get_mut(&tid) {
                             t.hp -= dmg;
                             t.dirty = true;
                         }
+                        self.shots.push(ShotEvent {
+                            from: from_id,
+                            to: tid,
+                            x0: fx,
+                            y0: fy,
+                            x1: tx,
+                            y1: ty,
+                            kind,
+                        });
                     }
                 }
             }
@@ -1538,11 +1569,12 @@ impl MatchSim {
         Vec<Uuid>,
         Option<ResourcesView>,
         Vec<u16>,
+        Vec<ShotEvent>,
     ) {
         let explored_new = self.reveal_vision_for(user_id);
 
         let Some(player) = self.players.get(&user_id) else {
-            return (vec![], vec![], None, explored_new);
+            return (vec![], vec![], None, explored_new, vec![]);
         };
         let resources = Some(player.resources.view());
         let previously_known = player.aoi_known.clone();
@@ -1576,11 +1608,26 @@ impl MatchSim {
             removed.push(*id);
         }
 
+        // Show shots involving you, or either end currently in vision.
+        let shots: Vec<ShotEvent> = self
+            .shots
+            .iter()
+            .filter(|s| {
+                if visible_ids.contains(&s.from) || visible_ids.contains(&s.to) {
+                    return true;
+                }
+                let from_mine = self.entities.get(&s.from).is_some_and(|e| e.owner == user_id);
+                let to_mine = self.entities.get(&s.to).is_some_and(|e| e.owner == user_id);
+                from_mine || to_mine
+            })
+            .cloned()
+            .collect();
+
         if let Some(player) = self.players.get_mut(&user_id) {
             player.aoi_known = visible_ids;
         }
 
-        (entities, removed, resources, explored_new)
+        (entities, removed, resources, explored_new, shots)
     }
 
     /// After reconnect, force the next deltas to re-send everything currently visible.
@@ -1595,6 +1642,7 @@ impl MatchSim {
             entity.dirty = false;
         }
         self.removed.clear();
+        self.shots.clear();
     }
 
     fn entity_view(&self, entity: &Entity) -> EntityView {
