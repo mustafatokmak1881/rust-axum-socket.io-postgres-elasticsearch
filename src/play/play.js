@@ -1576,7 +1576,10 @@ function matStd(color, opts = {}) {
 function createRangerMesh(teamColor) {
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
+  g.userData.isInfantry = true;
   g.userData.tintParts = [];
+  g.userData.walkPhase = Math.random() * Math.PI * 2;
+  g.userData.moving = false;
 
   const camo = 0x4a5c38;
   const dark = 0x2a3224;
@@ -1585,54 +1588,68 @@ function createRangerMesh(teamColor) {
   const gun = 0x2c2c2c;
   const accent = teamColor >>> 0;
 
-  const add = (geo, mat, x, y, z, sx = 1, sy = 1, sz = 1, tint = false) => {
+  const add = (parent, geo, mat, x, y, z, tint = false) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
-    m.scale.set(sx, sy, sz);
     if (tint) g.userData.tintParts.push(m);
-    g.add(m);
+    parent.add(m);
     return m;
   };
 
-  // Legs
-  add(new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), -0.018, 0.035, 0);
-  add(new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), 0.018, 0.035, 0);
-  add(new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), -0.018, 0.01, 0.005);
-  add(new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), 0.018, 0.01, 0.005);
+  // Legs — pivots at hip so they can swing while walking
+  const leftLeg = new THREE.Group();
+  leftLeg.name = "leftLeg";
+  leftLeg.position.set(-0.018, 0.07, 0);
+  add(leftLeg, new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), 0, -0.035, 0);
+  add(leftLeg, new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), 0, -0.06, 0.005);
+  g.add(leftLeg);
 
-  // Torso + vest
-  add(new THREE.BoxGeometry(0.07, 0.08, 0.045), matStd(camo), 0, 0.11, 0);
-  const vest = add(
-    new THREE.BoxGeometry(0.074, 0.05, 0.05),
-    matStd(dark),
-    0,
-    0.105,
-    0.002,
-  );
-  // Team stripe on vest
+  const rightLeg = new THREE.Group();
+  rightLeg.name = "rightLeg";
+  rightLeg.position.set(0.018, 0.07, 0);
+  add(rightLeg, new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), 0, -0.035, 0);
+  add(rightLeg, new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), 0, -0.06, 0.005);
+  g.add(rightLeg);
+
+  // Upper body group (bobs slightly while walking)
+  const torso = new THREE.Group();
+  torso.name = "torso";
+  add(torso, new THREE.BoxGeometry(0.07, 0.08, 0.045), matStd(camo), 0, 0.11, 0);
+  add(torso, new THREE.BoxGeometry(0.074, 0.05, 0.05), matStd(dark), 0, 0.105, 0.002);
   add(
+    torso,
     new THREE.BoxGeometry(0.076, 0.012, 0.052),
     matStd(accent, { roughness: 0.55 }),
     0,
     0.12,
     0.003,
-    1,
-    1,
-    1,
     true,
   );
 
-  // Arms
-  add(new THREE.BoxGeometry(0.022, 0.06, 0.022), matStd(camo), -0.048, 0.105, 0.01);
-  add(new THREE.BoxGeometry(0.022, 0.055, 0.022), matStd(camo), 0.048, 0.1, 0.02);
+  const leftArm = new THREE.Group();
+  leftArm.name = "leftArm";
+  leftArm.position.set(-0.048, 0.13, 0.01);
+  add(leftArm, new THREE.BoxGeometry(0.022, 0.06, 0.022), matStd(camo), 0, -0.025, 0);
+  torso.add(leftArm);
 
-  // Head + helmet
-  add(new THREE.BoxGeometry(0.038, 0.038, 0.038), matStd(skin), 0, 0.168, 0);
-  add(new THREE.BoxGeometry(0.046, 0.022, 0.05), matStd(dark), 0, 0.185, 0.002);
-  add(new THREE.BoxGeometry(0.048, 0.01, 0.02), matStd(accent, { roughness: 0.5 }), 0, 0.178, 0.018, 1, 1, 1, true);
+  const rightArm = new THREE.Group();
+  rightArm.name = "rightArm";
+  rightArm.position.set(0.048, 0.125, 0.02);
+  add(rightArm, new THREE.BoxGeometry(0.022, 0.055, 0.022), matStd(camo), 0, -0.025, 0);
+  torso.add(rightArm);
 
-  // Backpack / radio
-  add(new THREE.BoxGeometry(0.04, 0.045, 0.025), matStd(dark), 0, 0.115, -0.032);
+  add(torso, new THREE.BoxGeometry(0.038, 0.038, 0.038), matStd(skin), 0, 0.168, 0);
+  add(torso, new THREE.BoxGeometry(0.046, 0.022, 0.05), matStd(dark), 0, 0.185, 0.002);
+  add(
+    torso,
+    new THREE.BoxGeometry(0.048, 0.01, 0.02),
+    matStd(accent, { roughness: 0.5 }),
+    0,
+    0.178,
+    0.018,
+    true,
+  );
+  add(torso, new THREE.BoxGeometry(0.04, 0.045, 0.025), matStd(dark), 0, 0.115, -0.032);
 
   // Rifle (held across body, muzzle toward +Z)
   const rifle = new THREE.Group();
@@ -1640,21 +1657,26 @@ function createRangerMesh(teamColor) {
   const stock = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.02, 0.04), matStd(0x3a2a1a));
   stock.position.set(0.03, 0.1, -0.01);
   rifle.add(stock);
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.016, 0.1), matStd(gun, { metalness: 0.55, roughness: 0.4 }));
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.016, 0.016, 0.1),
+    matStd(gun, { metalness: 0.55, roughness: 0.4 }),
+  );
   body.position.set(0.035, 0.105, 0.04);
   rifle.add(body);
-  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.06), matStd(0x111111, { metalness: 0.7, roughness: 0.35 }));
+  const barrel = new THREE.Mesh(
+    new THREE.BoxGeometry(0.01, 0.01, 0.06),
+    matStd(0x111111, { metalness: 0.7, roughness: 0.35 }),
+  );
   barrel.position.set(0.035, 0.108, 0.11);
   rifle.add(barrel);
-  // Muzzle tip marker (local +Z forward)
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
   tip.position.set(0.035, 0.108, 0.145);
   rifle.add(tip);
-  g.add(rifle);
+  torso.add(rifle);
 
+  g.add(torso);
   g.userData.unitHeight = 0.22;
-  void vest;
   return g;
 }
 
@@ -1662,7 +1684,7 @@ function createMissileDefenderMesh(teamColor) {
   const g = createRangerMesh(teamColor);
   // Swap rifle for a thicker tube launcher on the shoulder
   const old = g.getObjectByName("muzzleRoot");
-  if (old) g.remove(old);
+  if (old) old.parent?.remove(old);
   const launcher = new THREE.Group();
   launcher.name = "muzzleRoot";
   const tube = new THREE.Mesh(
@@ -1676,7 +1698,8 @@ function createMissileDefenderMesh(teamColor) {
   tip.name = "muzzle";
   tip.position.set(0.02, 0.14, 0.12);
   launcher.add(tip);
-  g.add(launcher);
+  const torso = g.getObjectByName("torso");
+  (torso || g).add(launcher);
   return g;
 }
 
@@ -1777,12 +1800,18 @@ function upsertMesh(entity) {
     mesh = null;
   }
 
-  // Upgrade old unit boxes to low-poly rigs after a client reload.
-  if (mesh && entity.unit && !mesh.userData.isUnitRig) {
-    scene.remove(mesh);
-    disposeMeshTree(mesh);
-    state.meshes.delete(entity.id);
-    mesh = null;
+  // Upgrade old unit boxes / static infantry to walk-capable rigs.
+  if (mesh && entity.unit) {
+    const kind = String(entity.kind || "");
+    const isTank = kind.includes("tank");
+    const needsWalkRig =
+      !mesh.userData.isUnitRig || (!isTank && !mesh.userData.isInfantry);
+    if (needsWalkRig) {
+      scene.remove(mesh);
+      disposeMeshTree(mesh);
+      state.meshes.delete(entity.id);
+      mesh = null;
+    }
   }
 
   if (!mesh) {
@@ -1821,13 +1850,18 @@ function upsertMesh(entity) {
     if (prevX != null && prevZ != null) {
       const dx = entity.x - prevX;
       const dz = entity.y - prevZ;
-      if (dx * dx + dz * dz > 1e-8) {
+      const moved2 = dx * dx + dz * dz;
+      mesh.userData.moving = moved2 > 1e-8;
+      if (moved2 > 1e-8) {
         // Face travel direction; smooth toward it in animate().
         mesh.userData.faceYaw = Math.atan2(dx, dz);
       }
+    } else {
+      mesh.userData.moving = false;
     }
     mesh.userData.lastX = entity.x;
     mesh.userData.lastZ = entity.y;
+    mesh.userData.moveSeenAt = performance.now();
   } else {
     mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
   }
@@ -1915,6 +1949,45 @@ function smoothUnitFacing(mesh, dt) {
   while (diff < -Math.PI) diff += Math.PI * 2;
   const turn = Math.min(1, dt * 12);
   mesh.rotation.y = cur + diff * turn;
+}
+
+function updateInfantryWalk(mesh, dt, now) {
+  if (!mesh?.userData?.isInfantry) return;
+  const leftLeg = mesh.getObjectByName("leftLeg");
+  const rightLeg = mesh.getObjectByName("rightLeg");
+  const leftArm = mesh.getObjectByName("leftArm");
+  const rightArm = mesh.getObjectByName("rightArm");
+  const torso = mesh.getObjectByName("torso");
+  if (!leftLeg || !rightLeg) return;
+
+  // Keep walking briefly between network ticks so the cycle doesn't stutter.
+  const recentlyMoved =
+    mesh.userData.moving ||
+    (mesh.userData.moveSeenAt && now - mesh.userData.moveSeenAt < 180);
+
+  if (recentlyMoved) {
+    mesh.userData.walkPhase = (mesh.userData.walkPhase || 0) + dt * 11;
+    const swing = Math.sin(mesh.userData.walkPhase) * 0.55;
+    leftLeg.rotation.x = swing;
+    rightLeg.rotation.x = -swing;
+    if (leftArm) leftArm.rotation.x = -swing * 0.45;
+    if (rightArm) rightArm.rotation.x = swing * 0.35;
+    if (torso) {
+      torso.position.y = Math.abs(Math.sin(mesh.userData.walkPhase * 2)) * 0.008;
+      torso.rotation.z = Math.sin(mesh.userData.walkPhase) * 0.04;
+    }
+  } else {
+    // Ease back to idle stance
+    const ease = Math.min(1, dt * 10);
+    leftLeg.rotation.x *= 1 - ease;
+    rightLeg.rotation.x *= 1 - ease;
+    if (leftArm) leftArm.rotation.x *= 1 - ease;
+    if (rightArm) rightArm.rotation.x *= 1 - ease;
+    if (torso) {
+      torso.position.y *= 1 - ease;
+      torso.rotation.z *= 1 - ease;
+    }
+  }
 }
 
 function spawnShotFx(shot) {
@@ -2033,6 +2106,7 @@ function animate() {
   refreshLiveVision();
   for (const mesh of state.meshes.values()) {
     smoothUnitFacing(mesh, dt);
+    updateInfantryWalk(mesh, dt, now);
   }
   updateCombatFx(now);
   renderer.render(scene, camera);
