@@ -849,24 +849,6 @@ function scatterGroundDecor(scene, size) {
     group.add(mesh);
   }
 
-  // Sparse dry-grass tufts (thin boxes)
-  const grassMat = new THREE.MeshStandardMaterial({
-    color: 0x6a8038,
-    roughness: 1,
-    flatShading: true,
-  });
-  const tuftCount = Math.min(120, Math.floor(size * 0.45));
-  for (let i = 0; i < tuftCount; i++) {
-    const h = 0.25 + Math.random() * 0.45;
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, h, 0.08), grassMat);
-    mesh.position.set(
-      2 + Math.random() * (size - 4),
-      h * 0.5,
-      2 + Math.random() * (size - 4),
-    );
-    group.add(mesh);
-  }
-
   scene.add(group);
 }
 
@@ -1369,17 +1351,6 @@ function upsertMesh(entity) {
     state.meshes.set(entity.id, mesh);
 
     attachOwnerMarkings(mesh, entity);
-
-    // Cosmetic flag: tiny banner on HQ only (old 1.1-tall box looked like blue towers).
-    if (entity.flag && entity.kind === "hq") {
-      const flag = new THREE.Mesh(
-        new THREE.BoxGeometry(0.06, 0.35, 0.18),
-        new THREE.MeshStandardMaterial({ color: colors[2] }),
-      );
-      flag.position.set(0.55, 1.55, 0);
-      flag.userData.skipBuildingOpacity = true;
-      mesh.add(flag);
-    }
   }
 
   if (mesh.userData.building) {
