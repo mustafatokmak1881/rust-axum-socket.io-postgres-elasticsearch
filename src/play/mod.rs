@@ -30,7 +30,8 @@ pub fn router() -> Router<SharedState> {
 
 async fn favicon() -> Response {
     // Tiny SVG — stops browser 404 noise on /favicon.ico
-    const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#1a2614"/><path d="M8 22V10h4l4 8 4-8h4v12h-3.2V14.5L16.5 22h-1L11.2 14.5V22z" fill="#7cfc00"/></svg>"#;
+    // Use r## so fill="#..." does not terminate the raw string early.
+    const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#1a2614"/><path d="M8 22V10h4l4 8 4-8h4v12h-3.2V14.5L16.5 22h-1L11.2 14.5V22z" fill="#7cfc00"/></svg>"##;
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "image/svg+xml")
