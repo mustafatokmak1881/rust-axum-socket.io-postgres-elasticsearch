@@ -413,7 +413,8 @@ const BUILDING_MODELS = {
 
 /** Unit GLTF packs under /assets/models/... */
 const UNIT_MODELS = {
-  ranger: { type: "gltf", url: "/assets/models/ranger/scene.gltf", target: 0.32 },
+  // Barracks ~0.85, HQ ~1.4 — infantry readable next to structures.
+  ranger: { type: "gltf", url: "/assets/models/ranger/scene.gltf", target: 0.85 },
 };
 
 async function prepareStlGeometry(url, targetSize) {
@@ -685,12 +686,30 @@ function createUnitMesh(kind, fallbackMat) {
   const template = unitTemplates[kind];
   if (template) {
     const mesh = template.clone(true);
-    detachMaterials(mesh);
-    rememberBaseOpacities(mesh);
+    // Keep GLTF materials/textures intact — don't run building opacity pipeline.
+    mesh.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      child.frustumCulled = false;
+      child.castShadow = true;
+      child.receiveShadow = true;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        // Cloned mats must stay opaque/visible.
+        if (mat.opacity != null && mat.opacity < 0.05) mat.opacity = 1;
+        mat.transparent = Boolean(mat.transparent && (mat.opacity ?? 1) < 1);
+        mat.depthWrite = !mat.transparent;
+        mat.side = THREE.FrontSide;
+        mat.needsUpdate = true;
+      }
+    });
     mesh.userData.keepMtlColors = true;
     mesh.userData.unitModel = true;
     mesh.userData.isFallback = false;
+    mesh.userData.skipBuildingOpacity = true;
     mesh.userData.modelHeight = template.userData.modelHeight || UNIT_MODELS[kind]?.target || 0.3;
+    mesh.frustumCulled = false;
+    mesh.visible = true;
     return mesh;
   }
   const d = unitDims(kind);
@@ -874,15 +893,17 @@ function createFogOfWar(size) {
   fogDataTexture.needsUpdate = true;
 
   const geo = new THREE.PlaneGeometry(size, size, 1, 1);
+  // Three r170 + WebGL2 uses GLSL3 — avoid texture2D/gl_FragColor and reserved `sample`.
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
+    glslVersion: THREE.GLSL3,
     uniforms: {
       uMap: { value: fogDataTexture },
       uSize: { value: size },
     },
     vertexShader: `
-      varying vec3 vWorldPos;
+      out vec3 vWorldPos;
       void main() {
         vec4 world = modelMatrix * vec4(position, 1.0);
         vWorldPos = world.xyz;
@@ -892,22 +913,23 @@ function createFogOfWar(size) {
     fragmentShader: `
       uniform sampler2D uMap;
       uniform float uSize;
-      varying vec3 vWorldPos;
+      in vec3 vWorldPos;
+      out vec4 fragColor;
       void main() {
         vec2 uv = vec2(vWorldPos.x, vWorldPos.z) / uSize;
         if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
-          gl_FragColor = vec4(0.02, 0.03, 0.02, 0.92);
+          fragColor = vec4(0.02, 0.03, 0.02, 0.92);
           return;
         }
-        vec4 sample = texture2D(uMap, uv);
-        float explored = sample.r;
-        float visible = sample.g;
+        vec4 texel = texture(uMap, uv);
+        float explored = texel.r;
+        float visible = texel.g;
         if (explored < 0.5) {
-          gl_FragColor = vec4(0.02, 0.03, 0.02, 0.92);
+          fragColor = vec4(0.02, 0.03, 0.02, 0.92);
           return;
         }
         if (visible < 0.5) {
-          gl_FragColor = vec4(0.05, 0.07, 0.04, 0.62);
+          fragColor = vec4(0.05, 0.07, 0.04, 0.62);
           return;
         }
         discard;
@@ -1565,7 +1587,9 @@ function upsertMesh(entity) {
 
   const constructing = entity.progress != null && entity.progress < 1;
   const opacity = constructing ? 0.55 : 1;
-  if (mesh.userData.keepMtlColors) {
+  if (mesh.userData.unitModel || mesh.userData.skipBuildingOpacity) {
+    // Unit GLTF: never force building ghost opacity.
+  } else if (mesh.userData.keepMtlColors) {
     if (mesh.userData.lastOpacity !== opacity) {
       setBuildingOpacity(mesh, opacity);
       mesh.userData.lastOpacity = opacity;
