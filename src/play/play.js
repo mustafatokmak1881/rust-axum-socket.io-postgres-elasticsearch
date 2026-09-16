@@ -1012,6 +1012,7 @@ function initThree(size, terrainTexture, home) {
 
   window.addEventListener("resize", onResize);
   canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   if (!onEdgePointerMove._bound) {
     window.addEventListener("pointermove", onEdgePointerMove);
     onEdgePointerMove._bound = true;
@@ -1228,16 +1229,198 @@ function worldFromEvent(event) {
   return hits[0].point;
 }
 
+const boxSelect = {
+  active: false,
+  startX: 0,
+  startY: 0,
+  curX: 0,
+  curY: 0,
+  additive: false,
+};
+
+function setSelectBoxEl(x0, y0, x1, y1, show) {
+  const el = $("#select-box");
+  if (!el) return;
+  if (!show) {
+    el.hidden = true;
+    return;
+  }
+  const left = Math.min(x0, x1);
+  const top = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0);
+  const h = Math.abs(y1 - y0);
+  el.hidden = false;
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.style.width = `${w}px`;
+  el.style.height = `${h}px`;
+}
+
+function worldToClient(x, y, z = 0.08) {
+  const canvas = $("#viewport");
+  if (!canvas || !camera) return null;
+  const rect = canvas.getBoundingClientRect();
+  const v = new THREE.Vector3(x, z, y);
+  v.project(camera);
+  if (v.z > 1) return null;
+  return {
+    x: (v.x * 0.5 + 0.5) * rect.width + rect.left,
+    y: (-v.y * 0.5 + 0.5) * rect.height + rect.top,
+  };
+}
+
+function unitsInScreenBox(x0, y0, x1, y1) {
+  const left = Math.min(x0, x1);
+  const right = Math.max(x0, x1);
+  const top = Math.min(y0, y1);
+  const bottom = Math.max(y0, y1);
+  const you = state.match?.you;
+  const ids = [];
+  for (const entity of state.entities.values()) {
+    if (!entity.unit || entity.owner !== you) continue;
+    const p = worldToClient(entity.x, entity.y, 0.12);
+    if (!p) continue;
+    if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
+      ids.push(entity.id);
+    }
+  }
+  return ids;
+}
+
+function setSelectedUnits(ids, toastMsg) {
+  state.selectedUnits = ids;
+  state.selectedBuilding = null;
+  syncSelectionMarkers();
+  if (toastMsg) toast(toastMsg);
+}
+
+function syncSelectionMarkers() {
+  const selected = new Set(state.selectedUnits);
+  for (const [id, mesh] of state.meshes.entries()) {
+    const on = selected.has(id);
+    let ring = mesh.userData.selRing;
+    if (on && !ring) {
+      const geo = new THREE.RingGeometry(0.08, 0.11, 24);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x9fef4a,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      ring = new THREE.Mesh(geo, mat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.03;
+      ring.name = "selRing";
+      mesh.add(ring);
+      mesh.userData.selRing = ring;
+    } else if (!on && ring) {
+      mesh.remove(ring);
+      ring.geometry.dispose();
+      ring.material.dispose();
+      mesh.userData.selRing = null;
+    }
+  }
+}
+
+function pickOwnAtPoint(point) {
+  let best = null;
+  let bestDist = 1.4;
+  for (const entity of state.entities.values()) {
+    if (entity.owner !== state.match?.you) continue;
+    const dx = entity.x - point.x;
+    const dy = entity.y - point.z;
+    const d = Math.hypot(dx, dy);
+    if (d < bestDist) {
+      best = entity;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+function finishBoxSelect(event) {
+  if (!boxSelect.active) return;
+  boxSelect.active = false;
+  setSelectBoxEl(0, 0, 0, 0, false);
+  window.removeEventListener("pointermove", onBoxSelectMove);
+  window.removeEventListener("pointerup", onBoxSelectUp);
+  window.removeEventListener("pointercancel", onBoxSelectUp);
+
+  const dx = boxSelect.curX - boxSelect.startX;
+  const dy = boxSelect.curY - boxSelect.startY;
+  const dragDist = Math.hypot(dx, dy);
+
+  // Small drag = click select
+  if (dragDist < 6) {
+    const point = worldFromEvent(event);
+    if (!point) return;
+    const best = pickOwnAtPoint(point);
+    if (best?.unit) {
+      if (boxSelect.additive) {
+        const set = new Set(state.selectedUnits);
+        if (set.has(best.id)) set.delete(best.id);
+        else set.add(best.id);
+        setSelectedUnits([...set], `${set.size} selected`);
+      } else {
+        setSelectedUnits([best.id], `Selected ${best.kind}`);
+      }
+    } else if (best?.building) {
+      state.selectedBuilding = best.id;
+      state.selectedUnits = [];
+      syncSelectionMarkers();
+      toast(`Selected ${best.kind}`);
+    } else if (!boxSelect.additive) {
+      state.selectedUnits = [];
+      state.selectedBuilding = null;
+      syncSelectionMarkers();
+      send({ t: "set_focus", x: point.x, y: point.z });
+    }
+    return;
+  }
+
+  const boxed = unitsInScreenBox(
+    boxSelect.startX,
+    boxSelect.startY,
+    boxSelect.curX,
+    boxSelect.curY,
+  );
+  if (boxSelect.additive) {
+    const set = new Set(state.selectedUnits);
+    for (const id of boxed) set.add(id);
+    setSelectedUnits([...set], `${set.size} selected`);
+  } else if (boxed.length) {
+    setSelectedUnits(boxed, `${boxed.length} units selected`);
+  } else {
+    setSelectedUnits([], "Nothing selected");
+  }
+}
+
+function onBoxSelectMove(event) {
+  if (!boxSelect.active) return;
+  boxSelect.curX = event.clientX;
+  boxSelect.curY = event.clientY;
+  setSelectBoxEl(
+    boxSelect.startX,
+    boxSelect.startY,
+    boxSelect.curX,
+    boxSelect.curY,
+    true,
+  );
+}
+
+function onBoxSelectUp(event) {
+  if (event.button !== 0 && event.type === "pointerup") return;
+  finishBoxSelect(event);
+}
+
 function onPointerDown(event) {
   void enterGameFullscreen();
-  const point = worldFromEvent(event);
-  if (!point) return;
-
-  const x = Math.floor(point.x);
-  const y = Math.floor(point.z);
 
   if (event.button === 2) {
     event.preventDefault();
+    const point = worldFromEvent(event);
+    if (!point) return;
     // Attack enemy under cursor, else move
     let enemy = null;
     let bestDist = 1.6;
@@ -1253,9 +1436,10 @@ function onPointerDown(event) {
     }
     if (enemy && state.selectedUnits.length) {
       send({ t: "attack", ids: state.selectedUnits, target_id: enemy.id });
-      toast(`Attacking ${enemy.kind}`);
+      toast(`Attacking ${enemy.kind} (${state.selectedUnits.length})`);
     } else if (state.selectedUnits.length) {
       send({ t: "move_units", ids: state.selectedUnits, x: point.x, y: point.z });
+      toast(`Moving ${state.selectedUnits.length}`);
     }
     return;
   }
@@ -1263,6 +1447,10 @@ function onPointerDown(event) {
   if (event.button !== 0) return;
 
   if (state.selectedBuild) {
+    const point = worldFromEvent(event);
+    if (!point) return;
+    const x = Math.floor(point.x);
+    const y = Math.floor(point.z);
     if (!canPlaceBuildingAt(state.selectedBuild, x, y)) {
       toast("Buraya bina kurulamaz — yer dolu");
       return;
@@ -1277,31 +1465,17 @@ function onPointerDown(event) {
     return;
   }
 
-  // Select unit / building under cursor
-  let best = null;
-  let bestDist = 1.4;
-  for (const entity of state.entities.values()) {
-    if (entity.owner !== state.match?.you) continue;
-    const dx = entity.x - point.x;
-    const dy = entity.y - point.z;
-    const d = Math.hypot(dx, dy);
-    if (d < bestDist) {
-      best = entity;
-      bestDist = d;
-    }
-  }
-
-  if (best?.unit) {
-    state.selectedUnits = [best.id];
-    state.selectedBuilding = null;
-    toast(`Selected ${best.kind}`);
-  } else if (best?.building) {
-    state.selectedBuilding = best.id;
-    state.selectedUnits = [];
-    toast(`Selected ${best.kind}`);
-  } else {
-    send({ t: "set_focus", x: point.x, y: point.z });
-  }
+  // Start Generals-style drag box (Shift adds to selection).
+  boxSelect.active = true;
+  boxSelect.startX = event.clientX;
+  boxSelect.startY = event.clientY;
+  boxSelect.curX = event.clientX;
+  boxSelect.curY = event.clientY;
+  boxSelect.additive = event.shiftKey;
+  setSelectBoxEl(0, 0, 0, 0, false);
+  window.addEventListener("pointermove", onBoxSelectMove);
+  window.addEventListener("pointerup", onBoxSelectUp);
+  window.addEventListener("pointercancel", onBoxSelectUp);
 }
 
 function entityColors(entity) {
@@ -1838,6 +2012,9 @@ function upsertMesh(entity) {
     state.meshes.set(entity.id, mesh);
 
     attachOwnerMarkings(mesh, entity);
+    if (entity.unit && state.selectedUnits.includes(entity.id)) {
+      syncSelectionMarkers();
+    }
   }
 
   if (mesh.userData.building) {

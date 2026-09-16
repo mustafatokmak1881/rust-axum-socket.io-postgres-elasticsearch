@@ -188,6 +188,15 @@ input {
   display: block;
 }
 
+#select-box {
+  position: fixed;
+  z-index: 8;
+  border: 1px solid #9fef4a;
+  background: #7cfc0022;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
 /* Bottom dock — leaves left/right screen edges free for Generals edge-scroll. */
 .match-dock {
   position: absolute;
