@@ -131,6 +131,8 @@ pub struct Entity {
     pub stuck_frames: u16,
     /// Temporary escape waypoint when pathing is jammed.
     pub detour: Option<(f32, f32)>,
+    /// Remaining ticks to honor the detour before forcing a re-aim at the true goal.
+    pub detour_ttl: u16,
     /// Last escape heading (radians) — avoid picking the same jam twice.
     pub last_escape_ang: f32,
 }
@@ -426,6 +428,7 @@ impl MatchSim {
                     dirty: true,
                     stuck_frames: 0,
                     detour: None,
+                    detour_ttl: 0,
                     last_escape_ang: 0.0,
                 },
             );
@@ -559,6 +562,7 @@ impl MatchSim {
                 dirty: true,
                 stuck_frames: 0,
                 detour: None,
+                detour_ttl: 0,
                 last_escape_ang: 0.0,
             },
         );
@@ -736,6 +740,7 @@ impl MatchSim {
                 dirty: true,
                 stuck_frames: 0,
                 detour: None,
+                detour_ttl: 0,
                 last_escape_ang: 0.0,
             },
         );
@@ -812,6 +817,7 @@ impl MatchSim {
                     entity.target = None;
                     entity.stuck_frames = 0;
                     entity.detour = None;
+                    entity.detour_ttl = 0;
                     entity.dirty = true;
                 }
             }
@@ -841,6 +847,7 @@ impl MatchSim {
                     entity.move_to = None;
                     entity.stuck_frames = 0;
                     entity.detour = None;
+                    entity.detour_ttl = 0;
                     entity.dirty = true;
                 }
             }
@@ -931,6 +938,7 @@ impl MatchSim {
                                 dirty: true,
                                 stuck_frames: 0,
                                 detour: None,
+                                detour_ttl: 0,
                                 last_escape_ang: 0.0,
                             };
                             self.entities.insert(uid, spawn);
@@ -1003,6 +1011,7 @@ impl MatchSim {
                         hold_for_attack = true;
                         goal = None;
                         entity.detour = None;
+                        entity.detour_ttl = 0;
                         entity.stuck_frames = 0;
                     } else {
                         goal = Some((t.x, t.y));
@@ -1014,49 +1023,104 @@ impl MatchSim {
 
             if !hold_for_attack {
                 if let Some((gx, gy)) = goal {
-                    // Arrive at detour → resume true goal.
+                    // Detour is short-lived: expire it so we re-aim at the true goal every few ticks.
+                    if entity.detour_ttl > 0 {
+                        entity.detour_ttl = entity.detour_ttl.saturating_sub(1);
+                        if entity.detour_ttl == 0 {
+                            entity.detour = None;
+                        }
+                    } else {
+                        entity.detour = None;
+                    }
+
+                    // Arrived at detour waypoint → drop it and chase the real goal again.
                     if let Some((dx, dy)) = entity.detour {
                         let ddx = dx - entity.x;
                         let ddy = dy - entity.y;
                         if ddx * ddx + ddy * ddy < 0.45 * 0.45 {
                             entity.detour = None;
+                            entity.detour_ttl = 0;
                             entity.stuck_frames = 0;
                         }
                     }
 
-                    let (tx, ty) = entity.detour.unwrap_or((gx, gy));
                     let prev_x = entity.x;
                     let prev_y = entity.y;
-                    let dx = tx - entity.x;
-                    let dy = ty - entity.y;
-                    let dist = (dx * dx + dy * dy).sqrt();
+                    let gdx = gx - entity.x;
+                    let gdy = gy - entity.y;
+                    let toward_goal = (gdx * gdx + gdy * gdy).sqrt();
                     let step = entity.speed * (dt_ms as f32 / 1000.0);
-                    let toward_goal = {
-                        let gdx = gx - entity.x;
-                        let gdy = gy - entity.y;
-                        (gdx * gdx + gdy * gdy).sqrt()
-                    };
+                    let ignore = entity.target;
+                    let jammed = entity.stuck_frames >= 6;
+                    let solid_units = !jammed;
 
-                    if entity.target.is_none()
-                        && entity.detour.is_none()
-                        && (dist <= step || dist < 0.15)
-                    {
-                        if !self.collides_at(entity.id, tx, ty, self_r, None, true) {
-                            entity.x = tx;
-                            entity.y = ty;
+                    // True goal arrival (never "arrive" at a detour as the final destination).
+                    if entity.target.is_none() && (toward_goal <= step || toward_goal < 0.15) {
+                        if !self.collides_at(entity.id, gx, gy, self_r, None, true) {
+                            entity.x = gx;
+                            entity.y = gy;
                         }
                         entity.move_to = None;
+                        entity.detour = None;
+                        entity.detour_ttl = 0;
                         entity.stuck_frames = 0;
                         entity.dirty = true;
-                    } else if dist > 0.001 {
-                        let ux = dx / dist;
-                        let uy = dy / dist;
-                        let ignore = entity.target;
-                        let jammed = entity.stuck_frames >= 6;
-                        // When jammed, treat other units as soft so we can slip past crowds.
-                        let solid_units = !jammed;
-                        let moved = if jammed {
-                            self.steer_step_escape(
+                    } else if toward_goal > 0.001 {
+                        let gux = gdx / toward_goal;
+                        let guy = gdy / toward_goal;
+
+                        // Every tick: try the ordered destination first.
+                        let mut moved = self
+                            .steer_step(
+                                entity.id,
+                                entity.x,
+                                entity.y,
+                                gux,
+                                guy,
+                                step,
+                                self_r,
+                                ignore,
+                                solid_units,
+                            )
+                            .map(|p| (p, entity.last_escape_ang));
+
+                        // Goal path blocked this tick → briefly use detour if we have one.
+                        if moved.is_none() {
+                            if let Some((tx, ty)) = entity.detour {
+                                let ddx = tx - entity.x;
+                                let ddy = ty - entity.y;
+                                let ddist = (ddx * ddx + ddy * ddy).sqrt();
+                                if ddist > 0.001 {
+                                    let dux = ddx / ddist;
+                                    let duy = ddy / ddist;
+                                    moved = self
+                                        .steer_step(
+                                            entity.id,
+                                            entity.x,
+                                            entity.y,
+                                            dux,
+                                            duy,
+                                            step,
+                                            self_r,
+                                            ignore,
+                                            solid_units,
+                                        )
+                                        .map(|p| (p, entity.last_escape_ang));
+                                }
+                            }
+                        }
+
+                        // Still stuck → stronger escape steering.
+                        if moved.is_none() && jammed {
+                            let (ux, uy) = if let Some((tx, ty)) = entity.detour {
+                                let ddx = tx - entity.x;
+                                let ddy = ty - entity.y;
+                                let ddist = (ddx * ddx + ddy * ddy).sqrt().max(0.001);
+                                (ddx / ddist, ddy / ddist)
+                            } else {
+                                (gux, guy)
+                            };
+                            moved = self.steer_step_escape(
                                 entity.id,
                                 entity.x,
                                 entity.y,
@@ -1066,21 +1130,8 @@ impl MatchSim {
                                 self_r,
                                 ignore,
                                 entity.last_escape_ang,
-                            )
-                        } else {
-                            self.steer_step(
-                                entity.id,
-                                entity.x,
-                                entity.y,
-                                ux,
-                                uy,
-                                step,
-                                self_r,
-                                ignore,
-                                solid_units,
-                            )
-                            .map(|p| (p, entity.last_escape_ang))
-                        };
+                            );
+                        }
 
                         if let Some(((nx, ny), escape_ang)) = moved {
                             entity.x = nx;
@@ -1090,14 +1141,17 @@ impl MatchSim {
                             let moved_dist =
                                 ((nx - prev_x).powi(2) + (ny - prev_y).powi(2)).sqrt();
                             let new_goal_dist = {
-                                let gdx = gx - nx;
-                                let gdy = gy - ny;
-                                (gdx * gdx + gdy * gdy).sqrt()
+                                let ngx = gx - nx;
+                                let ngy = gy - ny;
+                                (ngx * ngx + ngy * ngy).sqrt()
                             };
-                            if moved_dist > step * 0.35
-                                && (entity.detour.is_some() || new_goal_dist < toward_goal - 0.01)
-                            {
-                                entity.stuck_frames = entity.stuck_frames.saturating_sub(2);
+                            // Any real progress toward the ordered goal clears the detour.
+                            if new_goal_dist < toward_goal - 0.02 {
+                                entity.detour = None;
+                                entity.detour_ttl = 0;
+                                entity.stuck_frames = entity.stuck_frames.saturating_sub(3);
+                            } else if moved_dist > step * 0.35 {
+                                entity.stuck_frames = entity.stuck_frames.saturating_sub(1);
                             } else {
                                 entity.stuck_frames = entity.stuck_frames.saturating_add(1);
                             }
@@ -1105,7 +1159,7 @@ impl MatchSim {
                             entity.stuck_frames = entity.stuck_frames.saturating_add(2);
                         }
 
-                        // Pick a fresh random detour if still jammed / repeating the same fail.
+                        // Brief detour only when jammed — TTL forces us back to the true goal.
                         if entity.stuck_frames >= 8 {
                             let (waypoint, ang) = self.pick_escape_waypoint(
                                 entity.id,
@@ -1117,15 +1171,20 @@ impl MatchSim {
                                 entity.last_escape_ang,
                             );
                             entity.detour = Some(waypoint);
+                            entity.detour_ttl = 18; // ~0.9s at 20 Hz, then re-check goal
                             entity.last_escape_ang = ang;
-                            entity.stuck_frames = 3; // keep escape bias briefly
+                            entity.stuck_frames = 3;
                             entity.dirty = true;
                         }
                     }
                 } else {
                     entity.detour = None;
+                    entity.detour_ttl = 0;
                     entity.stuck_frames = 0;
                 }
+            } else {
+                entity.detour = None;
+                entity.detour_ttl = 0;
             }
 
             if entity.attack_cooldown_ms > 0 {
