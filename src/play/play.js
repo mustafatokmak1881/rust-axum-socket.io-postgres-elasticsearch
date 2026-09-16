@@ -359,6 +359,13 @@ function applyDelta(msg) {
       state.meshes.delete(id);
     }
   }
+  if (msg.removed?.length) {
+    const dead = new Set(msg.removed);
+    const before = state.selectedUnits.length;
+    state.selectedUnits = state.selectedUnits.filter((id) => !dead.has(id));
+    if (state.selectedUnits.length !== before) syncSelectionMarkers();
+    if (dead.has(state.selectedBuilding)) state.selectedBuilding = null;
+  }
   for (const entity of msg.entities || []) {
     state.entities.set(entity.id, entity);
     if (scene) upsertMesh(entity);
