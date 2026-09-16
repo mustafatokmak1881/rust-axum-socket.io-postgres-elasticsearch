@@ -278,6 +278,35 @@ pub fn trainables() -> &'static [UnitDef] {
     ]
 }
 
+pub fn building_radius(kind: &str) -> f32 {
+    match kind {
+        "hq" => 1.35,
+        "war_factory" => 1.15,
+        "barracks" => 0.95,
+        "power_plant" | "supply" => 1.0,
+        "turret" => 0.7,
+        _ => 0.95,
+    }
+}
+
+pub fn unit_radius(kind: &str) -> f32 {
+    if kind.contains("tank") {
+        0.38
+    } else {
+        0.22
+    }
+}
+
+fn entity_radius(entity: &Entity) -> f32 {
+    if entity.building {
+        building_radius(&entity.kind)
+    } else if entity.unit {
+        unit_radius(&entity.kind)
+    } else {
+        0.2
+    }
+}
+
 pub struct MatchSim {
     pub id: Uuid,
     pub map_size: u16,
@@ -615,10 +644,18 @@ impl MatchSim {
             return Err("Out of bounds");
         }
 
-        let occupied = self.entities.values().any(|e| {
-            e.building && (e.x.floor() as i32) == x && (e.y.floor() as i32) == y
+        let place_r = building_radius(kind);
+        let blocked = self.entities.values().any(|e| {
+            if !e.building {
+                return false;
+            }
+            let other_r = building_radius(&e.kind);
+            let dx = e.x - fx;
+            let dy = e.y - fy;
+            let min_dist = place_r + other_r + 0.15;
+            dx * dx + dy * dy < min_dist * min_dist
         });
-        if occupied {
+        if blocked {
             return Err("Tile occupied");
         }
 
@@ -803,8 +840,13 @@ impl MatchSim {
             }
         }
 
-        let ids: Vec<Uuid> = self.entities.keys().copied().collect();
-        for id in ids {
+        let building_ids: Vec<Uuid> = self
+            .entities
+            .values()
+            .filter(|e| e.building)
+            .map(|e| e.id)
+            .collect();
+        for id in building_ids {
             let Some(mut entity) = self.entities.remove(&id) else {
                 continue;
             };
@@ -814,7 +856,7 @@ impl MatchSim {
                 entity.dirty = true;
             }
 
-            if entity.building && entity.build_remaining_ms == 0 {
+            if entity.build_remaining_ms == 0 {
                 if let Some(job) = entity.train_queue.front_mut() {
                     job.remaining_ms = job.remaining_ms.saturating_sub(dt_ms);
                     entity.dirty = true;
@@ -822,13 +864,20 @@ impl MatchSim {
                         let unit_kind = entity.train_queue.pop_front().unwrap().unit;
                         if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
                             let uid = Uuid::new_v4();
+                            let (sx, sy) = self.find_free_spawn_near(
+                                entity.x,
+                                entity.y,
+                                unit_radius(def.unit),
+                                uid,
+                                Some((entity.x, entity.y, building_radius(&entity.kind))),
+                            );
                             let spawn = Entity {
                                 id: uid,
                                 kind: def.unit.into(),
                                 owner: entity.owner,
                                 team: entity.team,
-                                x: entity.x + 1.2,
-                                y: entity.y + 1.2,
+                                x: sx,
+                                y: sy,
                                 hp: def.hp,
                                 max_hp: def.hp,
                                 building: false,
@@ -850,58 +899,6 @@ impl MatchSim {
                 }
             }
 
-            // Movement toward waypoint or attack target.
-            if entity.unit {
-                let mut dest = entity.move_to;
-                if let Some(tid) = entity.target {
-                    if let Some(t) = self.entities.get(&tid) {
-                        dest = Some((t.x, t.y));
-                    } else {
-                        entity.target = None;
-                    }
-                }
-                if let Some((tx, ty)) = dest {
-                    let dx = tx - entity.x;
-                    let dy = ty - entity.y;
-                    let dist = (dx * dx + dy * dy).sqrt();
-                    let step = entity.speed * (dt_ms as f32 / 1000.0);
-                    if dist <= step || dist < 0.15 {
-                        if entity.target.is_none() {
-                            entity.x = tx;
-                            entity.y = ty;
-                            entity.move_to = None;
-                        }
-                    } else {
-                        entity.x += dx / dist * step;
-                        entity.y += dy / dist * step;
-                        entity.dirty = true;
-                    }
-                }
-
-                if entity.attack_cooldown_ms > 0 {
-                    entity.attack_cooldown_ms =
-                        entity.attack_cooldown_ms.saturating_sub(dt_ms);
-                }
-
-                if let Some(tid) = entity.target {
-                    if let Some(target) = self.entities.get(&tid) {
-                        let dx = target.x - entity.x;
-                        let dy = target.y - entity.y;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist <= entity.range && entity.attack_cooldown_ms == 0 {
-                            // apply damage after reinsert via pending list
-                            entity.attack_cooldown_ms = 800;
-                            entity.dirty = true;
-                            let dmg = entity.damage;
-                            if let Some(t) = self.entities.get_mut(&tid) {
-                                t.hp -= dmg;
-                                t.dirty = true;
-                            }
-                        }
-                    }
-                }
-            }
-
             // Turrets auto-acquire.
             if entity.kind == "turret" && entity.build_remaining_ms == 0 {
                 if entity.attack_cooldown_ms > 0 {
@@ -915,7 +912,7 @@ impl MatchSim {
                     let dmg = entity.damage;
                     let mut best: Option<(Uuid, f32)> = None;
                     for other in self.entities.values() {
-                        if other.team == team {
+                        if other.team == team || !other.unit {
                             continue;
                         }
                         let dx = other.x - ex;
@@ -941,6 +938,100 @@ impl MatchSim {
             self.entities.insert(id, entity);
         }
 
+        // Units move after buildings are all back in the map (solid obstacles).
+        let unit_ids: Vec<Uuid> = self
+            .entities
+            .values()
+            .filter(|e| e.unit)
+            .map(|e| e.id)
+            .collect();
+        for id in unit_ids {
+            let Some(mut entity) = self.entities.remove(&id) else {
+                continue;
+            };
+
+            let self_r = unit_radius(&entity.kind);
+            let mut dest = entity.move_to;
+            let mut hold_for_attack = false;
+            if let Some(tid) = entity.target {
+                if let Some(t) = self.entities.get(&tid) {
+                    let tdx = t.x - entity.x;
+                    let tdy = t.y - entity.y;
+                    let tdist = (tdx * tdx + tdy * tdy).sqrt();
+                    let stop_at = (entity.range - 0.35).max(self_r + entity_radius(t) * 0.35);
+                    if tdist <= stop_at {
+                        hold_for_attack = true;
+                        dest = None;
+                    } else {
+                        dest = Some((t.x, t.y));
+                    }
+                } else {
+                    entity.target = None;
+                }
+            }
+
+            if !hold_for_attack {
+                if let Some((tx, ty)) = dest {
+                    let dx = tx - entity.x;
+                    let dy = ty - entity.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    let step = entity.speed * (dt_ms as f32 / 1000.0);
+                    if entity.target.is_none() && (dist <= step || dist < 0.15) {
+                        if !self.collides_at(entity.id, tx, ty, self_r, None, true) {
+                            entity.x = tx;
+                            entity.y = ty;
+                        }
+                        entity.move_to = None;
+                        entity.dirty = true;
+                    } else if dist > 0.001 {
+                        let ux = dx / dist;
+                        let uy = dy / dist;
+                        let ignore = entity.target;
+                        if let Some((nx, ny)) = self.steer_step(
+                            entity.id,
+                            entity.x,
+                            entity.y,
+                            ux,
+                            uy,
+                            step,
+                            self_r,
+                            ignore,
+                        ) {
+                            entity.x = nx;
+                            entity.y = ny;
+                            entity.dirty = true;
+                        }
+                    }
+                }
+            }
+
+            if entity.attack_cooldown_ms > 0 {
+                entity.attack_cooldown_ms = entity.attack_cooldown_ms.saturating_sub(dt_ms);
+            }
+
+            if let Some(tid) = entity.target {
+                if let Some(target) = self.entities.get(&tid) {
+                    let dx = target.x - entity.x;
+                    let dy = target.y - entity.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist <= entity.range && entity.attack_cooldown_ms == 0 {
+                        entity.attack_cooldown_ms = 800;
+                        entity.dirty = true;
+                        let dmg = entity.damage;
+                        if let Some(t) = self.entities.get_mut(&tid) {
+                            t.hp -= dmg;
+                            t.dirty = true;
+                        }
+                    }
+                }
+            }
+
+            self.entities.insert(id, entity);
+        }
+
+        self.separate_units(dt_ms);
+        self.clamp_entities_to_map();
+
         // Remove dead.
         let dead: Vec<Uuid> = self
             .entities
@@ -960,6 +1051,181 @@ impl MatchSim {
         }
 
         self.check_victory();
+    }
+
+    fn collides_at(
+        &self,
+        self_id: Uuid,
+        x: f32,
+        y: f32,
+        self_r: f32,
+        ignore: Option<Uuid>,
+        solid_units: bool,
+    ) -> bool {
+        for other in self.entities.values() {
+            if other.id == self_id || Some(other.id) == ignore {
+                continue;
+            }
+            if !other.building && !other.unit {
+                continue;
+            }
+            if other.unit && !solid_units {
+                continue;
+            }
+            // Under-construction buildings still block.
+            let other_r = entity_radius(other);
+            let min_d = self_r + other_r;
+            let dx = other.x - x;
+            let dy = other.y - y;
+            if dx * dx + dy * dy < min_d * min_d {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn steer_step(
+        &self,
+        self_id: Uuid,
+        x: f32,
+        y: f32,
+        ux: f32,
+        uy: f32,
+        step: f32,
+        self_r: f32,
+        ignore: Option<Uuid>,
+    ) -> Option<(f32, f32)> {
+        // Try forward, then fan left/right to walk around obstacles.
+        const ANGLES: &[f32] = &[
+            0.0,
+            0.45,
+            -0.45,
+            0.9,
+            -0.9,
+            1.35,
+            -1.35,
+            1.8,
+            -1.8,
+            2.4,
+            -2.4,
+        ];
+        for &ang in ANGLES {
+            let (s, c) = ang.sin_cos();
+            let dx = ux * c - uy * s;
+            let dy = ux * s + uy * c;
+            let nx = x + dx * step;
+            let ny = y + dy * step;
+            if !self.collides_at(self_id, nx, ny, self_r, ignore, true) {
+                return Some((nx, ny));
+            }
+        }
+        None
+    }
+
+    fn find_free_spawn_near(
+        &self,
+        bx: f32,
+        by: f32,
+        radius: f32,
+        self_id: Uuid,
+        extra_solid: Option<(f32, f32, f32)>,
+    ) -> (f32, f32) {
+        let map = self.map_size as f32;
+        for k in 0..48 {
+            let ang = k as f32 * 0.7;
+            let dist = 1.4 + (k as f32) * 0.22;
+            let x = (bx + ang.cos() * dist).clamp(0.5, map - 0.5);
+            let y = (by + ang.sin() * dist).clamp(0.5, map - 0.5);
+            if let Some((ex, ey, er)) = extra_solid {
+                let dx = ex - x;
+                let dy = ey - y;
+                let min_d = radius + er;
+                if dx * dx + dy * dy < min_d * min_d {
+                    continue;
+                }
+            }
+            if !self.collides_at(self_id, x, y, radius, None, true) {
+                return (x, y);
+            }
+        }
+        (
+            (bx + 1.6).clamp(0.5, map - 0.5),
+            (by + 1.6).clamp(0.5, map - 0.5),
+        )
+    }
+
+    fn separate_units(&mut self, dt_ms: u32) {
+        let ids: Vec<Uuid> = self
+            .entities
+            .values()
+            .filter(|e| e.unit)
+            .map(|e| e.id)
+            .collect();
+        let strength = 2.8 * (dt_ms as f32 / 1000.0);
+        let mut pushes: HashMap<Uuid, (f32, f32)> = HashMap::new();
+
+        for (i, &a_id) in ids.iter().enumerate() {
+            let Some(a) = self.entities.get(&a_id) else {
+                continue;
+            };
+            let ar = unit_radius(&a.kind);
+            for &b_id in ids.iter().skip(i + 1) {
+                let Some(b) = self.entities.get(&b_id) else {
+                    continue;
+                };
+                let br = unit_radius(&b.kind);
+                let dx = a.x - b.x;
+                let dy = a.y - b.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let min_d = ar + br;
+                if dist >= min_d || dist < 1e-4 {
+                    continue;
+                }
+                let push = (min_d - dist) * 0.5;
+                let nx = dx / dist;
+                let ny = dy / dist;
+                let pa = pushes.entry(a_id).or_insert((0.0, 0.0));
+                pa.0 += nx * push;
+                pa.1 += ny * push;
+                let pb = pushes.entry(b_id).or_insert((0.0, 0.0));
+                pb.0 -= nx * push;
+                pb.1 -= ny * push;
+            }
+        }
+
+        for (id, (px, py)) in pushes {
+            let Some(entity) = self.entities.get(&id) else {
+                continue;
+            };
+            let r = unit_radius(&entity.kind);
+            let nx = entity.x + px * strength.clamp(0.0, 1.2);
+            let ny = entity.y + py * strength.clamp(0.0, 1.2);
+            // Don't separate into buildings.
+            if self.collides_at(id, nx, ny, r, None, false) {
+                continue;
+            }
+            if let Some(entity) = self.entities.get_mut(&id) {
+                entity.x = nx;
+                entity.y = ny;
+                entity.dirty = true;
+            }
+        }
+    }
+
+    fn clamp_entities_to_map(&mut self) {
+        let map = self.map_size as f32;
+        for entity in self.entities.values_mut() {
+            if !entity.unit {
+                continue;
+            }
+            let nx = entity.x.clamp(0.5, map - 0.5);
+            let ny = entity.y.clamp(0.5, map - 0.5);
+            if (nx - entity.x).abs() > 0.001 || (ny - entity.y).abs() > 0.001 {
+                entity.x = nx;
+                entity.y = ny;
+                entity.dirty = true;
+            }
+        }
     }
 
     fn check_victory(&mut self) {

@@ -1093,6 +1093,48 @@ function ensureGhost(kind) {
   return mesh;
 }
 
+function buildingRadius(kind) {
+  switch (kind) {
+    case "hq":
+      return 1.35;
+    case "war_factory":
+      return 1.15;
+    case "barracks":
+      return 0.95;
+    case "power_plant":
+    case "supply":
+      return 1.0;
+    case "turret":
+      return 0.7;
+    default:
+      return 0.95;
+  }
+}
+
+function canPlaceBuildingAt(kind, tileX, tileY) {
+  const fx = tileX + 0.5;
+  const fy = tileY + 0.5;
+  const placeR = buildingRadius(kind);
+  for (const entity of state.entities.values()) {
+    if (!entity.building) continue;
+    const otherR = buildingRadius(entity.kind);
+    const dx = entity.x - fx;
+    const dy = entity.y - fy;
+    const minDist = placeR + otherR + 0.15;
+    if (dx * dx + dy * dy < minDist * minDist) return false;
+  }
+  return true;
+}
+
+function tintGhost(valid) {
+  if (!ghostMesh) return;
+  const pad = ghostMesh.children.find((c) => c.isMesh && c.geometry?.type === "PlaneGeometry");
+  if (pad?.material) {
+    pad.material.color.setHex(valid ? 0x7cfc00 : 0xff3333);
+  }
+  setBuildingOpacity(ghostMesh, valid ? 0.42 : 0.28);
+}
+
 function updateGhostPreview(event) {
   if (!state.selectedBuild || !ground || !camera) {
     if (ghostMesh) ghostMesh.visible = false;
@@ -1105,10 +1147,15 @@ function updateGhostPreview(event) {
     ghost.visible = false;
     return;
   }
-  const x = Math.floor(point.x) + 0.5;
-  const z = Math.floor(point.z) + 0.5;
+  const tileX = Math.floor(point.x);
+  const tileZ = Math.floor(point.z);
+  const x = tileX + 0.5;
+  const z = tileZ + 0.5;
   ghost.position.set(x, 0, z);
   ghost.visible = true;
+  const valid = canPlaceBuildingAt(state.selectedBuild, tileX, tileZ);
+  ghost.userData.placeValid = valid;
+  tintGhost(valid);
 }
 
 function setBuildPlacement(kind) {
@@ -1217,6 +1264,10 @@ function onPointerDown(event) {
   if (event.button !== 0) return;
 
   if (state.selectedBuild) {
+    if (!canPlaceBuildingAt(state.selectedBuild, x, y)) {
+      toast("Buraya bina kurulamaz — yer dolu");
+      return;
+    }
     send({
       t: "place_building",
       kind: state.selectedBuild,
