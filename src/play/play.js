@@ -615,41 +615,88 @@ async function ensureBuildingModel() {
 async function loadTerrainTexture(mapSize) {
   try {
     const loader = new THREE.TextureLoader();
-    const tex = await loader.loadAsync("/assets/terrain.jpg");
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = 8;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const tiles = Math.max(12, Math.round(mapSize / 10));
-    tex.repeat.set(tiles, tiles);
-    return tex;
+    const base = await loader.loadAsync("/assets/terrain.jpg");
+    return bakeRandomTerrainTexture(base.image, mapSize);
   } catch (error) {
     console.error(error);
-    return makeFallbackTerrainTexture(mapSize);
+    return bakeRandomTerrainTexture(null, mapSize);
   }
 }
 
-function makeFallbackTerrainTexture(mapSize) {
+/** One unique ground atlas — avoids obvious square tile repeats. */
+function bakeRandomTerrainTexture(image, mapSize) {
+  const size = 1024;
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 256;
+  canvas.width = size;
+  canvas.height = size;
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#4a5f34";
-  ctx.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 900; i++) {
-    const x = Math.random() * 256;
-    const y = Math.random() * 256;
-    const s = 1 + Math.random() * 3;
-    ctx.fillStyle = `rgba(${60 + Math.random() * 50},${80 + Math.random() * 60},${40 + Math.random() * 30},${0.15 + Math.random() * 0.35})`;
-    ctx.fillRect(x, y, s, s);
+
+  ctx.fillStyle = "#455832";
+  ctx.fillRect(0, 0, size, size);
+
+  if (image) {
+    for (let i = 0; i < 48; i++) {
+      ctx.save();
+      const x = Math.random() * size;
+      const y = Math.random() * size;
+      const scale = 0.35 + Math.random() * 1.4;
+      ctx.translate(x, y);
+      ctx.rotate(Math.random() * Math.PI * 2);
+      ctx.globalAlpha = 0.22 + Math.random() * 0.5;
+      const hue = (Math.random() - 0.5) * 48;
+      const sat = 0.65 + Math.random() * 0.7;
+      const bri = 0.8 + Math.random() * 0.35;
+      ctx.filter = `hue-rotate(${hue}deg) saturate(${sat}) brightness(${bri})`;
+      const w = Math.max(64, (image.width || 256) * scale * 0.45);
+      const h = Math.max(64, (image.height || 256) * scale * 0.45);
+      ctx.drawImage(image, -w / 2, -h / 2, w, h);
+      ctx.restore();
+    }
   }
+
+  // Soft irregular patches (ellipses — not squares)
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const rx = 18 + Math.random() * 90;
+    const ry = 14 + Math.random() * 75;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, Math.random() * Math.PI, 0, Math.PI * 2);
+    const dirt = Math.random() > 0.55;
+    ctx.fillStyle = dirt
+      ? `rgba(${70 + Math.random() * 40},${55 + Math.random() * 35},${30 + Math.random() * 25},${0.1 + Math.random() * 0.22})`
+      : `rgba(${35 + Math.random() * 40},${70 + Math.random() * 60},${30 + Math.random() * 35},${0.08 + Math.random() * 0.2})`;
+    ctx.fill();
+  }
+
+  // Fine grain so large flats don't look painted
+  const data = ctx.getImageData(0, 0, size, size);
+  const px = data.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const n = (Math.random() - 0.5) * 28;
+    px[i] = Math.max(0, Math.min(255, px[i] + n));
+    px[i + 1] = Math.max(0, Math.min(255, px[i + 1] + n * 1.05));
+    px[i + 2] = Math.max(0, Math.min(255, px[i + 2] + n * 0.7));
+  }
+  ctx.putImageData(data, 0, 0);
+
   const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  const tiles = Math.max(12, Math.round(mapSize / 10));
-  tex.repeat.set(tiles, tiles);
+  tex.wrapS = THREE.MirroredRepeatWrapping;
+  tex.wrapT = THREE.MirroredRepeatWrapping;
+  tex.anisotropy = 8;
   tex.colorSpace = THREE.SRGBColorSpace;
+  // Few large mirrored tiles — not a dense square grid
+  const tiles = Math.max(1.6, mapSize / 90);
+  tex.repeat.set(tiles, tiles * (0.85 + Math.random() * 0.3));
+  tex.offset.set(Math.random(), Math.random());
+  tex.rotation = Math.random() * Math.PI * 2;
+  tex.center.set(0.5, 0.5);
+  tex.needsUpdate = true;
   return tex;
+}
+
+function makeFallbackTerrainTexture(mapSize) {
+  return bakeRandomTerrainTexture(null, mapSize);
 }
 
 function visionRadiusFor(entity) {
@@ -914,8 +961,8 @@ function initThree(size, terrainTexture, home) {
   const geo = new THREE.PlaneGeometry(size, size, 1, 1);
   const mat = new THREE.MeshStandardMaterial({
     map: terrainTexture || null,
-    color: terrainTexture ? 0xb8c898 : 0x3d5230,
-    roughness: 0.95,
+    color: terrainTexture ? 0xd0d8c0 : 0x3d5230,
+    roughness: 0.97,
     metalness: 0.02,
     flatShading: false,
   });
@@ -925,16 +972,16 @@ function initThree(size, terrainTexture, home) {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // Subtle tile hint — not a loud debug grid.
+  // Very faint placement hint — not a loud square grid over the map.
   const grid = new THREE.GridHelper(
     size,
-    Math.min(size, 96),
+    Math.min(size, 64),
     0x000000,
-    0x2a3820,
+    0x24301c,
   );
-  grid.material.opacity = 0.22;
+  grid.material.opacity = 0.08;
   grid.material.transparent = true;
-  grid.position.set(cx, 0.025, cz);
+  grid.position.set(cx, 0.02, cz);
   scene.add(grid);
 
   scatterGroundDecor(scene, size);
