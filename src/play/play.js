@@ -1814,8 +1814,20 @@ function upsertMesh(entity) {
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
   } else if (mesh.userData.isUnitRig) {
+    const prevX = mesh.userData.lastX;
+    const prevZ = mesh.userData.lastZ;
     mesh.position.set(entity.x, 0, entity.y);
     tintUnitMesh(mesh, colors);
+    if (prevX != null && prevZ != null) {
+      const dx = entity.x - prevX;
+      const dz = entity.y - prevZ;
+      if (dx * dx + dz * dz > 1e-8) {
+        // Face travel direction; smooth toward it in animate().
+        mesh.userData.faceYaw = Math.atan2(dx, dz);
+      }
+    }
+    mesh.userData.lastX = entity.x;
+    mesh.userData.lastZ = entity.y;
   } else {
     mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
   }
@@ -1888,7 +1900,22 @@ function faceMeshToward(mesh, x1, z1) {
   const dx = x1 - mesh.position.x;
   const dz = z1 - mesh.position.z;
   if (dx * dx + dz * dz < 1e-6) return;
-  mesh.rotation.y = Math.atan2(dx, dz);
+  mesh.userData.faceYaw = Math.atan2(dx, dz);
+  // Snap quickly when firing so the muzzle lines up with the tracer.
+  mesh.rotation.y = mesh.userData.faceYaw;
+}
+
+function smoothUnitFacing(mesh, dt) {
+  if (!mesh?.userData?.isUnitRig) return;
+  if (mesh.userData.faceYaw == null) return;
+  const target = mesh.userData.faceYaw;
+  let cur = mesh.rotation.y;
+  let diff = target - cur;
+  // Shortest angle
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  const turn = Math.min(1, dt * 12);
+  mesh.rotation.y = cur + diff * turn;
 }
 
 function pulseAttackerFlash(mesh) {
@@ -2040,10 +2067,16 @@ function updateCombatFx(now) {
 function animate() {
   requestAnimationFrame(animate);
   if (!renderer) return;
+  const now = performance.now();
+  const dt = Math.min(0.05, ((now - (animate._last || now)) / 1000) || 0.016);
+  animate._last = now;
   applyEdgePan();
   controls?.update();
   refreshLiveVision();
-  updateCombatFx(performance.now());
+  for (const mesh of state.meshes.values()) {
+    smoothUnitFacing(mesh, dt);
+  }
+  updateCombatFx(now);
   renderer.render(scene, camera);
 }
 
