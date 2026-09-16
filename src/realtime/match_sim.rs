@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
+use rand::Rng;
 use uuid::Uuid;
 
 use super::aoi;
@@ -126,6 +127,12 @@ pub struct Entity {
     pub range: f32,
     pub attack_cooldown_ms: u32,
     pub dirty: bool,
+    /// Frames with little/no progress toward the goal.
+    pub stuck_frames: u16,
+    /// Temporary escape waypoint when pathing is jammed.
+    pub detour: Option<(f32, f32)>,
+    /// Last escape heading (radians) — avoid picking the same jam twice.
+    pub last_escape_ang: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -400,6 +407,9 @@ impl MatchSim {
                     range: 0.0,
                     attack_cooldown_ms: 0,
                     dirty: true,
+                    stuck_frames: 0,
+                    detour: None,
+                    last_escape_ang: 0.0,
                 },
             );
             sim.reveal_vision_for(user_id);
@@ -530,6 +540,9 @@ impl MatchSim {
                 range: 0.0,
                 attack_cooldown_ms: 0,
                 dirty: true,
+                stuck_frames: 0,
+                detour: None,
+                last_escape_ang: 0.0,
             },
         );
         self.reveal_vision_for(user_id);
@@ -704,6 +717,9 @@ impl MatchSim {
                 range: if def.kind == "turret" { 10.0 } else { 0.0 },
                 attack_cooldown_ms: 0,
                 dirty: true,
+                stuck_frames: 0,
+                detour: None,
+                last_escape_ang: 0.0,
             },
         );
 
@@ -777,6 +793,8 @@ impl MatchSim {
                 if entity.owner == user_id && entity.unit && entity.build_remaining_ms == 0 {
                     entity.move_to = Some((tx, ty));
                     entity.target = None;
+                    entity.stuck_frames = 0;
+                    entity.detour = None;
                     entity.dirty = true;
                 }
             }
@@ -804,6 +822,8 @@ impl MatchSim {
                 if entity.owner == user_id && entity.unit {
                     entity.target = Some(target_id);
                     entity.move_to = None;
+                    entity.stuck_frames = 0;
+                    entity.detour = None;
                     entity.dirty = true;
                 }
             }
@@ -892,6 +912,9 @@ impl MatchSim {
                                 range: def.range,
                                 attack_cooldown_ms: 0,
                                 dirty: true,
+                                stuck_frames: 0,
+                                detour: None,
+                                last_escape_ang: 0.0,
                             };
                             self.entities.insert(uid, spawn);
                         }
@@ -951,7 +974,7 @@ impl MatchSim {
             };
 
             let self_r = unit_radius(&entity.kind);
-            let mut dest = entity.move_to;
+            let mut goal = entity.move_to;
             let mut hold_for_attack = false;
             if let Some(tid) = entity.target {
                 if let Some(t) = self.entities.get(&tid) {
@@ -961,9 +984,11 @@ impl MatchSim {
                     let stop_at = (entity.range - 0.35).max(self_r + entity_radius(t) * 0.35);
                     if tdist <= stop_at {
                         hold_for_attack = true;
-                        dest = None;
+                        goal = None;
+                        entity.detour = None;
+                        entity.stuck_frames = 0;
                     } else {
-                        dest = Some((t.x, t.y));
+                        goal = Some((t.x, t.y));
                     }
                 } else {
                     entity.target = None;
@@ -971,37 +996,118 @@ impl MatchSim {
             }
 
             if !hold_for_attack {
-                if let Some((tx, ty)) = dest {
+                if let Some((gx, gy)) = goal {
+                    // Arrive at detour → resume true goal.
+                    if let Some((dx, dy)) = entity.detour {
+                        let ddx = dx - entity.x;
+                        let ddy = dy - entity.y;
+                        if ddx * ddx + ddy * ddy < 0.45 * 0.45 {
+                            entity.detour = None;
+                            entity.stuck_frames = 0;
+                        }
+                    }
+
+                    let (tx, ty) = entity.detour.unwrap_or((gx, gy));
+                    let prev_x = entity.x;
+                    let prev_y = entity.y;
                     let dx = tx - entity.x;
                     let dy = ty - entity.y;
                     let dist = (dx * dx + dy * dy).sqrt();
                     let step = entity.speed * (dt_ms as f32 / 1000.0);
-                    if entity.target.is_none() && (dist <= step || dist < 0.15) {
+                    let toward_goal = {
+                        let gdx = gx - entity.x;
+                        let gdy = gy - entity.y;
+                        (gdx * gdx + gdy * gdy).sqrt()
+                    };
+
+                    if entity.target.is_none()
+                        && entity.detour.is_none()
+                        && (dist <= step || dist < 0.15)
+                    {
                         if !self.collides_at(entity.id, tx, ty, self_r, None, true) {
                             entity.x = tx;
                             entity.y = ty;
                         }
                         entity.move_to = None;
+                        entity.stuck_frames = 0;
                         entity.dirty = true;
                     } else if dist > 0.001 {
                         let ux = dx / dist;
                         let uy = dy / dist;
                         let ignore = entity.target;
-                        if let Some((nx, ny)) = self.steer_step(
-                            entity.id,
-                            entity.x,
-                            entity.y,
-                            ux,
-                            uy,
-                            step,
-                            self_r,
-                            ignore,
-                        ) {
+                        let jammed = entity.stuck_frames >= 6;
+                        // When jammed, treat other units as soft so we can slip past crowds.
+                        let solid_units = !jammed;
+                        let moved = if jammed {
+                            self.steer_step_escape(
+                                entity.id,
+                                entity.x,
+                                entity.y,
+                                ux,
+                                uy,
+                                step,
+                                self_r,
+                                ignore,
+                                entity.last_escape_ang,
+                            )
+                        } else {
+                            self.steer_step(
+                                entity.id,
+                                entity.x,
+                                entity.y,
+                                ux,
+                                uy,
+                                step,
+                                self_r,
+                                ignore,
+                                solid_units,
+                            )
+                            .map(|p| (p, entity.last_escape_ang))
+                        };
+
+                        if let Some(((nx, ny), escape_ang)) = moved {
                             entity.x = nx;
                             entity.y = ny;
+                            entity.last_escape_ang = escape_ang;
+                            entity.dirty = true;
+                            let moved_dist =
+                                ((nx - prev_x).powi(2) + (ny - prev_y).powi(2)).sqrt();
+                            let new_goal_dist = {
+                                let gdx = gx - nx;
+                                let gdy = gy - ny;
+                                (gdx * gdx + gdy * gdy).sqrt()
+                            };
+                            if moved_dist > step * 0.35
+                                && (entity.detour.is_some() || new_goal_dist < toward_goal - 0.01)
+                            {
+                                entity.stuck_frames = entity.stuck_frames.saturating_sub(2);
+                            } else {
+                                entity.stuck_frames = entity.stuck_frames.saturating_add(1);
+                            }
+                        } else {
+                            entity.stuck_frames = entity.stuck_frames.saturating_add(2);
+                        }
+
+                        // Pick a fresh random detour if still jammed / repeating the same fail.
+                        if entity.stuck_frames >= 8 {
+                            let (waypoint, ang) = self.pick_escape_waypoint(
+                                entity.id,
+                                entity.x,
+                                entity.y,
+                                gx,
+                                gy,
+                                self_r,
+                                entity.last_escape_ang,
+                            );
+                            entity.detour = Some(waypoint);
+                            entity.last_escape_ang = ang;
+                            entity.stuck_frames = 3; // keep escape bias briefly
                             entity.dirty = true;
                         }
                     }
+                } else {
+                    entity.detour = None;
+                    entity.stuck_frames = 0;
                 }
             }
 
@@ -1094,20 +1200,11 @@ impl MatchSim {
         step: f32,
         self_r: f32,
         ignore: Option<Uuid>,
+        solid_units: bool,
     ) -> Option<(f32, f32)> {
         // Try forward, then fan left/right to walk around obstacles.
         const ANGLES: &[f32] = &[
-            0.0,
-            0.45,
-            -0.45,
-            0.9,
-            -0.9,
-            1.35,
-            -1.35,
-            1.8,
-            -1.8,
-            2.4,
-            -2.4,
+            0.0, 0.4, -0.4, 0.85, -0.85, 1.3, -1.3, 1.75, -1.75, 2.3, -2.3, 2.8, -2.8,
         ];
         for &ang in ANGLES {
             let (s, c) = ang.sin_cos();
@@ -1115,11 +1212,103 @@ impl MatchSim {
             let dy = ux * s + uy * c;
             let nx = x + dx * step;
             let ny = y + dy * step;
-            if !self.collides_at(self_id, nx, ny, self_r, ignore, true) {
+            if !self.collides_at(self_id, nx, ny, self_r, ignore, solid_units) {
                 return Some((nx, ny));
             }
         }
         None
+    }
+
+    /// When jammed: biased random headings, prefer anything that isn't the last failed angle.
+    fn steer_step_escape(
+        &self,
+        self_id: Uuid,
+        x: f32,
+        y: f32,
+        ux: f32,
+        uy: f32,
+        step: f32,
+        self_r: f32,
+        ignore: Option<Uuid>,
+        last_escape_ang: f32,
+    ) -> Option<((f32, f32), f32)> {
+        let mut rng = rand::thread_rng();
+        // Soft on units so crowds don't freeze everyone.
+        if let Some(p) = self.steer_step(self_id, x, y, ux, uy, step, self_r, ignore, false) {
+            return Some((p, last_escape_ang));
+        }
+
+        // Random absolute headings — skip near the last failed escape.
+        for _ in 0..14 {
+            let ang = rng.gen_range(0.0..std::f32::consts::TAU);
+            let delta = (ang - last_escape_ang).rem_euclid(std::f32::consts::TAU);
+            let mirrored = std::f32::consts::TAU - delta;
+            if delta.min(mirrored) < 0.55 {
+                continue;
+            }
+            let nx = x + ang.cos() * step;
+            let ny = y + ang.sin() * step;
+            if !self.collides_at(self_id, nx, ny, self_r, ignore, false) {
+                return Some(((nx, ny), ang));
+            }
+            // Also try a longer probe step for escaping pockets.
+            let nx2 = x + ang.cos() * step * 1.6;
+            let ny2 = y + ang.sin() * step * 1.6;
+            if !self.collides_at(self_id, nx2, ny2, self_r, ignore, false) {
+                return Some(((nx2, ny2), ang));
+            }
+        }
+
+        // Last resort: any free micro-step, even repeating angles.
+        for k in 0..12 {
+            let ang = (k as f32) * (std::f32::consts::TAU / 12.0) + rng.gen_range(0.0..0.3);
+            let nx = x + ang.cos() * step;
+            let ny = y + ang.sin() * step;
+            if !self.collides_at(self_id, nx, ny, self_r, ignore, false) {
+                return Some(((nx, ny), ang));
+            }
+        }
+        None
+    }
+
+    fn pick_escape_waypoint(
+        &self,
+        self_id: Uuid,
+        x: f32,
+        y: f32,
+        goal_x: f32,
+        goal_y: f32,
+        self_r: f32,
+        last_escape_ang: f32,
+    ) -> ((f32, f32), f32) {
+        let mut rng = rand::thread_rng();
+        let map = self.map_size as f32;
+        let to_goal = (goal_y - y).atan2(goal_x - x);
+
+        for _ in 0..20 {
+            // Prefer side/back detours relative to the goal, not the same heading again.
+            let side = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+            let ang = to_goal
+                + side * rng.gen_range(0.9..2.4)
+                + rng.gen_range(-0.35..0.35);
+            let delta = (ang - last_escape_ang).rem_euclid(std::f32::consts::TAU);
+            let mirrored = std::f32::consts::TAU - delta;
+            if delta.min(mirrored) < 0.7 && rng.gen_bool(0.7) {
+                continue;
+            }
+            let dist = rng.gen_range(2.5..7.5);
+            let wx = (x + ang.cos() * dist).clamp(0.5, map - 0.5);
+            let wy = (y + ang.sin() * dist).clamp(0.5, map - 0.5);
+            // Prefer waypoints that aren't inside buildings.
+            if !self.collides_at(self_id, wx, wy, self_r, None, false) {
+                return ((wx, wy), ang);
+            }
+        }
+
+        let ang = last_escape_ang + std::f32::consts::FRAC_PI_2 + rng.gen_range(-0.4..0.4);
+        let wx = (x + ang.cos() * 4.0).clamp(0.5, map - 0.5);
+        let wy = (y + ang.sin() * 4.0).clamp(0.5, map - 0.5);
+        ((wx, wy), ang)
     }
 
     fn find_free_spawn_near(
