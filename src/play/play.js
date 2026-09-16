@@ -1118,17 +1118,33 @@ function buildingRadius(kind) {
   return visual * 0.42;
 }
 
+function enemyBuildBlockRadius(kind) {
+  const k = String(kind || "");
+  if (k === "hq") return 14;
+  if (k === "war_factory" || k === "barracks") return 10;
+  return 8;
+}
+
 function canPlaceBuildingAt(kind, tileX, tileY) {
   const fx = tileX + 0.5;
   const fy = tileY + 0.5;
   const placeR = buildingRadius(kind);
+  const myTeam = state.match?.team;
   for (const entity of state.entities.values()) {
     if (!entity.building) continue;
-    const otherR = buildingRadius(entity.kind);
     const dx = entity.x - fx;
     const dy = entity.y - fy;
+    const otherR = buildingRadius(entity.kind);
     const minDist = placeR + otherR + 0.04;
     if (dx * dx + dy * dy < minDist * minDist) return false;
+    if (
+      myTeam != null &&
+      entity.team !== myTeam &&
+      (entity.hp ?? 1) > 0
+    ) {
+      const block = enemyBuildBlockRadius(entity.kind) + placeR;
+      if (dx * dx + dy * dy < block * block) return false;
+    }
   }
   return true;
 }
@@ -1459,7 +1475,7 @@ function onPointerDown(event) {
     const x = Math.floor(point.x);
     const y = Math.floor(point.z);
     if (!canPlaceBuildingAt(state.selectedBuild, x, y)) {
-      toast("Buraya bina kurulamaz — yer dolu");
+      toast("Buraya bina kurulamaz — yer dolu veya düşman bölgesi");
       return;
     }
     send({
@@ -1740,8 +1756,8 @@ function unitDims(kind) {
   if (k.includes("missile")) {
     return { w: 0.08, h: 0.16, d: 0.08 };
   }
-  // Ranger / infantry — low-poly humanoid height
-  return { w: 0.09, h: 0.22, d: 0.09 };
+  // Ranger / infantry — detailed low-poly humanoid height
+  return { w: 0.1, h: 0.24, d: 0.1 };
 }
 
 function matStd(color, opts = {}) {
@@ -1758,106 +1774,218 @@ function createRangerMesh(teamColor) {
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isInfantry = true;
+  g.userData.rigVersion = 3;
   g.userData.tintParts = [];
   g.userData.walkPhase = Math.random() * Math.PI * 2;
   g.userData.moving = false;
 
-  const camo = 0x4a5c38;
-  const dark = 0x2a3224;
-  const boot = 0x1a1814;
-  const skin = 0xc4a882;
-  const gun = 0x2c2c2c;
+  const camo = 0x4f6340;
+  const camoDark = 0x3a4a30;
+  const vest = 0x2c3326;
+  const boot = 0x1a1612;
+  const leather = 0x3b2a1c;
+  const skin = 0xc9a882;
+  const gun = 0x2a2a28;
+  const gunMetal = 0x4a4a46;
+  const plastic = 0x1c1c1a;
   const accent = teamColor >>> 0;
 
-  const add = (parent, geo, mat, x, y, z, tint = false) => {
+  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
     if (tint) g.userData.tintParts.push(m);
     parent.add(m);
     return m;
   };
 
-  // Legs — pivots at hip so they can swing while walking
-  const leftLeg = new THREE.Group();
-  leftLeg.name = "leftLeg";
-  leftLeg.position.set(-0.018, 0.07, 0);
-  add(leftLeg, new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), 0, -0.035, 0);
-  add(leftLeg, new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), 0, -0.06, 0.005);
-  g.add(leftLeg);
+  // —— Legs (hip pivots for walk) ——
+  const makeLeg = (name, hx) => {
+    const leg = new THREE.Group();
+    leg.name = name;
+    leg.position.set(hx, 0.078, 0);
+    // thigh
+    add(leg, new THREE.BoxGeometry(0.03, 0.045, 0.034), matStd(camo), 0, -0.022, 0.002);
+    // knee pad
+    add(leg, new THREE.BoxGeometry(0.032, 0.016, 0.028), matStd(vest), 0, -0.042, 0.01);
+    // calf
+    add(leg, new THREE.BoxGeometry(0.028, 0.04, 0.03), matStd(camoDark), 0, -0.062, 0);
+    // boot
+    add(leg, new THREE.BoxGeometry(0.032, 0.018, 0.046), matStd(boot), 0, -0.082, 0.008);
+    add(leg, new THREE.BoxGeometry(0.03, 0.01, 0.018), matStd(0x0e0c0a), 0, -0.088, 0.02);
+    g.add(leg);
+    return leg;
+  };
+  makeLeg("leftLeg", -0.02);
+  makeLeg("rightLeg", 0.02);
 
-  const rightLeg = new THREE.Group();
-  rightLeg.name = "rightLeg";
-  rightLeg.position.set(0.018, 0.07, 0);
-  add(rightLeg, new THREE.BoxGeometry(0.028, 0.07, 0.03), matStd(camo), 0, -0.035, 0);
-  add(rightLeg, new THREE.BoxGeometry(0.03, 0.02, 0.04), matStd(boot), 0, -0.06, 0.005);
-  g.add(rightLeg);
-
-  // Upper body group (bobs slightly while walking)
+  // —— Torso ——
   const torso = new THREE.Group();
   torso.name = "torso";
-  add(torso, new THREE.BoxGeometry(0.07, 0.08, 0.045), matStd(camo), 0, 0.11, 0);
-  add(torso, new THREE.BoxGeometry(0.074, 0.05, 0.05), matStd(dark), 0, 0.105, 0.002);
+
+  // hips / belt
+  add(torso, new THREE.BoxGeometry(0.078, 0.022, 0.05), matStd(camoDark), 0, 0.09, 0);
+  add(torso, new THREE.BoxGeometry(0.082, 0.012, 0.052), matStd(leather), 0, 0.1, 0.002);
+  // belt pouches
+  add(torso, new THREE.BoxGeometry(0.018, 0.02, 0.014), matStd(vest), -0.03, 0.095, 0.028);
+  add(torso, new THREE.BoxGeometry(0.018, 0.02, 0.014), matStd(vest), 0.03, 0.095, 0.028);
+  add(torso, new THREE.BoxGeometry(0.022, 0.018, 0.012), matStd(0x24301c), 0, 0.094, 0.03);
+
+  // chest / jacket
+  add(torso, new THREE.BoxGeometry(0.076, 0.07, 0.048), matStd(camo), 0, 0.138, 0);
+  // plate carrier
+  add(torso, new THREE.BoxGeometry(0.07, 0.055, 0.03), matStd(vest), 0, 0.14, 0.018);
+  // mag pouches row
+  for (let i = -1; i <= 1; i++) {
+    add(
+      torso,
+      new THREE.BoxGeometry(0.018, 0.028, 0.016),
+      matStd(0x232820),
+      i * 0.022,
+      0.132,
+      0.038,
+    );
+  }
+  // team ID stripe
   add(
     torso,
-    new THREE.BoxGeometry(0.076, 0.012, 0.052),
-    matStd(accent, { roughness: 0.55 }),
+    new THREE.BoxGeometry(0.078, 0.01, 0.052),
+    matStd(accent, { roughness: 0.45 }),
     0,
-    0.12,
-    0.003,
+    0.162,
+    0.004,
+    0,
+    0,
+    0,
     true,
   );
+  // collar
+  add(torso, new THREE.BoxGeometry(0.05, 0.012, 0.04), matStd(camoDark), 0, 0.175, -0.002);
 
-  const leftArm = new THREE.Group();
-  leftArm.name = "leftArm";
-  leftArm.position.set(-0.048, 0.13, 0.01);
-  add(leftArm, new THREE.BoxGeometry(0.022, 0.06, 0.022), matStd(camo), 0, -0.025, 0);
-  torso.add(leftArm);
-
-  const rightArm = new THREE.Group();
-  rightArm.name = "rightArm";
-  rightArm.position.set(0.048, 0.125, 0.02);
-  add(rightArm, new THREE.BoxGeometry(0.022, 0.055, 0.022), matStd(camo), 0, -0.025, 0);
-  torso.add(rightArm);
-
-  add(torso, new THREE.BoxGeometry(0.038, 0.038, 0.038), matStd(skin), 0, 0.168, 0);
-  add(torso, new THREE.BoxGeometry(0.046, 0.022, 0.05), matStd(dark), 0, 0.185, 0.002);
+  // backpack
+  add(torso, new THREE.BoxGeometry(0.05, 0.055, 0.028), matStd(vest), 0, 0.14, -0.036);
+  add(torso, new THREE.BoxGeometry(0.04, 0.02, 0.02), matStd(0x1e2418), 0, 0.165, -0.04);
+  // radio brick + antenna
+  add(torso, new THREE.BoxGeometry(0.018, 0.028, 0.016), matStd(plastic), 0.028, 0.15, -0.048);
   add(
     torso,
-    new THREE.BoxGeometry(0.048, 0.01, 0.02),
-    matStd(accent, { roughness: 0.5 }),
+    new THREE.CylinderGeometry(0.003, 0.003, 0.07, 5),
+    matStd(gunMetal, { metalness: 0.6, roughness: 0.35 }),
+    0.028,
+    0.195,
+    -0.048,
+  );
+
+  // —— Arms ——
+  const makeArm = (name, ax, az) => {
+    const arm = new THREE.Group();
+    arm.name = name;
+    arm.position.set(ax, 0.165, az);
+    // shoulder pad
+    add(arm, new THREE.BoxGeometry(0.028, 0.022, 0.03), matStd(vest), 0, 0, 0);
+    // upper arm
+    add(arm, new THREE.BoxGeometry(0.024, 0.04, 0.024), matStd(camo), 0, -0.028, 0.004);
+    // elbow pad
+    add(arm, new THREE.BoxGeometry(0.026, 0.014, 0.022), matStd(vest), 0, -0.046, 0.008);
+    // forearm
+    add(arm, new THREE.BoxGeometry(0.022, 0.036, 0.022), matStd(camoDark), 0, -0.066, 0.01);
+    // glove
+    add(arm, new THREE.BoxGeometry(0.02, 0.016, 0.024), matStd(boot), 0, -0.088, 0.014);
+    torso.add(arm);
+    return arm;
+  };
+  makeArm("leftArm", -0.052, 0.008);
+  makeArm("rightArm", 0.052, 0.016);
+
+  // —— Head ——
+  add(torso, new THREE.BoxGeometry(0.04, 0.04, 0.038), matStd(skin), 0, 0.198, 0.002);
+  // balaclava / neck
+  add(torso, new THREE.BoxGeometry(0.036, 0.016, 0.034), matStd(0x2a2824), 0, 0.182, 0.004);
+  // helmet shell
+  add(torso, new THREE.BoxGeometry(0.05, 0.024, 0.052), matStd(camoDark), 0, 0.218, 0);
+  add(torso, new THREE.BoxGeometry(0.046, 0.014, 0.048), matStd(vest), 0, 0.23, -0.002);
+  // helmet brim / goggles mount
+  add(torso, new THREE.BoxGeometry(0.048, 0.01, 0.016), matStd(plastic), 0, 0.21, 0.024);
+  add(torso, new THREE.BoxGeometry(0.036, 0.01, 0.012), matStd(0x66aacc, { metalness: 0.3, roughness: 0.25 }), 0, 0.206, 0.03);
+  // team helmet band
+  add(
+    torso,
+    new THREE.BoxGeometry(0.052, 0.008, 0.018),
+    matStd(accent, { roughness: 0.4 }),
     0,
-    0.178,
-    0.018,
+    0.214,
+    0.02,
+    0,
+    0,
+    0,
     true,
   );
-  add(torso, new THREE.BoxGeometry(0.04, 0.045, 0.025), matStd(dark), 0, 0.115, -0.032);
+  // chin strap
+  add(torso, new THREE.BoxGeometry(0.008, 0.02, 0.004), matStd(boot), -0.018, 0.195, 0.016);
+  add(torso, new THREE.BoxGeometry(0.008, 0.02, 0.004), matStd(boot), 0.018, 0.195, 0.016);
 
-  // Rifle (held across body, muzzle toward +Z)
+  // —— Detailed rifle (muzzle toward +Z) ——
   const rifle = new THREE.Group();
   rifle.name = "muzzleRoot";
-  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.02, 0.04), matStd(0x3a2a1a));
-  stock.position.set(0.03, 0.1, -0.01);
-  rifle.add(stock);
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.016, 0.016, 0.1),
-    matStd(gun, { metalness: 0.55, roughness: 0.4 }),
+  // stock
+  add(rifle, new THREE.BoxGeometry(0.016, 0.022, 0.036), matStd(plastic), 0.032, 0.118, -0.02);
+  add(rifle, new THREE.BoxGeometry(0.014, 0.012, 0.02), matStd(leather), 0.032, 0.11, -0.038);
+  // receiver
+  add(
+    rifle,
+    new THREE.BoxGeometry(0.018, 0.02, 0.055),
+    matStd(gunMetal, { metalness: 0.55, roughness: 0.4 }),
+    0.034,
+    0.122,
+    0.02,
   );
-  body.position.set(0.035, 0.105, 0.04);
-  rifle.add(body);
-  const barrel = new THREE.Mesh(
-    new THREE.BoxGeometry(0.01, 0.01, 0.06),
-    matStd(0x111111, { metalness: 0.7, roughness: 0.35 }),
+  // carry handle / optic
+  add(rifle, new THREE.BoxGeometry(0.012, 0.014, 0.03), matStd(plastic), 0.034, 0.138, 0.015);
+  add(rifle, new THREE.BoxGeometry(0.01, 0.008, 0.016), matStd(0x111110), 0.034, 0.146, 0.02);
+  // magazine
+  add(rifle, new THREE.BoxGeometry(0.014, 0.032, 0.018), matStd(plastic), 0.034, 0.1, 0.018);
+  // handguard
+  add(
+    rifle,
+    new THREE.BoxGeometry(0.02, 0.018, 0.05),
+    matStd(gun, { metalness: 0.4, roughness: 0.45 }),
+    0.034,
+    0.122,
+    0.068,
   );
-  barrel.position.set(0.035, 0.108, 0.11);
-  rifle.add(barrel);
+  // barrel
+  add(
+    rifle,
+    new THREE.CylinderGeometry(0.005, 0.006, 0.07, 6),
+    matStd(0x151514, { metalness: 0.75, roughness: 0.3 }),
+    0.034,
+    0.124,
+    0.12,
+    Math.PI / 2,
+    0,
+    0,
+  );
+  // front sight / flash hider
+  add(rifle, new THREE.BoxGeometry(0.008, 0.014, 0.008), matStd(gunMetal), 0.034, 0.134, 0.145);
+  add(
+    rifle,
+    new THREE.CylinderGeometry(0.007, 0.008, 0.016, 6),
+    matStd(0x0c0c0c, { metalness: 0.7, roughness: 0.35 }),
+    0.034,
+    0.124,
+    0.158,
+    Math.PI / 2,
+    0,
+    0,
+  );
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0.035, 0.108, 0.145);
+  tip.position.set(0.034, 0.124, 0.168);
   rifle.add(tip);
   torso.add(rifle);
 
   g.add(torso);
-  g.userData.unitHeight = 0.22;
+  g.userData.unitHeight = 0.24;
   return g;
 }
 
@@ -1986,7 +2114,8 @@ function upsertMesh(entity) {
     const kind = String(entity.kind || "");
     const isTank = kind.includes("tank");
     const needsWalkRig =
-      !mesh.userData.isUnitRig || (!isTank && !mesh.userData.isInfantry);
+      !mesh.userData.isUnitRig ||
+      (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 3));
     if (needsWalkRig) {
       scene.remove(mesh);
       disposeMeshTree(mesh);

@@ -669,8 +669,11 @@ impl MatchSim {
             .iter()
             .find(|b| b.kind == kind)
             .ok_or("Unknown building")?;
-        let player = self.players.get_mut(&user_id).ok_or("Not in match")?;
-        if !player.alive {
+        let (alive, my_team) = {
+            let player = self.players.get(&user_id).ok_or("Not in match")?;
+            (player.alive, player.team)
+        };
+        if !alive {
             return Err("Eliminated");
         }
 
@@ -695,6 +698,21 @@ impl MatchSim {
             return Err("Tile occupied");
         }
 
+        // Cannot plant structures inside another commander's base footprint.
+        let in_enemy_land = self.entities.values().any(|e| {
+            if !e.building || e.team == my_team || e.hp <= 0.0 {
+                return false;
+            }
+            let dx = e.x - fx;
+            let dy = e.y - fy;
+            let block = Self::enemy_build_block_radius(&e.kind) + place_r;
+            dx * dx + dy * dy < block * block
+        });
+        if in_enemy_land {
+            return Err("Enemy territory");
+        }
+
+        let player = self.players.get_mut(&user_id).ok_or("Not in match")?;
         if player.resources.supplies < def.cost_supplies
             || player.resources.fuel < def.cost_fuel
             || player.resources.munitions < def.cost_munitions
@@ -716,6 +734,7 @@ impl MatchSim {
             player.resources.power_used += -def.power;
         }
 
+        let flag = player.flag.clone();
         let id = Uuid::new_v4();
         self.entities.insert(
             id,
@@ -723,14 +742,14 @@ impl MatchSim {
                 id,
                 kind: def.kind.into(),
                 owner: user_id,
-                team: player.team,
+                team: my_team,
                 x: fx,
                 y: fy,
                 hp: def.hp,
                 max_hp: def.hp,
                 building: true,
                 unit: false,
-                flag: player.flag.clone(),
+                flag,
                 build_remaining_ms: def.build_ms,
                 train_queue: VecDeque::new(),
                 target: None,
@@ -1267,21 +1286,43 @@ impl MatchSim {
         self.check_victory();
     }
 
-    /// Nearest living enemy unit currently inside `range` of (x, y).
+    /// Nearest living enemy unit or building inside `range` of (x, y).
+    /// Prefers combat units; falls back to buildings (so forward bases get contested).
     fn find_enemy_in_range(&self, team: u8, x: f32, y: f32, range: f32) -> Option<Uuid> {
-        let mut best: Option<(Uuid, f32)> = None;
+        let mut best_unit: Option<(Uuid, f32)> = None;
+        let mut best_building: Option<(Uuid, f32)> = None;
         for other in self.entities.values() {
-            if other.team == team || !other.unit || other.hp <= 0.0 || other.damage <= 0.0 {
+            if other.team == team || other.hp <= 0.0 {
                 continue;
             }
             let dx = other.x - x;
             let dy = other.y - y;
             let dist = (dx * dx + dy * dy).sqrt();
-            if dist <= range && best.map(|(_, d)| dist < d).unwrap_or(true) {
-                best = Some((other.id, dist));
+            if other.unit {
+                if other.damage <= 0.0 {
+                    continue;
+                }
+                if dist <= range && best_unit.map(|(_, d)| dist < d).unwrap_or(true) {
+                    best_unit = Some((other.id, dist));
+                }
+            } else if other.building {
+                // Reach the building footprint, not only its center.
+                let edge = (dist - building_radius(&other.kind) * 0.55).max(0.0);
+                if edge <= range && best_building.map(|(_, d)| dist < d).unwrap_or(true) {
+                    best_building = Some((other.id, dist));
+                }
             }
         }
-        best.map(|(id, _)| id)
+        best_unit.or(best_building).map(|(id, _)| id)
+    }
+
+    /// How close an enemy structure may sit before the tile is "their territory".
+    fn enemy_build_block_radius(kind: &str) -> f32 {
+        match kind {
+            "hq" => 14.0,
+            "war_factory" | "barracks" => 10.0,
+            _ => 8.0,
+        }
     }
 
     fn collides_at(
