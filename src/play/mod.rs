@@ -16,6 +16,7 @@ use crate::state::SharedState;
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/play", get(page::play))
+        .route("/favicon.ico", get(favicon))
         .route("/assets/play.css", get(stylesheet))
         .route("/assets/play.js", get(javascript))
         .route("/assets/models/command-center.obj", get(command_center_obj))
@@ -25,6 +26,17 @@ pub fn router() -> Router<SharedState> {
         .route("/assets/models/barracks.stl", get(barracks_stl))
         .route("/assets/models/ranger/{*path}", get(ranger_asset))
         .route("/assets/terrain.jpg", get(terrain_jpg))
+}
+
+async fn favicon() -> Response {
+    // Tiny SVG — stops browser 404 noise on /favicon.ico
+    const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#1a2614"/><path d="M8 22V10h4l4 8 4-8h4v12h-3.2V14.5L16.5 22h-1L11.2 14.5V22z" fill="#7cfc00"/></svg>"#;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/svg+xml")
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .body(Body::from(SVG))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 async fn stylesheet() -> impl IntoResponse {
