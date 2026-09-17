@@ -476,6 +476,8 @@ const Sfx = {
   buses: { rifle: null, tank: null, fx: null },
   builds: new Map(),
   engines: new Map(),
+  tankMoveBuf: null,
+  tankMoveWait: null,
   lastRifleAt: 0,
   rifleRest: 0.5,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
@@ -526,6 +528,7 @@ const Sfx = {
       this.limiter.connect(this.ctx.destination);
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
+    void this.loadTankMove();
     return true;
   },
 
@@ -724,38 +727,65 @@ const Sfx = {
     roll(0.48, 0.55, 60, 0.18);
   },
 
+  loadTankMove() {
+    if (this.tankMoveBuf) return Promise.resolve(this.tankMoveBuf);
+    if (this.tankMoveWait) return this.tankMoveWait;
+    if (!this.ensure()) return Promise.resolve(null);
+    this.tankMoveWait = fetch("/assets/sounds/tank-move.mp3")
+      .then((res) => {
+        if (!res.ok) throw new Error("tank-move");
+        return res.arrayBuffer();
+      })
+      .then((raw) => this.ctx.decodeAudioData(raw))
+      .then((buf) => {
+        this.tankMoveBuf = buf;
+        return buf;
+      })
+      .catch(() => {
+        this.tankMoveWait = null;
+        return null;
+      });
+    return this.tankMoveWait;
+  },
+
+  startEngineLoop(node) {
+    if (!this.tankMoveBuf || !this.ctx || node.src) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.tankMoveBuf;
+    src.loop = true;
+    src.connect(node.g);
+    try {
+      src.start();
+    } catch {
+      return;
+    }
+    node.src = src;
+  },
+
   setEngine(id, x, y, throttle) {
     if (!this.ensure() || !id) return;
+    const moving = throttle > 0.22;
+    void this.loadTankMove().then((buf) => {
+      if (!buf) return;
+      const node = this.engines.get(id);
+      if (node && !node.stopping && node.throttle > 0.22) this.startEngineLoop(node);
+    });
     let node = this.engines.get(id);
+    if (!moving) {
+      if (node) this.stopEngine(id);
+      return;
+    }
+    if (node?.stopping) {
+      this.engines.delete(id);
+      node = null;
+    }
     if (!node) {
-      const t0 = this.ctx.currentTime;
-      const osc = this.ctx.createOscillator();
-      const osc2 = this.ctx.createOscillator();
-      const lfo = this.ctx.createOscillator();
-      const lfoG = this.ctx.createGain();
-      const filt = this.ctx.createBiquadFilter();
       const g = this.ctx.createGain();
-      osc.type = "sawtooth";
-      osc.frequency.value = 42;
-      osc2.type = "triangle";
-      osc2.frequency.value = 84;
-      lfo.type = "sine";
-      lfo.frequency.value = 22;
-      lfoG.gain.value = 8;
-      filt.type = "lowpass";
-      filt.frequency.value = 280;
-      g.gain.setValueAtTime(0.0001, t0);
-      lfo.connect(lfoG);
-      lfoG.connect(osc.frequency);
-      osc.connect(filt);
-      osc2.connect(filt);
-      filt.connect(g);
-      g.connect(this.dest("fx"));
-      osc.start();
-      osc2.start();
-      lfo.start();
-      node = { osc, osc2, lfo, g, filt, x, y, throttle: 0 };
+      g.gain.value = 0.0001;
+      g.connect(this.dest("tank"));
+      node = { src: null, g, x, y, throttle: 0, stopping: false };
       this.engines.set(id, node);
+      if (this.tankMoveBuf) this.startEngineLoop(node);
     }
     node.x = x;
     node.y = y;
@@ -764,19 +794,29 @@ const Sfx = {
 
   stopEngine(id) {
     const node = this.engines.get(id);
-    if (!node) return;
+    if (!node || node.stopping) return;
+    node.stopping = true;
+    node.throttle = 0;
     try {
       const t0 = this.ctx.currentTime;
       node.g.gain.cancelScheduledValues(t0);
       node.g.gain.setValueAtTime(Math.max(0.0001, node.g.gain.value), t0);
-      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15);
-      node.osc.stop(t0 + 0.2);
-      node.osc2.stop(t0 + 0.2);
-      node.lfo.stop(t0 + 0.2);
+      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+      node.src?.stop(t0 + 0.28);
+      node.src = null;
     } catch {
       // ignore
     }
-    this.engines.delete(id);
+    setTimeout(() => {
+      const cur = this.engines.get(id);
+      if (cur !== node) return;
+      this.engines.delete(id);
+      try {
+        node.g.disconnect();
+      } catch {
+        // ignore
+      }
+    }, 320);
   },
 
   missile(x, y) {
@@ -863,14 +903,13 @@ const Sfx = {
       }
     }
     for (const node of this.engines.values()) {
+      if (node.stopping) continue;
       const vol = this.volumeAt(node.x, node.y, this.ranges.tank);
       const th = node.throttle || 0;
-      const target = Math.max(0.0001, vol * (0.28 + th * 0.95));
+      const target = Math.max(0.0001, vol * 0.85 * (0.5 + th * 0.5));
       try {
-        node.g.gain.setTargetAtTime(target, t0, 0.12);
-        node.osc.frequency.setTargetAtTime(36 + th * 32, t0, 0.15);
-        node.osc2.frequency.setTargetAtTime(72 + th * 48, t0, 0.15);
-        node.filt.frequency.setTargetAtTime(220 + th * 180, t0, 0.15);
+        node.g.gain.setTargetAtTime(target, t0, 0.1);
+        node.src?.playbackRate?.setTargetAtTime(0.94 + th * 0.12, t0, 0.2);
       } catch {
         // ignore
       }
@@ -3403,8 +3442,9 @@ function slideToward(mesh, dt) {
 
 function updateTankDrive(mesh, dt) {
   if (!mesh?.userData?.isTank || mesh.userData.knock) return;
+  const id = mesh.userData.id;
   if (mesh.userData.destX == null) {
-    Sfx.setEngine(mesh.userData.id, mesh.position.x, mesh.position.z, 0.18);
+    Sfx.stopEngine(id);
     return;
   }
   const beforeX = mesh.position.x;
@@ -3424,8 +3464,11 @@ function updateTankDrive(mesh, dt) {
   } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 200) {
     mesh.userData.moving = false;
   }
-  const throttle = speed > 0.05 ? 0.4 + Math.min(0.6, speed) : 0.2;
-  Sfx.setEngine(mesh.userData.id, mesh.position.x, mesh.position.z, throttle);
+  if (mesh.userData.moving && speed > 0.05) {
+    Sfx.setEngine(id, mesh.position.x, mesh.position.z, Math.min(1, 0.45 + speed));
+  } else {
+    Sfx.stopEngine(id);
+  }
 }
 
 function smoothUnitFacing(mesh, dt) {
