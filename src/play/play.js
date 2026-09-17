@@ -903,8 +903,8 @@ function playShots(shots) {
     const kind = shotKindOf(shot);
     const k = String(kind);
     Radar.ping(shot.x0, shot.y0, k);
-    if (shot.x1 != null && shot.y1 != null) {
-      Radar.ping(shot.x1, shot.y1, k.includes("tank") ? "tank" : "impact");
+    if (k.includes("tank") && shot.x1 != null && shot.y1 != null) {
+      Radar.ping(shot.x1, shot.y1, "tank");
     }
     if (!k.includes("tank") && !k.includes("missile")) {
       rifles += 1;
@@ -923,13 +923,16 @@ const Radar = {
   pings: [],
   dragging: false,
   fogScratch: null,
-  fogTick: 0,
+  fogImage: null,
+  fogAt: 0,
+  lastDraw: 0,
+  rifleSkip: 0,
   bound: false,
 
   bind() {
     this.canvas = $("#radar-canvas");
     if (!this.canvas) return;
-    this.ctx = this.canvas.getContext("2d");
+    this.ctx = this.canvas.getContext("2d", { alpha: false });
     if (this.bound) return;
     this.bound = true;
     const go = (event) => {
@@ -966,14 +969,20 @@ const Radar = {
 
   ping(x, y, kind) {
     const k = String(kind || "");
+    const tank = k.includes("tank");
+    const missile = k.includes("missile");
+    if (!tank && !missile) {
+      this.rifleSkip += 1;
+      if (this.rifleSkip % 5) return;
+    }
     this.pings.push({
       x,
       y,
-      tank: k.includes("tank"),
+      tank,
       born: performance.now(),
-      life: k.includes("tank") ? 1400 : 700,
+      life: tank ? 900 : 500,
     });
-    if (this.pings.length > 80) this.pings.splice(0, this.pings.length - 80);
+    if (this.pings.length > 18) this.pings.splice(0, this.pings.length - 18);
   },
 
   worldToPx(x, y, w, h) {
@@ -987,97 +996,118 @@ const Radar = {
       ctx.fillRect(0, 0, w, h);
       return;
     }
-    if (!this.fogScratch) this.fogScratch = document.createElement("canvas");
-    const tmp = this.fogScratch;
-    if (tmp.width !== s || tmp.height !== s) {
-      tmp.width = s;
-      tmp.height = s;
+    const res = 96;
+    if (!this.fogScratch) {
+      this.fogScratch = document.createElement("canvas");
+      this.fogScratch.width = res;
+      this.fogScratch.height = res;
+      this.fogImage = this.fogScratch.getContext("2d").createImageData(res, res);
     }
-    this.fogTick += 1;
-    if (this.fogTick % 3 === 1 || !this._fogReady) {
-      const tctx = tmp.getContext("2d");
-      const img = tctx.createImageData(s, s);
-      const d = img.data;
-      const vis = fogVisionData;
+    const now = performance.now();
+    if (now - this.fogAt > 200) {
+      this.fogAt = now;
+      const d = this.fogImage.data;
       const exp = fogExploredData;
-      const n = s * s;
-      for (let i = 0; i < n; i++) {
-        const o = i * 4;
-        if (!exp[i]) {
-          d[o] = 6;
-          d[o + 1] = 8;
-          d[o + 2] = 6;
-          d[o + 3] = 255;
-        } else if (!vis || !vis[i]) {
-          d[o] = 20;
-          d[o + 1] = 30;
-          d[o + 2] = 16;
-          d[o + 3] = 255;
-        } else {
-          d[o] = 46;
-          d[o + 1] = 68;
-          d[o + 2] = 30;
+      const vis = fogVisionData;
+      for (let y = 0; y < res; y++) {
+        const my = Math.min(s - 1, ((y * s) / res) | 0);
+        const row = my * s;
+        for (let x = 0; x < res; x++) {
+          const mx = Math.min(s - 1, ((x * s) / res) | 0);
+          const i = row + mx;
+          const o = (y * res + x) * 4;
+          if (!exp[i]) {
+            d[o] = 6;
+            d[o + 1] = 8;
+            d[o + 2] = 6;
+          } else if (!vis || !vis[i]) {
+            d[o] = 20;
+            d[o + 1] = 30;
+            d[o + 2] = 16;
+          } else {
+            d[o] = 46;
+            d[o + 1] = 68;
+            d[o + 2] = 30;
+          }
           d[o + 3] = 255;
         }
       }
-      tctx.putImageData(img, 0, 0);
-      this._fogReady = true;
+      this.fogScratch.getContext("2d").putImageData(this.fogImage, 0, 0);
     }
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(tmp, 0, 0, w, h);
+    ctx.drawImage(this.fogScratch, 0, 0, w, h);
   },
 
   draw(now) {
     const ctx = this.ctx;
     const canvas = this.canvas;
     if (!ctx || !canvas || !state.match) return;
+    // 2D canvas is CPU; 60 Hz + full-map fog was hitching the WebGL frame.
+    if (!this.dragging && now - this.lastDraw < 70) return;
+    this.lastDraw = now;
+
     const w = canvas.width;
     const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
     this.drawFog(ctx, w, h);
 
     const you = state.match.you;
     const myTeam = state.match.team;
-    const selected = new Set(state.selectedUnits || []);
-
+    const ownInf = [];
+    const allyInf = [];
+    const foeInf = [];
+    const extras = [];
     for (const entity of state.entities.values()) {
       if (entity.hp != null && entity.hp <= 0) continue;
-      const [px, py] = this.worldToPx(entity.x, entity.y, w, h);
-      const mine = entity.owner === you;
-      const ally = !mine && entity.team === myTeam;
-      let fill = "#ff5a3a";
-      if (mine) fill = "#9fef4a";
-      else if (ally) fill = "#5ad0ff";
-      else if (Array.isArray(entity.colors) && entity.colors[0]) {
-        const c = entity.colors[0];
-        fill = `rgb(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255})`;
-        if (!mine && !ally) fill = "#ff5a3a";
+      const kind = entity.kind || "";
+      const heavy = entity.building || kind.includes("tank") || kind === "hq";
+      if (heavy) {
+        extras.push(entity);
+        continue;
       }
+      if (entity.owner === you) ownInf.push(entity);
+      else if (entity.team === myTeam) allyInf.push(entity);
+      else foeInf.push(entity);
+    }
 
-      ctx.fillStyle = fill;
-      if (entity.kind === "hq") {
-        const s = 5;
-        ctx.fillRect(px - s / 2, py - s / 2, s, s);
-        ctx.strokeStyle = mine ? "#fff4ce" : "#ffc8b0";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px - s / 2 - 0.5, py - s / 2 - 0.5, s + 1, s + 1);
-      } else if (entity.building) {
-        ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
-      } else if (String(entity.kind || "").includes("tank")) {
-        ctx.beginPath();
-        ctx.moveTo(px, py - 3);
-        ctx.lineTo(px + 3, py);
-        ctx.lineTo(px, py + 3);
-        ctx.lineTo(px - 3, py);
-        ctx.closePath();
-        ctx.fill();
-      } else {
+    const dots = (list, color) => {
+      ctx.fillStyle = color;
+      for (const entity of list) {
+        const px = (entity.x / mapSize) * w;
+        const py = (entity.y / mapSize) * h;
         ctx.fillRect(px - 0.75, py - 0.75, 2, 2);
       }
+    };
+    dots(ownInf, "#9fef4a");
+    dots(allyInf, "#5ad0ff");
+    dots(foeInf, "#ff5a3a");
 
-      if (selected.has(entity.id)) {
-        ctx.strokeStyle = "#ffffff";
+    for (const entity of extras) {
+      const px = (entity.x / mapSize) * w;
+      const py = (entity.y / mapSize) * h;
+      const mine = entity.owner === you;
+      const ally = !mine && entity.team === myTeam;
+      ctx.fillStyle = mine ? "#9fef4a" : ally ? "#5ad0ff" : "#ff5a3a";
+      if (entity.kind === "hq") {
+        ctx.fillRect(px - 2.5, py - 2.5, 5, 5);
+        ctx.strokeStyle = mine ? "#fff4ce" : "#ffc8b0";
         ctx.lineWidth = 1;
+        ctx.strokeRect(px - 3, py - 3, 6, 6);
+      } else if (entity.building) {
+        ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+      } else {
+        ctx.fillRect(px - 2, py - 2, 4, 4);
+      }
+    }
+
+    const selected = state.selectedUnits;
+    if (selected?.length) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      for (const id of selected) {
+        const entity = state.entities.get(id);
+        if (!entity) continue;
+        const px = (entity.x / mapSize) * w;
+        const py = (entity.y / mapSize) * h;
         ctx.strokeRect(px - 3, py - 3, 6, 6);
       }
     }
@@ -1085,14 +1115,15 @@ const Radar = {
     this.pings = this.pings.filter((p) => now - p.born < p.life);
     for (const ping of this.pings) {
       const t = (now - ping.born) / ping.life;
-      const [px, py] = this.worldToPx(ping.x, ping.y, w, h);
-      const r = (ping.tank ? 5 : 3) + t * (ping.tank ? 10 : 6);
+      const px = (ping.x / mapSize) * w;
+      const py = (ping.y / mapSize) * h;
+      const r = (ping.tank ? 4 : 2.5) + t * (ping.tank ? 7 : 4);
       ctx.beginPath();
       ctx.arc(px, py, r, 0, Math.PI * 2);
       ctx.strokeStyle = ping.tank
         ? `rgba(255, 210, 80, ${1 - t})`
-        : `rgba(255, 240, 160, ${0.85 - t})`;
-      ctx.lineWidth = ping.tank ? 2 : 1;
+        : `rgba(255, 240, 160, ${0.8 - t})`;
+      ctx.lineWidth = ping.tank ? 1.5 : 1;
       ctx.stroke();
     }
 
@@ -1102,16 +1133,14 @@ const Radar = {
       const dist = controls.getDistance?.() || CAMERA_DIST;
       const halfW = Math.max(6, dist * 0.7 * (camera?.aspect || 1.6));
       const halfH = Math.max(5, dist * 0.5);
-      const [x0, y0] = this.worldToPx(cx - halfW, cz - halfH, w, h);
-      const [x1, y1] = this.worldToPx(cx + halfW, cz + halfH, w, h);
+      const x0 = ((cx - halfW) / mapSize) * w;
+      const y0 = ((cz - halfH) / mapSize) * h;
+      const x1 = ((cx + halfW) / mapSize) * w;
+      const y1 = ((cz + halfH) / mapSize) * h;
       ctx.strokeStyle = "rgba(255, 244, 180, 0.9)";
       ctx.lineWidth = 1;
       ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
     }
-
-    ctx.strokeStyle = "#6a8a3a";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, w - 2, h - 2);
   },
 };
 
