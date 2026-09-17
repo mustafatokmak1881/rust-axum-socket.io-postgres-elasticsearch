@@ -221,7 +221,7 @@ input {
 .match-dock {
   position: absolute;
   left: 72px;
-  right: 72px;
+  right: 252px;
   bottom: 28px;
   z-index: 5;
   display: flex;
@@ -325,10 +325,58 @@ input {
   color: #a8b898;
 }
 
+.radar {
+  position: absolute;
+  right: 10px;
+  bottom: 22px;
+  z-index: 7;
+  width: 232px;
+  background: linear-gradient(180deg, #1c2818f2, #0a100af5);
+  border: 2px solid #6a8a3a;
+  box-shadow: 0 10px 28px #000a, inset 0 0 0 1px #3a4a28;
+  pointer-events: auto;
+}
+
+.radar header {
+  padding: 4px 8px 3px;
+  font-family: var(--display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--warn);
+  font-size: 11px;
+  border-bottom: 1px solid #4a5a38;
+}
+
+#radar-canvas {
+  display: block;
+  width: 220px;
+  height: 220px;
+  margin: 5px 5px 4px;
+  background: #050805;
+  cursor: crosshair;
+  image-rendering: pixelated;
+  border: 1px solid #2a3a20;
+}
+
+.radar-legend {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 8px 6px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8a9a78;
+}
+
+.radar-legend .own { color: #9fef4a; }
+.radar-legend .ally { color: #5ad0ff; }
+.radar-legend .enemy { color: #ff5a3a; }
+.radar-legend .fight { color: #ffe066; }
+
 .match-caption {
   position: absolute;
   left: 72px;
-  right: 72px;
+  right: 252px;
   bottom: 6px;
   text-align: center;
   font-size: 10px;
@@ -353,7 +401,9 @@ input {
 .muted { color: #8a9a78; font-size: 12px; }
 
 @media (max-width: 900px) {
-  .match-dock { left: 48px; right: 48px; }
+  .match-dock { left: 48px; right: 200px; }
   .build-rail, .unit-rail { width: min(46vw, 260px); max-height: 120px; }
-  .match-caption { left: 48px; right: 48px; }
+  .match-caption { left: 48px; right: 200px; }
+  .radar { width: 184px; }
+  #radar-canvas { width: 172px; height: 172px; }
 }

@@ -648,7 +648,7 @@ impl MatchSim {
         self.reveal_vision_for(user_id);
     }
 
-    /// Place new HQs in a tight cluster near existing players (not spread across the map).
+    /// Place new HQs on a wide ring so cities sit ~3× farther apart than the old cluster.
     fn allocate_spawn_xy(&self) -> (f32, f32) {
         let map = self.map_size as f32;
         let hq_positions: Vec<(f32, f32)> = self
@@ -668,15 +668,15 @@ impl MatchSim {
             (sx / n, sy / n)
         };
 
-        // ~12 tile ring spacing so bases sit close but don't stack.
-        const MIN_SEP: f32 = 12.0;
+        // Was 12 tiles (~one base length). Triple so commanders start a real march apart.
+        const MIN_SEP: f32 = 36.0;
         const GOLDEN: f32 = 2.399_963;
 
-        for k in 0..96 {
+        for k in 0..160 {
             let r = if hq_positions.is_empty() {
                 0.0
             } else {
-                MIN_SEP + (k as f32).sqrt() * 3.5
+                MIN_SEP + (k as f32).sqrt() * 10.5
             };
             let angle = k as f32 * GOLDEN;
             let x = (bx + angle.cos() * r).clamp(4.0, map - 5.0);
@@ -714,7 +714,7 @@ impl MatchSim {
         )
     }
 
-    /// Mid-match join: spawn HQ near the existing player cluster.
+    /// Mid-match join: spawn HQ on the same wide ring as the opening cities.
     pub fn add_player(
         &mut self,
         user_id: Uuid,

@@ -276,6 +276,7 @@ async function setupMatchScene(snapshot) {
   aoiRadius = Number(snapshot.aoi_radius) || aoiRadius;
   lastFocusSent = { x: home.x, z: home.z };
   initThree(snapshot.map_size, terrain, home);
+  Radar.bind();
   loadExploredFromSnapshot(snapshot);
   rebuildMeshes();
   refreshLiveVision();
@@ -292,6 +293,23 @@ function findOwnHome(snapshot) {
   return { x: snapshot.map_size / 2, z: snapshot.map_size / 2 };
 }
 
+function panCameraTo(lookX, lookZ) {
+  if (!controls || !camera) return;
+  const dist = controls.getDistance?.() || CAMERA_DIST;
+  const margin = 4;
+  lookX = Math.max(margin, Math.min(mapSize - margin, lookX));
+  lookZ = Math.max(margin, Math.min(mapSize - margin, lookZ));
+  controls.target.set(lookX, 0, lookZ);
+  camera.position.set(
+    lookX,
+    Math.sin(CAMERA_PITCH) * dist,
+    lookZ + Math.cos(CAMERA_PITCH) * dist,
+  );
+  controls.update();
+  lastFocusSent = { x: lookX, z: lookZ };
+  send({ t: "set_focus", x: lookX, y: lookZ });
+}
+
 function centerCameraOnHq() {
   if (!controls || !camera || !state.match) return;
   let hq = null;
@@ -305,17 +323,7 @@ function centerCameraOnHq() {
     toast("Command Center not found");
     return;
   }
-  const lookX = hq.x;
-  const lookZ = hq.y;
-  const dist = CAMERA_DIST;
-  controls.target.set(lookX, 0, lookZ);
-  camera.position.set(
-    lookX,
-    Math.sin(CAMERA_PITCH) * dist,
-    lookZ + Math.cos(CAMERA_PITCH) * dist,
-  );
-  controls.update();
-  send({ t: "set_focus", x: lookX, y: lookZ });
+  panCameraTo(hq.x, hq.y);
 }
 
 function updateResources(res) {
@@ -894,6 +902,10 @@ function playShots(shots) {
     spawnShotFx(shot);
     const kind = shotKindOf(shot);
     const k = String(kind);
+    Radar.ping(shot.x0, shot.y0, k);
+    if (shot.x1 != null && shot.y1 != null) {
+      Radar.ping(shot.x1, shot.y1, k.includes("tank") ? "tank" : "impact");
+    }
     if (!k.includes("tank") && !k.includes("missile")) {
       rifles += 1;
       // A volley must never bury the cannon in the same frame.
@@ -902,6 +914,206 @@ function playShots(shots) {
     Sfx.shot(kind, shot.x0, shot.y0);
   }
 }
+
+/* ---------- Generals-style radar (minimap) ---------- */
+
+const Radar = {
+  canvas: null,
+  ctx: null,
+  pings: [],
+  dragging: false,
+  fogScratch: null,
+  fogTick: 0,
+  bound: false,
+
+  bind() {
+    this.canvas = $("#radar-canvas");
+    if (!this.canvas) return;
+    this.ctx = this.canvas.getContext("2d");
+    if (this.bound) return;
+    this.bound = true;
+    const go = (event) => {
+      const w = this.eventToWorld(event);
+      if (!w) return;
+      panCameraTo(w.x, w.y);
+    };
+    this.canvas.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      this.dragging = true;
+      this.canvas.setPointerCapture?.(event.pointerId);
+      go(event);
+    });
+    this.canvas.addEventListener("pointermove", (event) => {
+      if (!this.dragging) return;
+      go(event);
+    });
+    const stop = () => {
+      this.dragging = false;
+    };
+    this.canvas.addEventListener("pointerup", stop);
+    this.canvas.addEventListener("pointercancel", stop);
+    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  },
+
+  eventToWorld(event) {
+    if (!this.canvas || !mapSize) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return null;
+    const x = ((event.clientX - rect.left) / rect.width) * mapSize;
+    const y = ((event.clientY - rect.top) / rect.height) * mapSize;
+    return { x, y };
+  },
+
+  ping(x, y, kind) {
+    const k = String(kind || "");
+    this.pings.push({
+      x,
+      y,
+      tank: k.includes("tank"),
+      born: performance.now(),
+      life: k.includes("tank") ? 1400 : 700,
+    });
+    if (this.pings.length > 80) this.pings.splice(0, this.pings.length - 80);
+  },
+
+  worldToPx(x, y, w, h) {
+    return [(x / mapSize) * w, (y / mapSize) * h];
+  },
+
+  drawFog(ctx, w, h) {
+    const s = mapSize | 0;
+    if (!s || !fogExploredData) {
+      ctx.fillStyle = "#070907";
+      ctx.fillRect(0, 0, w, h);
+      return;
+    }
+    if (!this.fogScratch) this.fogScratch = document.createElement("canvas");
+    const tmp = this.fogScratch;
+    if (tmp.width !== s || tmp.height !== s) {
+      tmp.width = s;
+      tmp.height = s;
+    }
+    this.fogTick += 1;
+    if (this.fogTick % 3 === 1 || !this._fogReady) {
+      const tctx = tmp.getContext("2d");
+      const img = tctx.createImageData(s, s);
+      const d = img.data;
+      const vis = fogVisionData;
+      const exp = fogExploredData;
+      const n = s * s;
+      for (let i = 0; i < n; i++) {
+        const o = i * 4;
+        if (!exp[i]) {
+          d[o] = 6;
+          d[o + 1] = 8;
+          d[o + 2] = 6;
+          d[o + 3] = 255;
+        } else if (!vis || !vis[i]) {
+          d[o] = 20;
+          d[o + 1] = 30;
+          d[o + 2] = 16;
+          d[o + 3] = 255;
+        } else {
+          d[o] = 46;
+          d[o + 1] = 68;
+          d[o + 2] = 30;
+          d[o + 3] = 255;
+        }
+      }
+      tctx.putImageData(img, 0, 0);
+      this._fogReady = true;
+    }
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tmp, 0, 0, w, h);
+  },
+
+  draw(now) {
+    const ctx = this.ctx;
+    const canvas = this.canvas;
+    if (!ctx || !canvas || !state.match) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    this.drawFog(ctx, w, h);
+
+    const you = state.match.you;
+    const myTeam = state.match.team;
+    const selected = new Set(state.selectedUnits || []);
+
+    for (const entity of state.entities.values()) {
+      if (entity.hp != null && entity.hp <= 0) continue;
+      const [px, py] = this.worldToPx(entity.x, entity.y, w, h);
+      const mine = entity.owner === you;
+      const ally = !mine && entity.team === myTeam;
+      let fill = "#ff5a3a";
+      if (mine) fill = "#9fef4a";
+      else if (ally) fill = "#5ad0ff";
+      else if (Array.isArray(entity.colors) && entity.colors[0]) {
+        const c = entity.colors[0];
+        fill = `rgb(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255})`;
+        if (!mine && !ally) fill = "#ff5a3a";
+      }
+
+      ctx.fillStyle = fill;
+      if (entity.kind === "hq") {
+        const s = 5;
+        ctx.fillRect(px - s / 2, py - s / 2, s, s);
+        ctx.strokeStyle = mine ? "#fff4ce" : "#ffc8b0";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px - s / 2 - 0.5, py - s / 2 - 0.5, s + 1, s + 1);
+      } else if (entity.building) {
+        ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+      } else if (String(entity.kind || "").includes("tank")) {
+        ctx.beginPath();
+        ctx.moveTo(px, py - 3);
+        ctx.lineTo(px + 3, py);
+        ctx.lineTo(px, py + 3);
+        ctx.lineTo(px - 3, py);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.fillRect(px - 0.75, py - 0.75, 2, 2);
+      }
+
+      if (selected.has(entity.id)) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px - 3, py - 3, 6, 6);
+      }
+    }
+
+    this.pings = this.pings.filter((p) => now - p.born < p.life);
+    for (const ping of this.pings) {
+      const t = (now - ping.born) / ping.life;
+      const [px, py] = this.worldToPx(ping.x, ping.y, w, h);
+      const r = (ping.tank ? 5 : 3) + t * (ping.tank ? 10 : 6);
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.strokeStyle = ping.tank
+        ? `rgba(255, 210, 80, ${1 - t})`
+        : `rgba(255, 240, 160, ${0.85 - t})`;
+      ctx.lineWidth = ping.tank ? 2 : 1;
+      ctx.stroke();
+    }
+
+    if (controls) {
+      const cx = controls.target.x;
+      const cz = controls.target.z;
+      const dist = controls.getDistance?.() || CAMERA_DIST;
+      const halfW = Math.max(6, dist * 0.7 * (camera?.aspect || 1.6));
+      const halfH = Math.max(5, dist * 0.5);
+      const [x0, y0] = this.worldToPx(cx - halfW, cz - halfH, w, h);
+      const [x1, y1] = this.worldToPx(cx + halfW, cz + halfH, w, h);
+      ctx.strokeStyle = "rgba(255, 244, 180, 0.9)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    }
+
+    ctx.strokeStyle = "#6a8a3a";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, w - 2, h - 2);
+  },
+};
 
 /* ---------- Three.js ---------- */
 
@@ -921,7 +1133,7 @@ let fogDataTexture = null;
 let aoiRadius = 20;
 let lastFocusSentAt = 0;
 let lastFocusSent = { x: 0, z: 0 };
-const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false };
+const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false, overUi: false };
 
 /** Generals-style locked pitch (radians from vertical-ish). */
 const CAMERA_PITCH = Math.PI / 3.0;
@@ -1582,6 +1794,9 @@ function onEdgePointerMove(event) {
   edgeMouse.w = window.innerWidth;
   edgeMouse.h = window.innerHeight;
   edgeMouse.inside = Boolean(state.match) && !$("#match-screen")?.hidden;
+  edgeMouse.overUi = Boolean(
+    event.target?.closest?.("#radar, .build-rail, .unit-rail, .top-hud, .army-hud"),
+  );
   updateGhostPreview(event);
 }
 
@@ -1747,7 +1962,7 @@ function setBuildPlacement(kind) {
 }
 
 function applyEdgePan() {
-  if (!controls || !camera || !edgeMouse.inside) return;
+  if (!controls || !camera || !edgeMouse.inside || edgeMouse.overUi) return;
 
   let dx = 0;
   let dz = 0;
@@ -3676,6 +3891,7 @@ function animate() {
     }
   }
   updateCombatFx(now);
+  Radar.draw(now);
   Sfx.updateSpatial();
   renderer.render(scene, camera);
 }
