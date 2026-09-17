@@ -153,6 +153,10 @@ pub struct Entity {
     pub prone: bool,
     /// Stay down until this tick so they don't pop up between shots.
     pub prone_until_tick: u64,
+    /// Tank barrel world yaw (atan2(dx, dy)); slewed before the gun fires.
+    pub aim_yaw: f32,
+    /// Roof MG cyclic; independent of the main gun reload.
+    pub mg_cooldown_ms: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -330,10 +334,34 @@ fn is_rifle_infantry(kind: &str) -> bool {
     !kind.contains("tank") && !kind.contains("missile")
 }
 
-/// Infantry: a few rifle hits or a couple of shells — not a one-shot, not a sponge.
+/// Match client `atan2(dx, dz)` — yaw 0 faces +Y / +Z.
+fn world_aim_yaw(dx: f32, dy: f32) -> f32 {
+    dx.atan2(dy)
+}
+
+fn shortest_angle(from: f32, to: f32) -> f32 {
+    let mut d = to - from;
+    while d > std::f32::consts::PI {
+        d -= std::f32::consts::TAU;
+    }
+    while d < -std::f32::consts::PI {
+        d += std::f32::consts::TAU;
+    }
+    d
+}
+
+/// Visible traverse (~66°/s) — the gun waits until this finishes.
+const TANK_TURRET_RATE: f32 = 1.15;
+const TANK_AIM_ALIGN: f32 = 0.07;
+const TANK_MG_RANGE: f32 = 5.4;
+const TANK_MG_COOLDOWN_MS: u32 = 130;
+
+/// Infantry: a few rifle hits drop a soldier. Tank HE in the burst radius is lethal.
 fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     let infantry = target.unit && !target.kind.contains("tank");
-    if infantry && (attacker_kind.contains("tank") || attacker_kind.contains("missile")) {
+    if infantry && attacker_kind.contains("tank") {
+        10_000.0
+    } else if infantry && attacker_kind.contains("missile") {
         (base * 0.50).max(90.0)
     } else {
         base
@@ -644,6 +672,8 @@ impl MatchSim {
             last_escape_ang: 0.0,
             prone: false,
             prone_until_tick: 0,
+            aim_yaw: 0.0,
+            mg_cooldown_ms: 0,
         });
         self.spawn_starting_force(user_id, team, x, y);
         self.reveal_vision_for(user_id);
@@ -810,6 +840,8 @@ impl MatchSim {
             last_escape_ang: 0.0,
             prone: false,
             prone_until_tick: 0,
+            aim_yaw: 0.0,
+            mg_cooldown_ms: 0,
         });
     }
 
@@ -1032,6 +1064,8 @@ impl MatchSim {
             last_escape_ang: 0.0,
             prone: false,
             prone_until_tick: 0,
+            aim_yaw: 0.0,
+            mg_cooldown_ms: 0,
         });
 
         // Redis-stream style delayed job marker.
@@ -1252,6 +1286,8 @@ impl MatchSim {
                                 last_escape_ang: 0.0,
                                 prone: false,
                                 prone_until_tick: 0,
+                                aim_yaw: 0.0,
+                                mg_cooldown_ms: 0,
                             };
                             self.put_entity(spawn);
                         }
@@ -1309,7 +1345,11 @@ impl MatchSim {
                     let tdist = (tdx * tdx + tdy * tdy).sqrt();
                     let stop_at = (entity.range - 0.35).max(self_r + entity_radius(t) * 0.35);
                     let cover = self.shot_cover(entity.id, entity.x, entity.y, t);
-                    if !obeying_move && tdist <= stop_at && !cover.blocked {
+                    let bot_cmd = self.players.get(&entity.owner).is_some_and(|p| p.is_bot());
+                    // Bots treat a march as attack-move: halt and fight anyone they can shoot.
+                    let can_shoot = tdist <= entity.range && !cover.blocked;
+                    let in_pocket = tdist <= stop_at && !cover.blocked;
+                    if (!obeying_move && in_pocket) || (bot_cmd && can_shoot) {
                         hold_for_attack = true;
                         goal = None;
                         entity.detour = None;
@@ -1320,7 +1360,7 @@ impl MatchSim {
                         // Fully blocked by a building → walk around for a firing angle.
                         goal = Some((t.x, t.y));
                     }
-                    // While move_to is set: keep walking to the click point and fire if in range.
+                    // Player move-to: keep walking to the click and fire if in range.
                 } else {
                     entity.target = None;
                 }
@@ -1529,9 +1569,17 @@ impl MatchSim {
                     let dy = target.y - entity.y;
                     let dist = (dx * dx + dy * dy).sqrt();
                     let cover = self.shot_cover(entity.id, entity.x, entity.y, target);
+                    let mut aimed = true;
+                    if entity.kind.contains("tank") && dist > 0.001 {
+                        let desired = world_aim_yaw(dx, dy);
+                        let err = shortest_angle(entity.aim_yaw, desired);
+                        let step = TANK_TURRET_RATE * (dt_ms as f32 / 1000.0);
+                        entity.aim_yaw += err.clamp(-step, step);
+                        aimed = err.abs() <= TANK_AIM_ALIGN;
+                    }
                     if cover.blocked {
                         // No shot through walls / hulls. Keep chasing, don't burn cooldown.
-                    } else if dist <= entity.range && entity.attack_cooldown_ms == 0 {
+                    } else if dist <= entity.range && entity.attack_cooldown_ms == 0 && aimed {
                         if is_rifle_infantry(&entity.kind) {
                             if entity.mag_ammo == 0 {
                                 entity.mag_ammo = RIFLE_MAG;
@@ -1598,12 +1646,25 @@ impl MatchSim {
                             hit,
                         });
                         // HE splash only when the shell actually lands on target.
-                        if hit && kind.contains("tank") {
+                        if hit && kind.contains("tank") && !kind.contains("mg") {
                             self.apply_shell_blast(team, fx, fy, tx, ty, tid);
                         }
                     }
                 } else {
                     entity.target = None;
+                }
+            }
+
+            if entity.kind.contains("tank") {
+                if entity.mg_cooldown_ms > 0 {
+                    entity.mg_cooldown_ms = entity.mg_cooldown_ms.saturating_sub(dt_ms);
+                }
+                if entity.mg_cooldown_ms == 0 {
+                    if let Some(tid) =
+                        self.find_mg_target(entity.id, entity.team, entity.x, entity.y)
+                    {
+                        self.fire_tank_mg(&mut entity, tid);
+                    }
                 }
             }
 
@@ -1663,7 +1724,7 @@ impl MatchSim {
     }
 
     /// HE blast around a tank shell impact. Primary target already took direct damage.
-    /// Infantry behind the struck hull / a wall relative to the incoming shot are shielded.
+    /// Anyone close enough to be thrown (matches client knock radius) dies.
     fn apply_shell_blast(
         &mut self,
         team: u8,
@@ -1673,13 +1734,18 @@ impl MatchSim {
         y: f32,
         primary: Uuid,
     ) {
-        const RADIUS: f32 = 1.15;
+        const RADIUS: f32 = 1.25;
         let mut victims: Vec<(Uuid, f32, bool)> = Vec::new();
         self.grid.for_each_nearby(x, y, RADIUS + MAX_ENTITY_RADIUS, |id| {
             let Some(e) = self.entities.get(&id) else {
                 return false;
             };
-            if e.team == team || e.hp <= 0.0 || !(e.unit || e.building) {
+            if e.hp <= 0.0 || !(e.unit || e.building) {
+                return false;
+            }
+            let infantry = e.unit && !e.kind.contains("tank");
+            // Overpressure kills soldiers of every team; armor/buildings stay friendly-fire safe.
+            if !infantry && e.team == team {
                 return false;
             }
             let dx = e.x - x;
@@ -1688,7 +1754,7 @@ impl MatchSim {
             if dist > RADIUS {
                 return false;
             }
-            victims.push((e.id, dist, e.unit && !e.kind.contains("tank")));
+            victims.push((e.id, dist, infantry));
             false
         });
 
@@ -1705,14 +1771,13 @@ impl MatchSim {
             let Some(victim) = self.entities.get(&id) else {
                 continue;
             };
-            // Hull / wall between blast and victim: no through-shot splash.
-            if self.blast_blocked(primary, x, y, iux, iuy, victim) {
+            // Hull can shield a tank/building; soldiers in the burst still die.
+            if !is_infantry && self.blast_blocked(primary, x, y, iux, iuy, victim) {
                 continue;
             }
             let falloff = (1.0 - dist / RADIUS).clamp(0.0, 1.0);
             let dmg = if is_infantry {
-                // Center = lethal; outer ring = wound.
-                70.0 * falloff.powf(0.75)
+                10_000.0
             } else if self
                 .entities
                 .get(&id)
@@ -1959,6 +2024,104 @@ impl MatchSim {
             }
         }
         best_unit.or(best_building).map(|(id, _)| id)
+    }
+
+    /// Cupola MG: prefer nearby infantry, then tanks. Independent of the main-gun target.
+    fn find_mg_target(&self, from_id: Uuid, team: u8, x: f32, y: f32) -> Option<Uuid> {
+        let mut best_inf: Option<(Uuid, f32)> = None;
+        let mut best_tank: Option<(Uuid, f32)> = None;
+        let mut ids: Vec<Uuid> = Vec::new();
+        self.grid
+            .for_each_nearby(x, y, TANK_MG_RANGE + MAX_ENTITY_RADIUS, |id| {
+                ids.push(id);
+                false
+            });
+        for id in ids {
+            if id == from_id {
+                continue;
+            }
+            let Some(other) = self.entities.get(&id) else {
+                continue;
+            };
+            if other.team == team || other.hp <= 0.0 || !other.unit {
+                continue;
+            }
+            let dx = other.x - x;
+            let dy = other.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > TANK_MG_RANGE {
+                continue;
+            }
+            let cover = self.shot_cover(from_id, x, y, other);
+            if cover.blocked {
+                continue;
+            }
+            let score = dist / (0.22 + cover.exposure);
+            if other.kind.contains("tank") {
+                if best_tank.map(|(_, s)| score < s).unwrap_or(true) {
+                    best_tank = Some((other.id, score));
+                }
+            } else if best_inf.map(|(_, s)| score < s).unwrap_or(true) {
+                best_inf = Some((other.id, score));
+            }
+        }
+        best_inf.or(best_tank).map(|(id, _)| id)
+    }
+
+    fn fire_tank_mg(&mut self, entity: &mut Entity, tid: Uuid) {
+        let Some(target) = self.entities.get(&tid) else {
+            return;
+        };
+        let dx = target.x - entity.x;
+        let dy = target.y - entity.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        let cover = self.shot_cover(entity.id, entity.x, entity.y, target);
+        if cover.blocked || dist > TANK_MG_RANGE {
+            return;
+        }
+        let infantry = target.unit && !target.kind.contains("tank");
+        let tank = target.kind.contains("tank");
+        let dmg = if infantry {
+            48.0
+        } else if tank {
+            22.0
+        } else {
+            10.0
+        };
+        let hit_p = (0.86 / (1.0 + (dist / (TANK_MG_RANGE * 0.45)).powi(2))
+            * cover.exposure.clamp(0.2, 1.35)
+            * if tank { 0.72 } else { 1.05 })
+        .clamp(0.08, 0.92);
+        let mut rng = rand::thread_rng();
+        let hit = rng.gen_range(0.0..1.0) < hit_p;
+        let fx = entity.x;
+        let fy = entity.y;
+        let (ix, iy) = if hit {
+            (target.x, target.y)
+        } else {
+            miss_impact(&mut rng, target, fx, fy)
+        };
+        if hit {
+            if let Some(t) = self.entities.get_mut(&tid) {
+                t.hp -= dmg;
+                t.dirty = true;
+                if t.unit && !t.kind.contains("tank") {
+                    t.prone_until_tick = t.prone_until_tick.max(self.tick + 18);
+                }
+            }
+        }
+        entity.mg_cooldown_ms = TANK_MG_COOLDOWN_MS;
+        entity.dirty = true;
+        self.shots.push(ShotEvent {
+            from: entity.id,
+            to: tid,
+            x0: fx,
+            y0: fy,
+            x1: ix,
+            y1: iy,
+            kind: "tank_mg".into(),
+            hit,
+        });
     }
 
     /// How close an enemy structure may sit before the tile is "their territory".
@@ -2609,6 +2772,11 @@ impl MatchSim {
             progress,
             train_progress,
             prone: entity.prone,
+            aim_at: if entity.kind.contains("tank") {
+                entity.target
+            } else {
+                None
+            },
         }
     }
 }

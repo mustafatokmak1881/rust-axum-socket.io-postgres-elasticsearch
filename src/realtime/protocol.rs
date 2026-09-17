@@ -189,6 +189,9 @@ pub struct EntityView {
     /// Infantry lying down in combat.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prone: bool,
+    /// Current attack target — tanks slew the turret toward this before firing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim_at: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,7 @@
 //! Opening computer commanders: five nations that attack and defend on their own.
 
+use std::collections::HashSet;
+
 use rand::Rng;
 use uuid::Uuid;
 
@@ -10,15 +12,15 @@ pub const OPENING_BOT_COUNT: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotStyle {
-    /// Pushes the nearest enemy HQ early and keeps the pressure on.
+    /// Pushes with combined arms; still fights the army in the way.
     Aggressive,
-    /// All-in rush; barely guards home.
+    /// Attacks early, but intercepts and does not suicide into a bigger force.
     Reckless,
-    /// Splits the army: raid + garrison.
+    /// Splits: main fight, building raid, garrison.
     Balanced,
-    /// Holds the base, turrets, intercepts, small counter-raids.
+    /// Holds the base, intercepts, small counter-raids.
     Defensive,
-    /// Sits tight until threatened, then dumps the army on the attacker.
+    /// Sits until threatened, then smashes the attacker — not a random HQ.
     Counter,
 }
 
@@ -73,92 +75,110 @@ const PROFILES: [BotProfile; OPENING_BOT_COUNT] = [
 impl BotStyle {
     fn first_wave_tick(self) -> u64 {
         match self {
-            BotStyle::Reckless => 40,
-            BotStyle::Aggressive => 80,
-            BotStyle::Balanced => 160,
-            BotStyle::Counter => 280,
-            BotStyle::Defensive => 420,
+            BotStyle::Reckless => 90,
+            BotStyle::Aggressive => 140,
+            BotStyle::Balanced => 200,
+            BotStyle::Counter => 320,
+            BotStyle::Defensive => 480,
         }
     }
 
     fn rest_ticks(self) -> u64 {
         match self {
-            BotStyle::Reckless => 50,
-            BotStyle::Aggressive => 70,
-            BotStyle::Balanced => 110,
-            BotStyle::Counter => 90,
-            BotStyle::Defensive => 180,
+            BotStyle::Reckless => 70,
+            BotStyle::Aggressive => 90,
+            BotStyle::Balanced => 130,
+            BotStyle::Counter => 100,
+            BotStyle::Defensive => 200,
         }
     }
 
-    /// Fraction of living units sent on the attack (rest garrison).
+    fn react_ticks(self) -> u64 {
+        match self {
+            BotStyle::Reckless | BotStyle::Aggressive => 18,
+            BotStyle::Balanced | BotStyle::Counter => 22,
+            BotStyle::Defensive => 16,
+        }
+    }
+
+    /// Field force vs home garrison. Home is never emptied if a fight is on.
     fn assault_ratio(self, threatened: bool, hq_hurt: bool) -> f32 {
         match self {
             BotStyle::Reckless => {
-                if hq_hurt {
-                    0.55
+                if threatened || hq_hurt {
+                    0.45
                 } else {
-                    0.95
+                    0.72
                 }
             }
             BotStyle::Aggressive => {
                 if threatened {
-                    0.62
+                    0.50
                 } else {
-                    0.88
+                    0.68
                 }
             }
             BotStyle::Balanced => {
                 if threatened {
-                    0.4
+                    0.38
                 } else {
-                    0.58
+                    0.55
                 }
             }
             BotStyle::Defensive => {
                 if threatened {
-                    0.12
+                    0.22
                 } else {
-                    0.28
+                    0.32
                 }
             }
             BotStyle::Counter => {
                 if threatened || hq_hurt {
-                    0.82
+                    0.70
                 } else {
-                    0.18
+                    0.22
                 }
             }
+        }
+    }
+
+    fn min_push_power(self) -> f32 {
+        match self {
+            BotStyle::Reckless => 16.0,
+            BotStyle::Aggressive => 24.0,
+            BotStyle::Balanced => 30.0,
+            BotStyle::Defensive => 20.0,
+            BotStyle::Counter => 34.0,
         }
     }
 
     fn ranger_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 90,
-            BotStyle::Aggressive => 75,
-            BotStyle::Balanced => 65,
+            BotStyle::Reckless => 70,
+            BotStyle::Aggressive => 68,
+            BotStyle::Balanced => 60,
             BotStyle::Defensive => 48,
-            BotStyle::Counter => 60,
+            BotStyle::Counter => 58,
         }
     }
 
     fn missile_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 0,
-            BotStyle::Aggressive => 4,
-            BotStyle::Balanced => 6,
-            BotStyle::Defensive => 12,
-            BotStyle::Counter => 8,
+            BotStyle::Reckless => 6,
+            BotStyle::Aggressive => 8,
+            BotStyle::Balanced => 10,
+            BotStyle::Defensive => 14,
+            BotStyle::Counter => 10,
         }
     }
 
     fn tank_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 2,
-            BotStyle::Aggressive => 4,
-            BotStyle::Balanced => 4,
-            BotStyle::Defensive => 2,
-            BotStyle::Counter => 3,
+            BotStyle::Reckless => 5,
+            BotStyle::Aggressive => 6,
+            BotStyle::Balanced => 5,
+            BotStyle::Defensive => 3,
+            BotStyle::Counter => 5,
         }
     }
 
@@ -166,8 +186,9 @@ impl BotStyle {
         match self {
             BotStyle::Defensive => 3,
             BotStyle::Counter => 2,
-            BotStyle::Balanced => 1,
-            _ => 0,
+            BotStyle::Balanced => 2,
+            BotStyle::Aggressive => 1,
+            BotStyle::Reckless => 1,
         }
     }
 }
@@ -208,12 +229,35 @@ pub fn tick_bots(sim: &mut MatchSim) {
         .map(|p| p.user_id)
         .collect();
     for id in bots {
-        let slot = (id.as_u128() % 10) as u64;
-        if sim.tick % 10 != slot {
+        let slot = (id.as_u128() % 5) as u64;
+        // ~4 Hz — fast enough to retask when a fight starts on the road.
+        if sim.tick % 5 != slot {
             continue;
         }
         think(sim, id);
     }
+}
+
+#[derive(Clone)]
+struct OwnedUnit {
+    id: Uuid,
+    x: f32,
+    y: f32,
+    tank: bool,
+    missile: bool,
+    range: f32,
+    target: Option<Uuid>,
+    dest: Option<(f32, f32)>,
+}
+
+struct Contact {
+    id: Uuid,
+    owner: Uuid,
+    x: f32,
+    y: f32,
+    tank: bool,
+    building: bool,
+    power: f32,
 }
 
 fn think(sim: &mut MatchSim, bot_id: Uuid) {
@@ -228,81 +272,586 @@ fn think(sim: &mut MatchSim, bot_id: Uuid) {
     let next_wave = player.bot.as_ref().map(|b| b.next_wave).unwrap_or(0);
     let last_move = player.bot.as_ref().map(|b| b.last_move).unwrap_or(0);
 
-    let Some((hq_id, hx, hy, hq_hp, hq_max)) = own_hq(sim, bot_id) else {
+    let Some((_hq_id, hx, hy, hq_hp, hq_max)) = own_hq(sim, bot_id) else {
         return;
     };
     let hq_hurt = hq_hp < hq_max * 0.82;
-    let threatened = enemy_near(sim, team, hx, hy, 14.0);
+    let threatened = enemy_near(sim, team, hx, hy, 16.0);
 
     expand_base(sim, bot_id, style, hx, hy);
-    train_army(sim, bot_id, style);
+    train_army(sim, bot_id, style, threatened);
 
-    let war = pick_war_target(sim, bot_id, team, style, hx, hy, threatened);
+    let own = collect_own(sim, bot_id);
+    if own.is_empty() {
+        return;
+    }
+
+    let home_fight = collect_enemies(sim, team, hx, hy, 16.0);
+    let war = pick_war_target(sim, team, style, hx, hy, &home_fight);
     if let Some(player) = sim.players.get_mut(&bot_id) {
         if let Some(mind) = player.bot.as_mut() {
             mind.war_owner = war.as_ref().map(|w| w.owner);
         }
     }
 
-    let ready_to_wave = sim.tick >= next_wave;
-    if !ready_to_wave && !threatened && !hq_hurt {
-        if sim.tick.saturating_sub(last_move) >= 40 {
-            hold_garrison(sim, bot_id, hx, hy, 1.0);
-            if let Some(player) = sim.players.get_mut(&bot_id) {
-                if let Some(mind) = player.bot.as_mut() {
-                    mind.last_move = sim.tick;
+    // 1) Instant: anyone who can see a fight, fights. Cancels a pointless march.
+    let mut busy: HashSet<Uuid> = HashSet::new();
+    react_contacts(sim, bot_id, team, &own, &mut busy);
+
+    let free: Vec<OwnedUnit> = own
+        .iter()
+        .filter(|u| !busy.contains(&u.id))
+        .cloned()
+        .collect();
+    let mut home = Vec::new();
+    let mut field = Vec::new();
+    for u in free {
+        if dist2(u.x, u.y, hx, hy) < 8.5 * 8.5 {
+            home.push(u);
+        } else {
+            field.push(u);
+        }
+    }
+
+    // 2) Field squads: retreat, hold, or push as a mixed group — not one blob.
+    for squad in spatial_groups(&field, 5.2) {
+        command_squad(sim, bot_id, team, style, hx, hy, &squad, war.as_ref());
+    }
+
+    // 3) Home: rally new troops; only commit a formed squad, never a lone barracks spawn.
+    let strategic = sim.tick.saturating_sub(last_move) >= style.react_ticks();
+    if strategic {
+        command_home(
+            sim,
+            bot_id,
+            team,
+            style,
+            hx,
+            hy,
+            &home,
+            threatened || hq_hurt,
+            sim.tick >= next_wave,
+            war.as_ref(),
+        );
+        if let Some(player) = sim.players.get_mut(&bot_id) {
+            if let Some(mind) = player.bot.as_mut() {
+                mind.last_move = sim.tick;
+                if sim.tick >= next_wave {
+                    mind.next_wave = sim.tick + style.rest_ticks();
+                }
+            }
+        }
+    } else if threatened || !home_fight.is_empty() {
+        command_home(
+            sim,
+            bot_id,
+            team,
+            style,
+            hx,
+            hy,
+            &home,
+            true,
+            false,
+            war.as_ref(),
+        );
+    }
+}
+
+fn react_contacts(
+    sim: &mut MatchSim,
+    bot_id: Uuid,
+    team: u8,
+    own: &[OwnedUnit],
+    busy: &mut HashSet<Uuid>,
+) {
+    for u in own {
+        let scan = (u.range + 2.2).max(5.0);
+        let threats = collect_enemies(sim, team, u.x, u.y, scan);
+        if threats.is_empty() {
+            continue;
+        }
+        let Some(tid) = pick_target(u, &threats) else {
+            continue;
+        };
+        order_attack(sim, bot_id, u, tid);
+        busy.insert(u.id);
+    }
+}
+
+fn pick_target(u: &OwnedUnit, threats: &[Contact]) -> Option<Uuid> {
+    threats
+        .iter()
+        .max_by(|a, b| {
+            score_target(u, a)
+                .partial_cmp(&score_target(u, b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|c| c.id)
+}
+
+fn score_target(u: &OwnedUnit, c: &Contact) -> f32 {
+    let d = dist2(u.x, u.y, c.x, c.y).sqrt();
+    let mut s = 12.0 - d;
+    if !c.building {
+        s += 8.0;
+    }
+    if u.missile && c.tank {
+        s += 40.0;
+    }
+    if u.tank && c.tank {
+        s += 22.0;
+    }
+    if u.tank && c.building {
+        s += 6.0;
+    }
+    s + c.power * 0.4
+}
+
+fn command_squad(
+    sim: &mut MatchSim,
+    bot_id: Uuid,
+    team: u8,
+    style: BotStyle,
+    hx: f32,
+    hy: f32,
+    squad: &[OwnedUnit],
+    war: Option<&HqMark>,
+) {
+    if squad.is_empty() {
+        return;
+    }
+    let (cx, cy) = centroid(squad);
+    let our_p: f32 = squad.iter().map(unit_power).sum();
+    let local = collect_enemies(sim, team, cx, cy, 11.0);
+    let enemy = strongest_cluster(&local);
+
+    if let Some(en) = enemy.as_ref() {
+        if our_p + 4.0 < en.power && !matches!(style, BotStyle::Reckless) {
+            hold_facing(sim, bot_id, hx, hy, en.x, en.y, &ids_of(squad));
+            return;
+        }
+        assign_combined_arms(sim, bot_id, squad, en.x, en.y, en.focus);
+        return;
+    }
+
+    // No local fight: keep a useful destination, don't reshuffle every tick.
+    let (tx, ty, standoff) = if let Some(w) = war {
+        let front = collect_enemies(sim, team, w.x, w.y, 12.0);
+        if let Some(en) = strongest_cluster(&front) {
+            (en.x, en.y, 3.6)
+        } else {
+            (w.x, w.y, 4.4)
+        }
+    } else {
+        return;
+    };
+    let flank = flank_sign(bot_id, style);
+    let (ax, ay) = approach_point(hx, hy, tx, ty, standoff, flank);
+    let mut raid_ids: HashSet<Uuid> = HashSet::new();
+    if squad.len() >= 9 {
+        if let Some(soft) = soft_target(sim, team, war) {
+            for u in squad.iter().filter(|u| !u.tank && !u.missile).take(3) {
+                order_attack(sim, bot_id, u, soft);
+                raid_ids.insert(u.id);
+            }
+        }
+    }
+    let rest: Vec<OwnedUnit> = squad
+        .iter()
+        .filter(|u| !raid_ids.contains(&u.id))
+        .cloned()
+        .collect();
+    assign_combined_arms(sim, bot_id, &rest, ax, ay, None);
+}
+
+fn assign_combined_arms(
+    sim: &mut MatchSim,
+    bot_id: Uuid,
+    squad: &[OwnedUnit],
+    tx: f32,
+    ty: f32,
+    focus: Option<Uuid>,
+) {
+    let tanks: Vec<&OwnedUnit> = squad.iter().filter(|u| u.tank).collect();
+    let missiles: Vec<&OwnedUnit> = squad.iter().filter(|u| u.missile).collect();
+    let infantry: Vec<&OwnedUnit> = squad.iter().filter(|u| !u.tank && !u.missile).collect();
+
+    if let Some(tid) = focus {
+        for u in missiles.iter().chain(tanks.iter()) {
+            order_attack(sim, bot_id, u, tid);
+        }
+    } else {
+        for u in &tanks {
+            let stand = (u.range - 0.45).max(2.8);
+            let (x, y) = approach_point(u.x, u.y, tx, ty, stand, 0.0);
+            order_move(sim, bot_id, u, x, y, 1.6);
+        }
+        for u in &missiles {
+            if tanks.is_empty() {
+                order_move(sim, bot_id, u, tx, ty, 2.0);
+            } else {
+                let (x, y) = centroid_refs(&tanks);
+                order_move(sim, bot_id, u, x, y, 2.2);
+            }
+        }
+    }
+
+    let (sx, sy) = if !tanks.is_empty() {
+        let (x, y) = centroid_refs(&tanks);
+        let dx = tx - x;
+        let dy = ty - y;
+        let len = (dx * dx + dy * dy).sqrt().max(0.001);
+        (x + dx / len * 1.15, y + dy / len * 1.15)
+    } else {
+        (tx, ty)
+    };
+    for u in &infantry {
+        order_move(sim, bot_id, u, sx, sy, 1.8);
+    }
+}
+
+fn command_home(
+    sim: &mut MatchSim,
+    bot_id: Uuid,
+    _team: u8,
+    style: BotStyle,
+    hx: f32,
+    hy: f32,
+    home: &[OwnedUnit],
+    threatened: bool,
+    ready_wave: bool,
+    war: Option<&HqMark>,
+) {
+    if home.is_empty() {
+        return;
+    }
+    let face = war
+        .as_ref()
+        .map(|w| (w.x, w.y))
+        .unwrap_or((hx + 5.0, hy));
+    let dx = face.0 - hx;
+    let dy = face.1 - hy;
+    let len = (dx * dx + dy * dy).sqrt().max(0.001);
+    let rally_x = hx + dx / len * 4.1;
+    let rally_y = hy + dy / len * 4.1;
+
+    if threatened {
+        let intercept: Vec<Uuid> = home.iter().map(|u| u.id).collect();
+        let n_guard = ((home.len() as f32) * (1.0 - style.assault_ratio(true, true))).round() as usize;
+        let n_guard = n_guard.clamp(1, home.len().saturating_sub(1).max(1));
+        let (guard, sorties) = intercept.split_at(n_guard.min(intercept.len()));
+        hold_facing(sim, bot_id, hx, hy, face.0, face.1, guard);
+        if !sorties.is_empty() {
+            let (ax, ay) = approach_point(hx, hy, face.0, face.1, 2.6, 0.0);
+            for id in sorties {
+                if let Some(u) = home.iter().find(|u| u.id == *id) {
+                    order_move(sim, bot_id, u, ax, ay, 2.0);
                 }
             }
         }
         return;
     }
 
-    if sim.tick.saturating_sub(last_move) < 28 && !threatened {
-        return;
-    }
-
-    let ratio = style.assault_ratio(threatened, hq_hurt);
-    let mut units: Vec<Uuid> = sim
-        .entities
-        .values()
-        .filter(|e| e.owner == bot_id && e.unit && e.hp > 0.0)
-        .map(|e| e.id)
-        .collect();
-    units.sort_unstable();
-    if units.is_empty() {
-        return;
-    }
-
-    let assault_n = ((units.len() as f32) * ratio).round() as usize;
-    let assault_n = assault_n.min(units.len());
-    let (assault, garrison) = units.split_at(assault_n);
-
-    if !garrison.is_empty() {
-        hold_garrison_ids(sim, bot_id, hx, hy, garrison);
-    }
-
-    if !assault.is_empty() {
-        if let Some(target) = war {
-            sim.attack(bot_id, assault, target.id);
-        } else {
-            sim.move_units(bot_id, assault, hx + 4.0, hy);
+    // Park fresh spawns at the rally — do not yeet a single ranger across the map.
+    for u in home {
+        if dist2(u.x, u.y, rally_x, rally_y) > 2.4 * 2.4 {
+            order_move(sim, bot_id, u, rally_x, rally_y, 1.4);
         }
     }
 
-    if let Some(player) = sim.players.get_mut(&bot_id) {
-        if let Some(mind) = player.bot.as_mut() {
-            mind.last_move = sim.tick;
-            if ready_to_wave {
-                mind.next_wave = sim.tick + style.rest_ticks();
+    if !ready_wave {
+        return;
+    }
+    let ready: Vec<&OwnedUnit> = home
+        .iter()
+        .filter(|u| dist2(u.x, u.y, rally_x, rally_y) <= 3.2 * 3.2)
+        .collect();
+    let power: f32 = ready.iter().map(|u| unit_power(u)).sum();
+    let tanks = ready.iter().filter(|u| u.tank).count();
+    let inf = ready.iter().filter(|u| !u.tank).count();
+    let formed = power >= style.min_push_power() && ((tanks >= 1 && inf >= 3) || inf >= 8);
+    if !formed {
+        return;
+    }
+
+    // Commit one mixed squad; leave a garrison at the rally.
+    let keep = ((ready.len() as f32) * (1.0 - style.assault_ratio(false, false)))
+        .round() as usize;
+    let keep = keep.min(ready.len().saturating_sub(4));
+    let mut ranked = ready;
+    ranked.sort_by(|a, b| {
+        role_push(b)
+            .partial_cmp(&role_push(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let commit: Vec<OwnedUnit> = ranked
+        .iter()
+        .skip(keep)
+        .map(|u| (*u).clone())
+        .collect();
+    if commit.is_empty() {
+        return;
+    }
+    let (tx, ty) = war.map(|w| (w.x, w.y)).unwrap_or((face.0, face.1));
+    let (ax, ay) = approach_point(hx, hy, tx, ty, 4.0, flank_sign(bot_id, style));
+    assign_combined_arms(sim, bot_id, &commit, ax, ay, None);
+}
+
+fn role_push(u: &OwnedUnit) -> f32 {
+    if u.tank {
+        3.0
+    } else if u.missile {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+fn order_attack(sim: &mut MatchSim, bot_id: Uuid, u: &OwnedUnit, target: Uuid) {
+    if u.target == Some(target) {
+        return;
+    }
+    sim.attack(bot_id, &[u.id], target);
+}
+
+fn order_move(sim: &mut MatchSim, bot_id: Uuid, u: &OwnedUnit, x: f32, y: f32, slack: f32) {
+    if u.target.is_some() {
+        return;
+    }
+    if let Some((mx, my)) = u.dest {
+        if dist2(mx, my, x, y) <= slack * slack {
+            return;
+        }
+    }
+    if dist2(u.x, u.y, x, y) <= slack * slack * 0.35 {
+        return;
+    }
+    sim.move_units(bot_id, &[u.id], x, y);
+}
+
+fn spatial_groups(units: &[OwnedUnit], radius: f32) -> Vec<Vec<OwnedUnit>> {
+    let r2 = radius * radius;
+    let mut left: Vec<OwnedUnit> = units.to_vec();
+    let mut groups = Vec::new();
+    while let Some(seed) = left.pop() {
+        let mut g = vec![seed];
+        loop {
+            let mut grew = false;
+            left.retain(|u| {
+                if g.iter().any(|v| dist2(u.x, u.y, v.x, v.y) <= r2) {
+                    g.push(u.clone());
+                    grew = true;
+                    false
+                } else {
+                    true
+                }
+            });
+            if !grew {
+                break;
             }
         }
+        groups.push(g);
     }
-    let _ = hq_id;
+    groups
+}
+
+fn collect_own(sim: &MatchSim, bot_id: Uuid) -> Vec<OwnedUnit> {
+    sim.entities
+        .values()
+        .filter(|e| e.owner == bot_id && e.unit && e.hp > 0.0)
+        .map(|e| OwnedUnit {
+            id: e.id,
+            x: e.x,
+            y: e.y,
+            tank: e.kind.contains("tank"),
+            missile: e.kind.contains("missile"),
+            range: e.range,
+            target: e.target,
+            dest: e.move_to,
+        })
+        .collect()
+}
+
+fn collect_enemies(sim: &MatchSim, team: u8, x: f32, y: f32, radius: f32) -> Vec<Contact> {
+    let mut out = Vec::new();
+    sim.grid.for_each_nearby(x, y, radius + MAX_ENTITY_RADIUS, |id| {
+        let Some(e) = sim.entities.get(&id) else {
+            return false;
+        };
+        if e.team == team || e.hp <= 0.0 || !(e.unit || e.building) {
+            return false;
+        }
+        if dist2(x, y, e.x, e.y) > radius * radius {
+            return false;
+        }
+        out.push(Contact {
+            id: e.id,
+            owner: e.owner,
+            x: e.x,
+            y: e.y,
+            tank: e.kind.contains("tank"),
+            building: e.building,
+            power: contact_power(e.unit, &e.kind),
+        });
+        false
+    });
+    out
+}
+
+fn unit_power(u: &OwnedUnit) -> f32 {
+    if u.tank {
+        6.0
+    } else if u.missile {
+        2.4
+    } else {
+        1.0
+    }
+}
+
+fn contact_power(unit: bool, kind: &str) -> f32 {
+    if !unit {
+        0.4
+    } else if kind.contains("tank") {
+        6.0
+    } else if kind.contains("missile") {
+        2.4
+    } else {
+        1.0
+    }
+}
+
+fn centroid(units: &[OwnedUnit]) -> (f32, f32) {
+    let n = units.len().max(1) as f32;
+    (
+        units.iter().map(|u| u.x).sum::<f32>() / n,
+        units.iter().map(|u| u.y).sum::<f32>() / n,
+    )
+}
+
+fn centroid_refs(units: &[&OwnedUnit]) -> (f32, f32) {
+    let n = units.len().max(1) as f32;
+    (
+        units.iter().map(|u| u.x).sum::<f32>() / n,
+        units.iter().map(|u| u.y).sum::<f32>() / n,
+    )
+}
+
+fn ids_of(units: &[OwnedUnit]) -> Vec<Uuid> {
+    units.iter().map(|u| u.id).collect()
+}
+
+struct Cluster {
+    x: f32,
+    y: f32,
+    power: f32,
+    focus: Option<Uuid>,
+}
+
+fn strongest_cluster(contacts: &[Contact]) -> Option<Cluster> {
+    let fighters: Vec<&Contact> = contacts.iter().filter(|c| !c.building || c.tank).collect();
+    let pool: Vec<&Contact> = if fighters.is_empty() {
+        contacts.iter().collect()
+    } else {
+        fighters
+    };
+    if pool.is_empty() {
+        return None;
+    }
+    let mut best: Option<Cluster> = None;
+    for seed in &pool {
+        let mut sx = 0.0;
+        let mut sy = 0.0;
+        let mut p = 0.0;
+        let mut n = 0.0;
+        let mut focus = seed.id;
+        let mut focus_p = seed.power;
+        for c in &pool {
+            if dist2(seed.x, seed.y, c.x, c.y) > 36.0 {
+                continue;
+            }
+            sx += c.x * c.power.max(0.2);
+            sy += c.y * c.power.max(0.2);
+            p += c.power;
+            n += c.power.max(0.2);
+            if c.power > focus_p {
+                focus_p = c.power;
+                focus = c.id;
+            }
+        }
+        if n <= 0.0 {
+            continue;
+        }
+        let cluster = Cluster {
+            x: sx / n,
+            y: sy / n,
+            power: p,
+            focus: Some(focus),
+        };
+        if best.as_ref().map(|b| cluster.power > b.power).unwrap_or(true) {
+            best = Some(cluster);
+        }
+    }
+    best
+}
+
+fn flank_sign(bot_id: Uuid, style: BotStyle) -> f32 {
+    let side = if bot_id.as_u128() % 2 == 0 { 1.0 } else { -1.0 };
+    match style {
+        BotStyle::Defensive => 0.0,
+        BotStyle::Reckless => side * 1.4,
+        _ => side * 2.2,
+    }
+}
+
+fn approach_point(from_x: f32, from_y: f32, to_x: f32, to_y: f32, standoff: f32, flank: f32) -> (f32, f32) {
+    let dx = to_x - from_x;
+    let dy = to_y - from_y;
+    let len = (dx * dx + dy * dy).sqrt().max(0.001);
+    let ux = dx / len;
+    let uy = dy / len;
+    (
+        to_x - ux * standoff + (-uy) * flank,
+        to_y - uy * standoff + ux * flank,
+    )
+}
+
+fn hold_facing(
+    sim: &mut MatchSim,
+    bot_id: Uuid,
+    hx: f32,
+    hy: f32,
+    face_x: f32,
+    face_y: f32,
+    ids: &[Uuid],
+) {
+    if ids.is_empty() {
+        return;
+    }
+    let dx = face_x - hx;
+    let dy = face_y - hy;
+    let len = (dx * dx + dy * dy).sqrt().max(0.001);
+    let dist = len.clamp(2.8, 5.4);
+    let x = hx + (dx / len) * dist;
+    let y = hy + (dy / len) * dist;
+    let need: Vec<Uuid> = ids
+        .iter()
+        .copied()
+        .filter(|id| {
+            sim.entities.get(id).is_some_and(|e| {
+                e.target.is_none()
+                    && e.move_to
+                        .map(|(mx, my)| dist2(mx, my, x, y) > 2.2 * 2.2)
+                        .unwrap_or(true)
+            })
+        })
+        .collect();
+    if !need.is_empty() {
+        sim.move_units(bot_id, &need, x, y);
+    }
 }
 
 #[derive(Clone)]
 struct HqMark {
-    id: Uuid,
     owner: Uuid,
     x: f32,
     y: f32,
@@ -321,19 +870,17 @@ fn own_hq(sim: &MatchSim, owner: Uuid) -> Option<(Uuid, f32, f32, f32, f32)> {
 
 fn pick_war_target(
     sim: &MatchSim,
-    _bot_id: Uuid,
     team: u8,
     style: BotStyle,
     hx: f32,
     hy: f32,
-    threatened: bool,
+    home_fight: &[Contact],
 ) -> Option<HqMark> {
     let mut hqs: Vec<HqMark> = sim
         .entities
         .values()
         .filter(|e| e.kind == "hq" && e.team != team && e.hp > 0.0)
         .map(|e| HqMark {
-            id: e.id,
             owner: e.owner,
             x: e.x,
             y: e.y,
@@ -344,23 +891,23 @@ fn pick_war_target(
         return None;
     }
 
-    if threatened {
-        if let Some(attacker) = nearest_enemy_unit(sim, team, hx, hy) {
-            if let Some(hq) = hqs.iter().find(|h| h.owner == attacker).cloned() {
-                return Some(hq);
-            }
+    if let Some(attacker) = home_fight
+        .iter()
+        .filter(|c| !c.building)
+        .min_by(|a, b| dist2(hx, hy, a.x, a.y).partial_cmp(&dist2(hx, hy, b.x, b.y)).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        if let Some(hq) = hqs.iter().find(|h| h.owner == attacker.owner).cloned() {
+            return Some(hq);
         }
     }
 
     match style {
         BotStyle::Reckless | BotStyle::Aggressive => {
-            hqs.sort_by(|a, b| a.hp.partial_cmp(&b.hp).unwrap_or(std::cmp::Ordering::Equal));
-            hqs.into_iter().next()
-        }
-        BotStyle::Counter if threatened => {
             hqs.sort_by(|a, b| {
-                dist2(hx, hy, a.x, a.y)
-                    .partial_cmp(&dist2(hx, hy, b.x, b.y))
+                let da = dist2(hx, hy, a.x, a.y);
+                let db = dist2(hx, hy, b.x, b.y);
+                (a.hp + da * 8.0)
+                    .partial_cmp(&(b.hp + db * 8.0))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             hqs.into_iter().next()
@@ -376,22 +923,33 @@ fn pick_war_target(
     }
 }
 
-fn nearest_enemy_unit(sim: &MatchSim, team: u8, x: f32, y: f32) -> Option<Uuid> {
+fn soft_target(sim: &MatchSim, team: u8, war: Option<&HqMark>) -> Option<Uuid> {
+    let owner = war.map(|w| w.owner);
     let mut best: Option<(Uuid, f32)> = None;
-    sim.grid.for_each_nearby(x, y, 16.0, |id| {
-        let Some(e) = sim.entities.get(&id) else {
-            return false;
-        };
-        if e.team == team || e.hp <= 0.0 || !e.unit {
-            return false;
+    for e in sim.entities.values() {
+        if e.team == team || e.hp <= 0.0 || !e.building {
+            continue;
         }
-        let d = dist2(x, y, e.x, e.y);
-        if best.map(|(_, bd)| d < bd).unwrap_or(true) {
-            best = Some((e.owner, d));
+        if e.kind == "hq" {
+            continue;
         }
-        false
-    });
-    best.map(|(owner, _)| owner)
+        if let Some(oid) = owner {
+            if e.owner != oid {
+                continue;
+            }
+        }
+        let score = match e.kind.as_str() {
+            "war_factory" => 0.0,
+            "barracks" => 1.0,
+            "supply" => 2.0,
+            "power_plant" => 2.4,
+            _ => 3.0,
+        } + e.hp * 0.0001;
+        if best.map(|(_, s)| score < s).unwrap_or(true) {
+            best = Some((e.id, score));
+        }
+    }
+    best.map(|(id, _)| id)
 }
 
 fn enemy_near(sim: &MatchSim, team: u8, x: f32, y: f32, radius: f32) -> bool {
@@ -451,20 +1009,19 @@ fn expand_base(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, hx: f32, hy: f
         try_place(sim, bot_id, "supply", hx, hy, 3.4);
         return;
     }
-    if factory < 1 && (!matches!(style, BotStyle::Reckless) || sim.tick > 200) {
+    if factory < 1 {
         try_place(sim, bot_id, "war_factory", hx, hy, 3.8);
         return;
     }
-    if plants < 2 && sim.tick > 240 {
+    if plants < 2 && sim.tick > 220 {
         try_place(sim, bot_id, "power_plant", hx, hy, 4.2);
         return;
     }
-    if barracks < 2 && matches!(style, BotStyle::Reckless | BotStyle::Aggressive) && sim.tick > 180
-    {
+    if barracks < 2 && matches!(style, BotStyle::Reckless | BotStyle::Aggressive) && sim.tick > 160 {
         try_place(sim, bot_id, "barracks", hx, hy, 4.0);
         return;
     }
-    if turrets < style.turrets() {
+    if turrets < style.turrets() && (style.turrets() > 0) {
         try_place(sim, bot_id, "turret", hx, hy, 5.2);
     }
 }
@@ -483,7 +1040,7 @@ fn try_place(sim: &mut MatchSim, bot_id: Uuid, kind: &str, hx: f32, hy: f32, rad
     }
 }
 
-fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle) {
+fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: bool) {
     let rangers = count_units(sim, bot_id, |k| k == "ranger");
     let missiles = count_units(sim, bot_id, |k| k.contains("missile"));
     let tanks = count_units(sim, bot_id, |k| k.contains("tank"));
@@ -513,45 +1070,20 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle) {
         .map(|e| e.id)
         .collect();
 
-    for id in barracks {
-        if missiles < style.missile_cap() && style.missile_cap() > 0 {
-            if sim.train_unit(bot_id, id, "missile_defender").is_ok() {
-                continue;
-            }
-        }
-        if rangers < style.ranger_cap() {
-            let _ = sim.train_unit(bot_id, id, "ranger");
-        }
-    }
+    // Combined arms: AT and tanks before another ranger blob.
     for id in factories {
         if tanks < style.tank_cap() {
             let _ = sim.train_unit(bot_id, id, "tank");
         }
     }
-}
-
-fn hold_garrison(sim: &mut MatchSim, bot_id: Uuid, hx: f32, hy: f32, ratio: f32) {
-    let units: Vec<Uuid> = sim
-        .entities
-        .values()
-        .filter(|e| e.owner == bot_id && e.unit && e.hp > 0.0)
-        .map(|e| e.id)
-        .collect();
-    if units.is_empty() {
-        return;
+    for id in barracks {
+        let want_at = missiles < style.missile_cap()
+            && (threatened || tanks > 0 || missiles + 1 <= (rangers / 6).max(1));
+        if want_at && sim.train_unit(bot_id, id, "missile_defender").is_ok() {
+            continue;
+        }
+        if rangers < style.ranger_cap() {
+            let _ = sim.train_unit(bot_id, id, "ranger");
+        }
     }
-    let n = ((units.len() as f32) * ratio).ceil() as usize;
-    hold_garrison_ids(sim, bot_id, hx, hy, &units[..n.min(units.len())]);
-}
-
-fn hold_garrison_ids(sim: &mut MatchSim, bot_id: Uuid, hx: f32, hy: f32, ids: &[Uuid]) {
-    if ids.is_empty() {
-        return;
-    }
-    let mut rng = rand::thread_rng();
-    let ang = rng.gen_range(0.0..std::f32::consts::TAU);
-    let dist = rng.gen_range(2.8..5.2);
-    let x = hx + ang.cos() * dist;
-    let y = hy + ang.sin() * dist;
-    sim.move_units(bot_id, ids, x, y);
 }

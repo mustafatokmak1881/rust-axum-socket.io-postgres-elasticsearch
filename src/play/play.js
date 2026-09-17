@@ -414,18 +414,25 @@ function applyDelta(msg) {
   updateResources(msg.resources);
   applyExploredNew(msg.explored_new);
 
+  const tankHits = (msg.shots || []).filter(
+    (s) => s.hit !== false && String(s.kind || "").includes("tank") && s.x1 != null && s.y1 != null,
+  );
   const removedBuildings = [];
   for (const id of msg.removed || []) {
     const prev = state.entities.get(id);
     if (prev?.building) removedBuildings.push(prev);
     state.entities.delete(id);
     const mesh = state.meshes.get(id);
-    if (mesh && scene) {
-      scene.remove(mesh);
-      state.meshes.delete(id);
-    } else {
-      state.meshes.delete(id);
+    const nearHe =
+      mesh?.userData?.isInfantry &&
+      tankHits.some((s) => Math.hypot(mesh.position.x - s.x1, mesh.position.z - s.y1) <= 1.35);
+    if (nearHe) {
+      mesh.userData.corpse = true;
+      mesh.userData.corpseAt = performance.now();
+      mesh.userData.moving = false;
+      continue;
     }
+    reapUnitMesh(mesh);
     Sfx.stopBuild(id);
     Sfx.stopEngine(id);
   }
@@ -953,7 +960,7 @@ const Sfx = {
       if (node.stopping) continue;
       const vol = this.volumeAt(node.x, node.y, this.ranges.tank);
       const th = node.throttle || 0;
-      const target = Math.max(0.0001, this.sampleGain(vol, 0.16, 2.2) * (0.45 + th * 0.55));
+      const target = Math.max(0.0001, this.sampleGain(vol, 0.032, 2.2) * (0.45 + th * 0.55));
       try {
         node.g.gain.setTargetAtTime(target, t0, 0.08);
         if (node.pan) node.pan.pan.setTargetAtTime(this.panAt(node.x), t0, 0.08);
@@ -991,7 +998,8 @@ const Sfx = {
 
   shot(kind, x, y) {
     const k = String(kind || "");
-    if (k.includes("tank")) this.tankCannon(x, y);
+    if (k.includes("tank_mg") || k.includes("_mg")) this.rifle(x, y);
+    else if (k.includes("tank")) this.tankCannon(x, y);
     else if (k.includes("missile")) this.missile(x, y);
     else this.rifle(x, y);
   },
@@ -1010,7 +1018,7 @@ function playShots(shots) {
   const list = [...(shots || [])];
   const rank = (kind) => {
     const k = String(kind || "");
-    if (k.includes("tank")) return 0;
+    if (k.includes("tank") && !k.includes("mg")) return 0;
     if (k.includes("missile")) return 1;
     return 2;
   };
@@ -1021,13 +1029,14 @@ function playShots(shots) {
     const kind = shotKindOf(shot);
     const k = String(kind);
     Radar.ping(shot.x0, shot.y0, k);
-    if (k.includes("tank") && shot.x1 != null && shot.y1 != null) {
+    if (k.includes("tank") && !k.includes("mg") && shot.x1 != null && shot.y1 != null) {
       Radar.ping(shot.x1, shot.y1, "tank");
     }
-    if (!k.includes("tank") && !k.includes("missile")) {
+    const isCannon = k.includes("tank") && !k.includes("mg");
+    const isMissile = k.includes("missile");
+    if (!isCannon && !isMissile) {
       rifles += 1;
-      // A volley must never bury the cannon in the same frame.
-      if (rifles > 3) continue;
+      if (rifles > 4) continue;
     }
     Sfx.shot(kind, shot.x0, shot.y0);
   }
@@ -3174,7 +3183,7 @@ function createTankMesh(teamColor) {
   g.userData.unitHeight = 0.16;
   g.userData.isTank = true;
   g.userData.hullTurnRate = 1.05;
-  g.userData.turretTurnRate = 0.95;
+  g.userData.turretTurnRate = 1.25;
   g.userData.barrelRecoil = 0;
   // Half visual size vs prior rig (matches unitDims / server radius).
   g.scale.setScalar(0.5);
@@ -3462,6 +3471,9 @@ function applyUnitMotion(mesh, entity) {
   mesh.userData.snapAt = now;
   mesh.userData.lastX = entity.x;
   mesh.userData.lastZ = entity.y;
+  if (mesh.userData.isTank) {
+    mesh.userData.aimAt = entity.aim_at || null;
+  }
 }
 
 function predictedPos(mesh) {
@@ -3553,6 +3565,16 @@ function smoothUnitFacing(mesh, dt) {
 
     // Turret independently tracks aim (or hull heading if no aim yet).
     if (turret) {
+      const tid = mesh.userData.aimAt;
+      if (tid) {
+        const ent = state.entities.get(tid);
+        const other = state.meshes.get(tid);
+        const tx = ent ? ent.x : other?.position.x;
+        const tz = ent ? ent.y : other?.position.z;
+        if (tx != null && tz != null) {
+          mesh.userData.aimYaw = Math.atan2(tx - mesh.position.x, tz - mesh.position.z);
+        }
+      }
       const aim =
         mesh.userData.aimYaw != null ? mesh.userData.aimYaw : mesh.userData.faceYaw;
       if (aim != null) {
@@ -4004,6 +4026,13 @@ function spawnTankExplosion(at) {
   });
 }
 
+function reapUnitMesh(mesh) {
+  if (!mesh) return;
+  const id = mesh.userData?.id;
+  if (scene) scene.remove(mesh);
+  if (id) state.meshes.delete(id);
+}
+
 function applyBlastKnock(x, z, radius) {
   for (const mesh of state.meshes.values()) {
     if (!mesh.userData?.isInfantry) continue;
@@ -4128,9 +4157,13 @@ function animate() {
   applyEdgePan();
   controls?.update();
   updateTankCrushVisuals(now);
+  const reap = [];
   for (const mesh of state.meshes.values()) {
     if (mesh.userData.knock) {
       updateKnockPhysics(mesh, dt);
+      if (mesh.userData.corpse && !mesh.userData.knock) reap.push(mesh);
+    } else if (mesh.userData.corpse) {
+      if (now - (mesh.userData.corpseAt || 0) > 900) reap.push(mesh);
     } else {
       smoothUnitFacing(mesh, dt);
       updateTankDrive(mesh, dt);
@@ -4138,6 +4171,7 @@ function animate() {
       updateInfantryWalk(mesh, dt, now);
     }
   }
+  for (const mesh of reap) reapUnitMesh(mesh);
   updateCombatFx(now);
   if (now - (animate._sfxAt || 0) > 80) {
     animate._sfxAt = now;
