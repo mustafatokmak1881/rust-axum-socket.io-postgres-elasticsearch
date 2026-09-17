@@ -213,7 +213,12 @@ pub fn seed_opening_bots(sim: &mut MatchSim) {
             break;
         }
         let id = Uuid::new_v4();
-        let team = 80 + sim.players.values().filter(|p| p.is_bot()).count() as u8;
+        // FFA: unique team per bot. Allied: placeholder — MatchSim rebalances after seed.
+        let team = if sim.ffa {
+            80 + sim.players.values().filter(|p| p.is_bot()).count() as u8
+        } else {
+            0
+        };
         let name = format!("{} · {}", profile.name, profile.country);
         sim.spawn_commander(
             id,

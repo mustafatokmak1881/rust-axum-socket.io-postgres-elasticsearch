@@ -188,7 +188,7 @@ function renderOpenMatches(matches) {
       <button type="button" class="store-item" data-join="${escapeHtml(m.id)}">
         <strong>${m.players}/${m.max_players} live</strong>
         <small>${escapeHtml(m.id)}</small>
-        <span>Map ${m.map_size}${m.ffa ? " · FFA" : ""} · click to join</span>
+        <span>Map ${m.map_size}${m.ffa ? " · FFA" : " · Allied"} · click to join</span>
       </button>`,
     )
     .join("");
@@ -307,13 +307,24 @@ function enterMatch(snapshot) {
   void setupMatchScene(snapshot);
 }
 
+function hashMatchSeed(id) {
+  const s = String(id || "seed");
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) || 1;
+}
+
 async function setupMatchScene(snapshot) {
   updateResources(snapshot.resources);
   updateArmyCounts();
   renderBuildList(snapshot.buildable || []);
   renderUnitList(snapshot.trainable || []);
   await ensureBuildingModel();
-  const terrain = await loadTerrainTexture(snapshot.map_size);
+  const terrainSeed = hashMatchSeed(snapshot.match_id || snapshot.tick || 1);
+  const terrain = await loadTerrainTexture(snapshot.map_size, terrainSeed);
   const home = findOwnHome(snapshot);
   if (snapshot.focus) {
     home.x = snapshot.focus[0];
@@ -1309,11 +1320,11 @@ const BUILDING_MODELS = {
   supply: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.7 },
   barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 1.35 },
   war_factory: { type: "obj", obj: "/assets/models/war-factory.obj", mtl: "/assets/models/war-factory.mtl", target: 2.1 },
-  turret: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.4 },
+  // turret / Patriot Battery: procedural mesh in createPatriotBatteryMesh
 };
 
 /** Bump when BUILDING_MODELS targets change so cached meshes refit. */
-const BUILDING_FIT_VERSION = 2;
+const BUILDING_FIT_VERSION = 3;
 
 async function prepareStlGeometry(url, targetSize) {
   const loader = new STLLoader();
@@ -1413,6 +1424,9 @@ function templateForKind(kind) {
 }
 
 function createBuildingMesh(kind, fallbackMat) {
+  if (kind === "turret") {
+    return createPatriotBatteryMesh(fallbackMat);
+  }
   const template = templateForKind(kind);
   if (template) {
     const mesh = template.clone(true);
@@ -1443,6 +1457,168 @@ function createBuildingMesh(kind, fallbackMat) {
   mesh.userData.isFallback = true;
   mesh.userData.buildingFitVersion = BUILDING_FIT_VERSION;
   return mesh;
+}
+
+/** Hand-built MIM-104 style launcher + radar — no external model. */
+function createPatriotBatteryMesh(fallbackMat) {
+  const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
+  const olive = new THREE.MeshStandardMaterial({
+    color: 0x4a553c,
+    metalness: 0.28,
+    roughness: 0.62,
+  });
+  const dark = new THREE.MeshStandardMaterial({
+    color: 0x232722,
+    metalness: 0.45,
+    roughness: 0.48,
+  });
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0x6e766c,
+    metalness: 0.72,
+    roughness: 0.32,
+  });
+  const team = new THREE.MeshStandardMaterial({
+    color: accent,
+    metalness: 0.22,
+    roughness: 0.55,
+  });
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x1a2830,
+    metalness: 0.8,
+    roughness: 0.15,
+    transparent: true,
+    opacity: 0.85,
+  });
+
+  const root = new THREE.Group();
+  root.userData.building = true;
+  root.userData.isPatriot = true;
+  root.userData.modelKind = "turret";
+  root.userData.isFallback = false;
+  root.userData.keepMtlColors = true;
+  root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.unitHeight = 1.15;
+
+  // Concrete pad
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.06, 1.15), dark);
+  pad.position.y = 0.03;
+  pad.receiveShadow = true;
+  root.add(pad);
+
+  // Trailer / chassis
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.14, 0.55), olive);
+  chassis.position.set(0.05, 0.13, 0.05);
+  chassis.castShadow = true;
+  root.add(chassis);
+
+  // Team stripe on chassis
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.03, 0.08), team);
+  stripe.position.set(0.05, 0.21, -0.18);
+  root.add(stripe);
+
+  // Road wheels (static)
+  for (const z of [-0.22, 0.22]) {
+    for (const x of [-0.28, 0.18, 0.48]) {
+      const wheel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.07, 0.07, 0.06, 10),
+        dark,
+      );
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.set(x, 0.07, z);
+      root.add(wheel);
+    }
+  }
+
+  // Control cabin
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 0.36), olive);
+  cabin.position.set(-0.42, 0.28, 0.02);
+  cabin.castShadow = true;
+  root.add(cabin);
+  const window = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.02), glass);
+  window.position.set(-0.42, 0.34, 0.2);
+  root.add(window);
+
+  // Radar mast + phased-array face
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.72, 8), steel);
+  mast.position.set(-0.15, 0.48, -0.38);
+  root.add(mast);
+  const radar = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, 0.05), steel);
+  radar.position.set(-0.15, 0.88, -0.38);
+  radar.rotation.x = -0.25;
+  radar.castShadow = true;
+  root.add(radar);
+  const radarFace = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.02), glass);
+  radarFace.position.set(-0.15, 0.88, -0.35);
+  radarFace.rotation.x = -0.25;
+  root.add(radarFace);
+
+  // Rotating launcher assembly (yaw)
+  const launcher = new THREE.Group();
+  launcher.name = "muzzleRoot";
+  launcher.position.set(0.22, 0.22, 0.08);
+  root.add(launcher);
+
+  const pivot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.1, 10), dark);
+  pivot.position.y = 0.05;
+  launcher.add(pivot);
+
+  // Elevation cradle (~55°)
+  const cradle = new THREE.Group();
+  cradle.position.set(0, 0.12, 0);
+  cradle.rotation.x = -0.95;
+  launcher.add(cradle);
+
+  const cradleBox = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.1, 0.55), olive);
+  cradleBox.position.z = 0.12;
+  cradleBox.castShadow = true;
+  cradle.add(cradleBox);
+
+  // Four canister tubes (2×2)
+  const tubeMat = steel;
+  const tubePositions = [
+    [-0.12, 0.08, 0.05],
+    [0.12, 0.08, 0.05],
+    [-0.12, 0.08, 0.28],
+    [0.12, 0.08, 0.28],
+  ];
+  for (const [tx, ty, tz] of tubePositions) {
+    const tube = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.055, 0.06, 0.72, 10),
+      tubeMat,
+    );
+    tube.rotation.x = Math.PI / 2;
+    tube.position.set(tx, ty, tz);
+    tube.castShadow = true;
+    cradle.add(tube);
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 10), dark);
+    cap.rotation.x = Math.PI / 2;
+    cap.position.set(tx, ty, tz + 0.37);
+    cradle.add(cap);
+  }
+
+  // Muzzle tip for FX (front of upper-right tube)
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0.12, 0.08, 0.55);
+  cradle.add(tip);
+
+  // Engagement ring (subtle, sits on ground)
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.72, 0.78, 40),
+    new THREE.MeshBasicMaterial({
+      color: accent,
+      transparent: true,
+      opacity: 0.22,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.04;
+  ring.userData.skipBuildingOpacity = true;
+  root.add(ring);
+
+  return root;
 }
 
 function setBuildingOpacity(root, opacity) {
@@ -1537,91 +1713,221 @@ async function ensureBuildingModel() {
   }
 }
 
-async function loadTerrainTexture(mapSize) {
+async function loadTerrainTexture(mapSize, seed = 1) {
   try {
     const loader = new THREE.TextureLoader();
     const base = await loader.loadAsync("/assets/terrain.jpg");
-    return bakeRandomTerrainTexture(base.image, mapSize);
+    return bakeBiomeTerrainTexture(base.image, mapSize, seed);
   } catch (error) {
     console.error(error);
-    return bakeRandomTerrainTexture(null, mapSize);
+    return bakeBiomeTerrainTexture(null, mapSize, seed);
   }
 }
 
-/** One unique ground atlas — avoids obvious square tile repeats. */
-function bakeRandomTerrainTexture(image, mapSize) {
-  const size = 1024;
+/** Deterministic 0..1 hash for biome noise. */
+function hash2(x, y, seed) {
+  let n = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ (seed | 0);
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+function valueNoise2(x, y, seed) {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fy * fy * (3 - 2 * fy);
+  const a = hash2(x0, y0, seed);
+  const b = hash2(x0 + 1, y0, seed);
+  const c = hash2(x0, y0 + 1, seed);
+  const d = hash2(x0 + 1, y0 + 1, seed);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+function fbm2(x, y, seed, octaves = 4) {
+  let amp = 0.5;
+  let freq = 1;
+  let sum = 0;
+  let norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += amp * valueNoise2(x * freq, y * freq, seed + i * 101);
+    norm += amp;
+    amp *= 0.5;
+    freq *= 2.05;
+  }
+  return sum / norm;
+}
+
+/** Biome field cached for decor placement: 0 desert · 0.5 scrub · 1 forest. */
+let terrainBiomeField = null;
+let terrainBiomeSize = 0;
+let terrainSeed = 1;
+
+function sampleBiome(wx, wz, mapSize) {
+  if (!terrainBiomeField || !terrainBiomeSize) return 0.5;
+  const u = Math.max(0, Math.min(0.999, wx / mapSize));
+  const v = Math.max(0, Math.min(0.999, wz / mapSize));
+  const x = Math.floor(u * terrainBiomeSize);
+  const y = Math.floor(v * terrainBiomeSize);
+  return terrainBiomeField[y * terrainBiomeSize + x];
+}
+
+function lerpColor(a, b, t) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+}
+
+/** Painted biome atlas: desert dunes, olive scrub, deep forest canopy — soft blends. */
+function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
+  const size = 1280;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  terrainSeed = seed | 0 || 1;
+  terrainBiomeSize = 96;
+  terrainBiomeField = new Float32Array(terrainBiomeSize * terrainBiomeSize);
 
-  ctx.fillStyle = "#455832";
-  ctx.fillRect(0, 0, size, size);
+  // Warm shared palette so biomes sit in one world, not clashing themes.
+  const desert = [194, 158, 98];
+  const desertDeep = [168, 128, 72];
+  const scrub = [110, 118, 62];
+  const scrubLight = [132, 128, 70];
+  const forest = [52, 78, 42];
+  const forestDeep = [38, 62, 34];
+  const dust = [150, 132, 88];
 
-  if (image) {
-    for (let i = 0; i < 48; i++) {
-      ctx.save();
-      const x = Math.random() * size;
-      const y = Math.random() * size;
-      const scale = 0.35 + Math.random() * 1.4;
-      ctx.translate(x, y);
-      ctx.rotate(Math.random() * Math.PI * 2);
-      ctx.globalAlpha = 0.22 + Math.random() * 0.5;
-      const hue = (Math.random() - 0.5) * 48;
-      const sat = 0.65 + Math.random() * 0.7;
-      const bri = 0.8 + Math.random() * 0.35;
-      ctx.filter = `hue-rotate(${hue}deg) saturate(${sat}) brightness(${bri})`;
-      const w = Math.max(64, (image.width || 256) * scale * 0.45);
-      const h = Math.max(64, (image.height || 256) * scale * 0.45);
-      ctx.drawImage(image, -w / 2, -h / 2, w, h);
-      ctx.restore();
+  const scale = 2.4 + (terrainSeed % 7) * 0.12;
+  const ox = (terrainSeed % 97) * 0.37;
+  const oy = ((terrainSeed * 3) % 89) * 0.41;
+
+  for (let by = 0; by < terrainBiomeSize; by++) {
+    for (let bx = 0; bx < terrainBiomeSize; bx++) {
+      const nx = bx / terrainBiomeSize;
+      const ny = by / terrainBiomeSize;
+      // Large continents + mid ridges — not salt-and-pepper noise.
+      let n =
+        fbm2(nx * scale + ox, ny * scale + oy, terrainSeed, 5) * 0.72 +
+        fbm2(nx * scale * 0.35 + 20, ny * scale * 0.35 - 11, terrainSeed + 17, 3) * 0.28;
+      // Gentle warp so borders feel organic.
+      const warp = fbm2(nx * 1.6 + 40, ny * 1.6, terrainSeed + 33, 2);
+      n = Math.max(0, Math.min(1, n + (warp - 0.5) * 0.12));
+      terrainBiomeField[by * terrainBiomeSize + bx] = n;
     }
   }
 
-  // Soft irregular patches (ellipses — not squares)
-  for (let i = 0; i < 90; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const rx = 18 + Math.random() * 90;
-    const ry = 14 + Math.random() * 75;
-    ctx.beginPath();
-    ctx.ellipse(x, y, rx, ry, Math.random() * Math.PI, 0, Math.PI * 2);
-    const dirt = Math.random() > 0.55;
-    ctx.fillStyle = dirt
-      ? `rgba(${70 + Math.random() * 40},${55 + Math.random() * 35},${30 + Math.random() * 25},${0.1 + Math.random() * 0.22})`
-      : `rgba(${35 + Math.random() * 40},${70 + Math.random() * 60},${30 + Math.random() * 35},${0.08 + Math.random() * 0.2})`;
-    ctx.fill();
+  const img = ctx.createImageData(size, size);
+  const px = img.data;
+  const cell = size / terrainBiomeSize;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const bx = Math.min(terrainBiomeSize - 1, Math.floor(x / cell));
+      const by = Math.min(terrainBiomeSize - 1, Math.floor(y / cell));
+      // Bilinear biome for soft edges
+      const fx = x / cell - bx;
+      const fy = y / cell - by;
+      const bx1 = Math.min(terrainBiomeSize - 1, bx + 1);
+      const by1 = Math.min(terrainBiomeSize - 1, by + 1);
+      const b00 = terrainBiomeField[by * terrainBiomeSize + bx];
+      const b10 = terrainBiomeField[by * terrainBiomeSize + bx1];
+      const b01 = terrainBiomeField[by1 * terrainBiomeSize + bx];
+      const b11 = terrainBiomeField[by1 * terrainBiomeSize + bx1];
+      const biome =
+        b00 * (1 - fx) * (1 - fy) +
+        b10 * fx * (1 - fy) +
+        b01 * (1 - fx) * fy +
+        b11 * fx * fy;
+
+      const detail = fbm2(x * 0.035 + ox, y * 0.035 + oy, terrainSeed + 9, 3);
+      const ridge = fbm2(x * 0.012 - oy, y * 0.012 + ox, terrainSeed + 21, 2);
+
+      let col;
+      if (biome < 0.38) {
+        const t = biome / 0.38;
+        col = lerpColor(desertDeep, desert, t * 0.65 + detail * 0.35);
+        // Dune streaks
+        const dune = Math.sin((x * 0.04 + y * 0.01) + ridge * 6) * 0.5 + 0.5;
+        col = lerpColor(col, dust, dune * 0.18 * (1 - t));
+      } else if (biome < 0.62) {
+        const t = (biome - 0.38) / 0.24;
+        col = lerpColor(desert, scrubLight, Math.min(1, t * 1.2));
+        col = lerpColor(col, scrub, 0.35 + detail * 0.4);
+      } else {
+        const t = (biome - 0.62) / 0.38;
+        col = lerpColor(scrub, forest, Math.min(1, t * 1.1));
+        col = lerpColor(col, forestDeep, t * 0.45 + (1 - detail) * 0.2);
+      }
+
+      // Micro variation / soil grain
+      const grain = (detail - 0.5) * 22;
+      const o = (y * size + x) * 4;
+      px[o] = Math.max(0, Math.min(255, col[0] + grain));
+      px[o + 1] = Math.max(0, Math.min(255, col[1] + grain * 1.05));
+      px[o + 2] = Math.max(0, Math.min(255, col[2] + grain * 0.75));
+      px[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // Soft photo texture wash — tinted so it doesn't fight biome colors.
+  if (image) {
+    ctx.save();
+    ctx.globalCompositeOperation = "soft-light";
+    for (let i = 0; i < 28; i++) {
+      const x = Math.random() * size;
+      const y = Math.random() * size;
+      const bx = Math.min(terrainBiomeSize - 1, Math.floor((x / size) * terrainBiomeSize));
+      const by = Math.min(terrainBiomeSize - 1, Math.floor((y / size) * terrainBiomeSize));
+      const biome = terrainBiomeField[by * terrainBiomeSize + bx];
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.random() * Math.PI * 2);
+      ctx.globalAlpha = 0.14 + Math.random() * 0.22;
+      if (biome < 0.4) {
+        ctx.filter = "hue-rotate(-12deg) saturate(0.85) brightness(1.15)";
+      } else if (biome > 0.65) {
+        ctx.filter = "hue-rotate(28deg) saturate(1.1) brightness(0.88)";
+      } else {
+        ctx.filter = "hue-rotate(8deg) saturate(0.95) brightness(1.0)";
+      }
+      const w = 120 + Math.random() * 280;
+      const h = 100 + Math.random() * 240;
+      ctx.drawImage(image, -w / 2, -h / 2, w, h);
+      ctx.restore();
+    }
+    ctx.restore();
   }
 
-  // Fine grain so large flats don't look painted
-  const data = ctx.getImageData(0, 0, size, size);
-  const px = data.data;
-  for (let i = 0; i < px.length; i += 4) {
-    const n = (Math.random() - 0.5) * 28;
-    px[i] = Math.max(0, Math.min(255, px[i] + n));
-    px[i + 1] = Math.max(0, Math.min(255, px[i + 1] + n * 1.05));
-    px[i + 2] = Math.max(0, Math.min(255, px[i + 2] + n * 0.7));
-  }
-  ctx.putImageData(data, 0, 0);
+  // Soft vignette at map feel — slight cooler edges
+  const vig = ctx.createRadialGradient(
+    size * 0.5,
+    size * 0.5,
+    size * 0.25,
+    size * 0.5,
+    size * 0.5,
+    size * 0.72,
+  );
+  vig.addColorStop(0, "rgba(0,0,0,0)");
+  vig.addColorStop(1, "rgba(20,28,14,0.22)");
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, size, size);
 
   const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.MirroredRepeatWrapping;
-  tex.wrapT = THREE.MirroredRepeatWrapping;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.anisotropy = 8;
   tex.colorSpace = THREE.SRGBColorSpace;
-  // Few large mirrored tiles — not a dense square grid
-  const tiles = Math.max(1.6, mapSize / 90);
-  tex.repeat.set(tiles, tiles * (0.85 + Math.random() * 0.3));
-  tex.offset.set(Math.random(), Math.random());
-  tex.rotation = Math.random() * Math.PI * 2;
-  tex.center.set(0.5, 0.5);
   tex.needsUpdate = true;
   return tex;
 }
 
 function makeFallbackTerrainTexture(mapSize) {
-  return bakeRandomTerrainTexture(null, mapSize);
+  return bakeBiomeTerrainTexture(null, mapSize, terrainSeed);
 }
 
 function visionRadiusFor(entity) {
@@ -1806,50 +2112,100 @@ function scatterGroundDecor(scene, size) {
   const group = new THREE.Group();
   group.name = "groundDecor";
 
-  // Soft dirt patches
-  const patchMat = new THREE.MeshStandardMaterial({
-    color: 0x6a5a3a,
-    roughness: 1,
+  const desertRock = new THREE.MeshStandardMaterial({
+    color: 0x8a7a5a,
+    roughness: 0.96,
+    metalness: 0.04,
+    flatShading: true,
+  });
+  const scrubBush = new THREE.MeshStandardMaterial({
+    color: 0x5a6a38,
+    roughness: 0.92,
     metalness: 0,
     flatShading: true,
   });
-  const patchCount = Math.min(80, Math.floor(size * 0.35));
-  for (let i = 0; i < patchCount; i++) {
-    const w = 2.5 + Math.random() * 6;
-    const d = 2 + Math.random() * 5;
-    const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 7), patchMat);
-    mesh.scale.set(w * 0.5, d * 0.5, 1);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.set(
-      4 + Math.random() * (size - 8),
-      0.03,
-      4 + Math.random() * (size - 8),
-    );
-    mesh.rotation.z = Math.random() * Math.PI;
-    group.add(mesh);
-  }
-
-  // Low rock / rubble blobs
-  const rockMat = new THREE.MeshStandardMaterial({
-    color: 0x5a5848,
+  const forestTrunk = new THREE.MeshStandardMaterial({
+    color: 0x4a3a28,
     roughness: 0.95,
-    metalness: 0.05,
+    metalness: 0,
+  });
+  const forestCanopy = new THREE.MeshStandardMaterial({
+    color: 0x2f4a28,
+    roughness: 0.88,
+    metalness: 0,
     flatShading: true,
   });
-  const rockCount = Math.min(60, Math.floor(size * 0.22));
-  for (let i = 0; i < rockCount; i++) {
-    const s = 0.25 + Math.random() * 0.55;
-    const mesh = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(s, 0),
-      rockMat,
-    );
-    mesh.position.set(
-      3 + Math.random() * (size - 6),
-      s * 0.35,
-      3 + Math.random() * (size - 6),
-    );
-    mesh.rotation.set(Math.random(), Math.random(), Math.random());
-    group.add(mesh);
+  const forestCanopyDeep = new THREE.MeshStandardMaterial({
+    color: 0x243a20,
+    roughness: 0.9,
+    metalness: 0,
+    flatShading: true,
+  });
+
+  const tries = Math.min(420, Math.floor(size * 1.35));
+  let trees = 0;
+  let rocks = 0;
+  let bushes = 0;
+  const maxTrees = Math.min(160, Math.floor(size * 0.55));
+  const maxRocks = Math.min(90, Math.floor(size * 0.28));
+  const maxBushes = Math.min(120, Math.floor(size * 0.4));
+
+  for (let i = 0; i < tries; i++) {
+    const x = 5 + Math.random() * (size - 10);
+    const z = 5 + Math.random() * (size - 10);
+    const biome = sampleBiome(x, z, size);
+
+    if (biome > 0.68 && trees < maxTrees) {
+      // Simple pine / canopy tree
+      const h = 0.55 + Math.random() * 0.85;
+      const tree = new THREE.Group();
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.07, h * 0.55, 5),
+        forestTrunk,
+      );
+      trunk.position.y = h * 0.22;
+      tree.add(trunk);
+      const canopy = new THREE.Mesh(
+        new THREE.ConeGeometry(0.28 + Math.random() * 0.22, h * 0.85, 6),
+        Math.random() > 0.45 ? forestCanopy : forestCanopyDeep,
+      );
+      canopy.position.y = h * 0.7;
+      tree.add(canopy);
+      if (Math.random() > 0.55) {
+        const mid = new THREE.Mesh(
+          new THREE.ConeGeometry(0.2 + Math.random() * 0.12, h * 0.45, 6),
+          forestCanopyDeep,
+        );
+        mid.position.y = h * 0.95;
+        tree.add(mid);
+      }
+      tree.position.set(x, 0, z);
+      tree.rotation.y = Math.random() * Math.PI * 2;
+      group.add(tree);
+      trees += 1;
+      continue;
+    }
+
+    if (biome < 0.36 && rocks < maxRocks) {
+      const s = 0.18 + Math.random() * 0.5;
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), desertRock);
+      rock.position.set(x, s * 0.28, z);
+      rock.rotation.set(Math.random(), Math.random(), Math.random());
+      rock.scale.set(1 + Math.random() * 0.4, 0.55 + Math.random() * 0.35, 1 + Math.random() * 0.35);
+      group.add(rock);
+      rocks += 1;
+      continue;
+    }
+
+    if (biome >= 0.36 && biome <= 0.72 && bushes < maxBushes) {
+      const s = 0.22 + Math.random() * 0.35;
+      const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0), scrubBush);
+      bush.position.set(x, s * 0.35, z);
+      bush.scale.set(1.2, 0.55 + Math.random() * 0.35, 1.1);
+      bush.rotation.y = Math.random() * Math.PI;
+      group.add(bush);
+      bushes += 1;
+    }
   }
 
   scene.add(group);
@@ -1871,9 +2227,9 @@ function initThree(size, terrainTexture, home) {
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x12180e);
-  // Distant haze; vision limit is the fog-of-war disc.
-  scene.fog = new THREE.Fog(0x12180e, Math.max(70, aoiRadius * 2.2), Math.max(120, aoiRadius * 4.5));
+  scene.background = new THREE.Color(0x1a2218);
+  // Warm distant haze that sits between desert sand and forest green.
+  scene.fog = new THREE.Fog(0x2a3224, Math.max(80, aoiRadius * 2.4), Math.max(140, aoiRadius * 5));
 
   camera = new THREE.PerspectiveCamera(
     CAMERA_FOV,
@@ -1908,17 +2264,20 @@ function initThree(size, terrainTexture, home) {
   controls.maxPolarAngle = CAMERA_PITCH;
   controls.update();
 
-  const hemi = new THREE.HemisphereLight(0xc8d8a8, 0x1a2010, 1.15);
+  const hemi = new THREE.HemisphereLight(0xe8d8b0, 0x2a3018, 1.05);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xfff0c8, 0.95);
-  sun.position.set(40, 60, 20);
+  const sun = new THREE.DirectionalLight(0xffe2b8, 1.05);
+  sun.position.set(55, 70, 28);
   scene.add(sun);
+  const fill = new THREE.DirectionalLight(0xa8c090, 0.22);
+  fill.position.set(-30, 25, -40);
+  scene.add(fill);
 
   const geo = new THREE.PlaneGeometry(size, size, 1, 1);
   const mat = new THREE.MeshStandardMaterial({
     map: terrainTexture || null,
-    color: terrainTexture ? 0xd0d8c0 : 0x3d5230,
-    roughness: 0.97,
+    color: terrainTexture ? 0xffffff : 0x5a6840,
+    roughness: 0.94,
     metalness: 0.02,
     flatShading: false,
   });
@@ -1933,9 +2292,9 @@ function initThree(size, terrainTexture, home) {
     size,
     Math.min(size, 64),
     0x000000,
-    0x24301c,
+    0x3a4030,
   );
-  grid.material.opacity = 0.08;
+  grid.material.opacity = 0.05;
   grid.material.transparent = true;
   grid.position.set(cx, 0.02, cz);
   scene.add(grid);
@@ -1949,7 +2308,7 @@ function initThree(size, terrainTexture, home) {
   const underlay = new THREE.Mesh(
     new THREE.PlaneGeometry(size + 48, size + 48),
     new THREE.MeshStandardMaterial({
-      color: 0x10160c,
+      color: 0x141810,
       roughness: 1,
       metalness: 0,
     }),
@@ -3303,6 +3662,7 @@ function disposeMeshTree(mesh) {
 }
 
 function buildingHasProperModel(kind) {
+  if (kind === "turret") return true;
   return Boolean(templateForKind(kind) || geometryForKind(kind));
 }
 
@@ -3314,6 +3674,14 @@ function upsertMesh(entity) {
 
   // Replace temporary building boxes once real OBJ/STL templates are ready.
   if (mesh && entity.building && mesh.userData.isFallback && buildingHasProperModel(entity.kind)) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
+  // Swap old command-center placeholder turrets for the procedural Patriot.
+  if (mesh && entity.kind === "turret" && !mesh.userData.isPatriot) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
     state.meshes.delete(entity.id);
@@ -3473,11 +3841,18 @@ function worldMuzzlePoint(mesh, name = "muzzle") {
 }
 
 function faceMeshToward(mesh, x1, z1) {
-  if (!mesh || mesh.userData.building) return;
+  if (!mesh) return;
   const dx = x1 - mesh.position.x;
   const dz = z1 - mesh.position.z;
   if (dx * dx + dz * dz < 1e-6) return;
   const yaw = Math.atan2(dx, dz);
+  if (mesh.userData.isPatriot) {
+    mesh.userData.aimYaw = yaw;
+    const launcher = mesh.getObjectByName("muzzleRoot");
+    if (launcher) launcher.rotation.y = yaw;
+    return;
+  }
+  if (mesh.userData.building) return;
   if (mesh.userData.isTank) {
     // Aim with the turret; hull stays on its travel heading.
     mesh.userData.aimYaw = yaw;
@@ -3769,7 +4144,8 @@ function spawnShotFx(shot) {
   const kind = String(shot.kind || fromMesh?.userData?.kind || "");
   const isTankMg = kind.includes("mg");
   const isTankCannon = kind.includes("tank") && !isTankMg;
-  const isMissile = kind.includes("missile");
+  const isMissile =
+    kind.includes("missile") || kind.includes("patriot") || kind === "turret";
 
   if (isTankMg && fromMesh) {
     const dx = shot.x1 - fromMesh.position.x;
@@ -3854,12 +4230,13 @@ function spawnShotFx(shot) {
       if (barrel) barrel.position.z = -0.055;
     }
   } else if (isMissile) {
+    const isPatriot = kind.includes("patriot") || kind === "turret";
     const smoke = new THREE.Mesh(
-      new THREE.SphereGeometry(0.03, 6, 6),
+      new THREE.SphereGeometry(isPatriot ? 0.045 : 0.03, 6, 6),
       new THREE.MeshBasicMaterial({
-        color: 0xaaccee,
+        color: isPatriot ? 0xddeeff : 0xaaccee,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.75,
         depthWrite: false,
       }),
     );
@@ -3868,13 +4245,34 @@ function spawnShotFx(shot) {
     fx.parts.push({ mesh: smoke, role: "blast" });
 
     const rocket = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.01, 0.014, 0.08, 5),
-      new THREE.MeshBasicMaterial({ color: 0x88ddff }),
+      new THREE.CylinderGeometry(
+        isPatriot ? 0.016 : 0.01,
+        isPatriot ? 0.022 : 0.014,
+        isPatriot ? 0.14 : 0.08,
+        6,
+      ),
+      new THREE.MeshBasicMaterial({ color: isPatriot ? 0xffffff : 0x88ddff }),
     );
     rocket.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
     rocket.position.copy(start);
     scene.add(rocket);
     fx.parts.push({ mesh: rocket, role: "projectile" });
+
+    if (isPatriot) {
+      fx.life = 680;
+      const flare = new THREE.Mesh(
+        new THREE.SphereGeometry(0.02, 6, 6),
+        new THREE.MeshBasicMaterial({
+          color: 0xffaa44,
+          transparent: true,
+          opacity: 0.9,
+          depthWrite: false,
+        }),
+      );
+      flare.position.copy(start);
+      scene.add(flare);
+      fx.parts.push({ mesh: flare, role: "smoke" });
+    }
   } else {
     // Rifle: brief muzzle flash + fast thin tracer bullet
     const flash = new THREE.Mesh(
@@ -4014,8 +4412,13 @@ function updateCombatFx(now) {
         }
       } else if (fx.type === "bullet") {
         spawnMissImpact(fx.end, fx.hit === false);
-      } else if (fx.type === "missile" && fx.hit === false) {
-        spawnMissImpact(fx.end, true);
+      } else if (fx.type === "missile") {
+        if (fx.hit !== false) {
+          spawnTankExplosion(fx.end);
+          applyBlastKnock(fx.end.x, fx.end.z, 0.85);
+        } else {
+          spawnMissImpact(fx.end, true);
+        }
       }
 
       for (const part of fx.parts) disposeFxPart(part);

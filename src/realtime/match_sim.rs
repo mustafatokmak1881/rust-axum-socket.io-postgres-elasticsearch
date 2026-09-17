@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
+use rand::seq::SliceRandom;
 use rand::Rng;
 use uuid::Uuid;
 
@@ -320,6 +321,9 @@ pub fn trainables() -> &'static [UnitDef] {
 }
 
 fn attack_cooldown_for(kind: &str) -> u32 {
+    if kind == "turret" {
+        return 2_800;
+    }
     trainables()
         .iter()
         .find(|u| u.unit == kind)
@@ -329,9 +333,12 @@ fn attack_cooldown_for(kind: &str) -> u32 {
 
 const RIFLE_MAG: u8 = 30;
 const RIFLE_RELOAD_MS: u32 = 5_000;
+/// Patriot engagement bubble — anything that steps into this gets a missile.
+const PATRIOT_RANGE: f32 = 13.5;
+const PATRIOT_DAMAGE: f32 = 520.0;
 
 fn is_rifle_infantry(kind: &str) -> bool {
-    !kind.contains("tank") && !kind.contains("missile")
+    !kind.contains("tank") && !kind.contains("missile") && kind != "turret"
 }
 
 /// Match client `atan2(dx, dz)` — yaw 0 faces +Y / +Z.
@@ -361,8 +368,11 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     let infantry = target.unit && !target.kind.contains("tank");
     if infantry && attacker_kind.contains("tank") {
         10_000.0
-    } else if infantry && attacker_kind.contains("missile") {
-        (base * 0.50).max(90.0)
+    } else if infantry && (attacker_kind.contains("missile") || attacker_kind == "turret") {
+        (base * 0.55).max(110.0)
+    } else if target.kind.contains("tank") && attacker_kind == "turret" {
+        // Guided SAM punch vs armor.
+        (base * 1.15).max(base)
     } else {
         base
     }
@@ -391,8 +401,9 @@ fn shot_hit_chance(
     // Distance where hit chance has dropped to ~50% of point-blank.
     let d0 = if attacker_kind.contains("tank") {
         range * 0.42
-    } else if attacker_kind.contains("missile") {
-        range * 0.32
+    } else if attacker_kind.contains("missile") || attacker_kind == "turret" {
+        // Guided: stays lethal farther out.
+        range * 0.55
     } else {
         range * 0.30
     };
@@ -485,6 +496,18 @@ fn formation_slot(index: usize, count: usize, radius: f32) -> (f32, f32) {
     }
     let spacing = (radius * 2.4 + 0.12).max(0.22);
     // Golden-angle spiral around the click point.
+    const GOLDEN: f32 = 2.399_963;
+    let r = spacing * (index as f32).sqrt();
+    let ang = index as f32 * GOLDEN;
+    (ang.cos() * r, ang.sin() * r)
+}
+
+/// Dense opening-army pack — keeps the starting blob next to the HQ.
+fn tight_pack_slot(index: usize, radius: f32) -> (f32, f32) {
+    if index == 0 {
+        return (0.0, 0.0);
+    }
+    let spacing = (radius * 2.05 + 0.02).max(0.08);
     const GOLDEN: f32 = 2.399_963;
     let r = spacing * (index as f32).sqrt();
     let ang = index as f32 * GOLDEN;
@@ -607,7 +630,59 @@ impl MatchSim {
         }
 
         bots::seed_opening_bots(&mut sim);
+        if !sim.ffa {
+            sim.rebalance_allied_teams();
+        }
         sim
+    }
+
+    /// Non-FFA: shuffle commanders into two balanced sides (e.g. 6 → 3v3).
+    fn rebalance_allied_teams(&mut self) {
+        let mut ids: Vec<Uuid> = self.players.keys().copied().collect();
+        if ids.len() < 2 {
+            return;
+        }
+        let mut rng = rand::thread_rng();
+        ids.shuffle(&mut rng);
+        let split = ids.len() / 2;
+        // Odd counts: randomly give the extra seat to team 0 or 1.
+        let team0_count = if ids.len() % 2 == 1 && rng.gen_bool(0.5) {
+            split + 1
+        } else {
+            split
+        };
+        for (i, id) in ids.iter().enumerate() {
+            let team = if i < team0_count { 0u8 } else { 1u8 };
+            if let Some(player) = self.players.get_mut(id) {
+                player.team = team;
+            }
+            for entity in self.entities.values_mut() {
+                if entity.owner == *id {
+                    entity.team = team;
+                    entity.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Join mid-match onto the smaller allied side (coin-flip if tied).
+    fn pick_allied_team(&self) -> u8 {
+        let mut c0 = 0u32;
+        let mut c1 = 0u32;
+        for player in self.players.values() {
+            match player.team {
+                0 => c0 += 1,
+                1 => c1 += 1,
+                _ => {}
+            }
+        }
+        if c0 < c1 {
+            0
+        } else if c1 < c0 {
+            1
+        } else {
+            rand::thread_rng().gen_range(0..=1)
+        }
     }
 
     pub(crate) fn spawn_commander(
@@ -764,7 +839,7 @@ impl MatchSim {
         let team = if self.ffa {
             index as u8
         } else {
-            (index % 2) as u8
+            self.pick_allied_team()
         };
 
         self.spawn_commander(user_id, name, faction, team, flag, true, None);
@@ -779,7 +854,7 @@ impl MatchSim {
         self.players.values().filter(|p| !p.is_bot()).count()
     }
 
-    /// Opening army: 50 rangers + 1 tank at the commander's HQ.
+    /// Opening army: 50 rangers + 1 tank packed tight beside the HQ.
     fn spawn_starting_force(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
         let ranger = trainables()
             .iter()
@@ -790,20 +865,45 @@ impl MatchSim {
             .find(|u| u.unit == "tank")
             .expect("tank def");
         let hq_r = building_radius("hq");
-        for _ in 0..50 {
-            let r = unit_radius(ranger.unit);
-            let (sx, sy) = self.find_free_spawn_near(
-                hx,
-                hy,
-                r,
-                Uuid::nil(),
-                Some((hx, hy, hq_r)),
-            );
+        let r = unit_radius(ranger.unit);
+        let tr = unit_radius(tank.unit);
+        let map = self.map_size as f32;
+        // Rally blob just outside the HQ hull — not a wide spiral search.
+        let pack_x = (hx + hq_r + r + 0.28).clamp(0.5, map - 0.5);
+        let pack_y = hy.clamp(0.5, map - 0.5);
+        const N: usize = 50;
+        for i in 0..N {
+            let (ox, oy) = tight_pack_slot(i, r);
+            let mut sx = (pack_x + ox).clamp(0.5, map - 0.5);
+            let mut sy = (pack_y + oy).clamp(0.5, map - 0.5);
+            if self.collides_at(Uuid::nil(), sx, sy, r, None, true)
+                || self.point_hits_solid(sx, sy, r, hx, hy, hq_r)
+            {
+                (sx, sy) = self.find_free_spawn_near(
+                    pack_x,
+                    pack_y,
+                    r,
+                    Uuid::nil(),
+                    Some((hx, hy, hq_r)),
+                );
+            }
             self.insert_unit(user_id, team, ranger, sx, sy);
         }
-        let tr = unit_radius(tank.unit);
-        let (sx, sy) = self.find_free_spawn_near(hx, hy, tr, Uuid::nil(), Some((hx, hy, hq_r)));
+        let mut sx = (pack_x + 0.55).clamp(0.5, map - 0.5);
+        let mut sy = (pack_y - 0.35).clamp(0.5, map - 0.5);
+        if self.collides_at(Uuid::nil(), sx, sy, tr, None, true)
+            || self.point_hits_solid(sx, sy, tr, hx, hy, hq_r)
+        {
+            (sx, sy) = self.find_free_spawn_near(pack_x, pack_y, tr, Uuid::nil(), Some((hx, hy, hq_r)));
+        }
         self.insert_unit(user_id, team, tank, sx, sy);
+    }
+
+    fn point_hits_solid(&self, x: f32, y: f32, r: f32, sx: f32, sy: f32, sr: f32) -> bool {
+        let dx = sx - x;
+        let dy = sy - y;
+        let min_d = r + sr + collision_pad();
+        dx * dx + dy * dy < min_d * min_d
     }
 
     fn insert_unit(&mut self, owner: Uuid, team: u8, def: &UnitDef, x: f32, y: f32) {
@@ -1096,6 +1196,11 @@ impl MatchSim {
 
         let flag = player.flag.clone();
         let id = Uuid::new_v4();
+        let (damage, range) = if def.kind == "turret" {
+            (PATRIOT_DAMAGE, PATRIOT_RANGE)
+        } else {
+            (0.0, 0.0)
+        };
         self.put_entity(Entity {
             id,
             kind: def.kind.into(),
@@ -1113,8 +1218,8 @@ impl MatchSim {
             target: None,
             move_to: None,
             speed: 0.0,
-            damage: 0.0,
-            range: 0.0,
+            damage,
+            range,
             attack_cooldown_ms: 0,
             mag_ammo: 0,
             dirty: true,
@@ -1429,7 +1534,11 @@ impl MatchSim {
                 }
             }
 
-            // Buildings do not fire for now — only units (soldiers/tanks) attack.
+            // Patriot Battery (and any future armed buildings) engage while finished.
+            if entity.build_remaining_ms == 0 && entity.damage > 0.0 && entity.range > 0.0 {
+                self.tick_armed_building(&mut entity, dt_ms);
+            }
+
             self.put_entity(entity);
         }
 
@@ -2103,6 +2212,104 @@ impl MatchSim {
         }
     }
 
+    /// Finished defense buildings (Patriot Battery) lock and fire inside their bubble.
+    fn tick_armed_building(&mut self, entity: &mut Entity, dt_ms: u32) {
+        if entity.attack_cooldown_ms > 0 {
+            entity.attack_cooldown_ms = entity.attack_cooldown_ms.saturating_sub(dt_ms);
+        }
+
+        if self.tick % 2 == 0 {
+            let stale = match entity.target {
+                None => true,
+                Some(tid) => match self.entities.get(&tid) {
+                    None => true,
+                    Some(t) => {
+                        if t.hp <= 0.0 || t.team == entity.team {
+                            true
+                        } else {
+                            let dx = t.x - entity.x;
+                            let dy = t.y - entity.y;
+                            (dx * dx + dy * dy).sqrt() > entity.range
+                        }
+                    }
+                },
+            };
+            if stale {
+                entity.target =
+                    self.find_enemy_in_range(entity.id, entity.team, entity.x, entity.y, entity.range);
+            }
+        }
+
+        let Some(tid) = entity.target else {
+            return;
+        };
+        let Some(target) = self.entities.get(&tid) else {
+            entity.target = None;
+            return;
+        };
+        let dx = target.x - entity.x;
+        let dy = target.y - entity.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > entity.range {
+            entity.target = None;
+            return;
+        }
+
+        if dist > 0.001 {
+            let desired = world_aim_yaw(dx, dy);
+            let err = shortest_angle(entity.aim_yaw, desired);
+            let step = 2.4 * (dt_ms as f32 / 1000.0);
+            entity.aim_yaw += err.clamp(-step, step);
+            entity.dirty = true;
+            if err.abs() > 0.12 {
+                return;
+            }
+        }
+
+        let cover = self.shot_cover(entity.id, entity.x, entity.y, target);
+        if cover.blocked || entity.attack_cooldown_ms > 0 {
+            return;
+        }
+
+        entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
+        entity.dirty = true;
+        let dmg = hit_damage(&entity.kind, target, entity.damage);
+        let tx = target.x;
+        let ty = target.y;
+        let fx = entity.x;
+        let fy = entity.y;
+        let from_id = entity.id;
+        let hit_p = shot_hit_chance(&entity.kind, target, dist, entity.range, cover.exposure);
+        let mut rng = rand::thread_rng();
+        let hit = rng.gen_range(0.0..1.0) < hit_p.max(0.55);
+        let (ix, iy) = if hit {
+            (tx, ty)
+        } else {
+            miss_impact(&mut rng, target, fx, fy)
+        };
+
+        if let Some(t) = self.entities.get_mut(&tid) {
+            if hit {
+                t.hp -= dmg;
+                t.dirty = true;
+            }
+            if t.unit && !t.kind.contains("tank") {
+                t.prone_until_tick = t.prone_until_tick.max(self.tick + 24);
+            }
+        }
+
+        self.shots.push(ShotEvent {
+            from: from_id,
+            to: tid,
+            x0: fx,
+            y0: fy,
+            x1: ix,
+            y1: iy,
+            kind: "patriot_missile".into(),
+            hit,
+        });
+    }
+
     /// Nearest living enemy unit or building inside `range` of (x, y).
     /// Prefers combat units that actually have a firing angle; skips targets fully behind walls.
     fn find_enemy_in_range(
@@ -2512,11 +2719,11 @@ impl MatchSim {
     ) -> (f32, f32) {
         let map = self.map_size as f32;
         let base = extra_solid
-            .map(|(_, _, er)| er + radius + collision_pad() + 0.15)
-            .unwrap_or(radius + 0.8);
-        for k in 0..48 {
-            let ang = k as f32 * 0.7;
-            let dist = base + (k as f32) * 0.18;
+            .map(|(_, _, er)| er + radius + collision_pad() + 0.08)
+            .unwrap_or(radius + 0.35);
+        for k in 0..64 {
+            let ang = k as f32 * 0.55;
+            let dist = base + (k as f32) * 0.09;
             let x = (bx + ang.cos() * dist).clamp(0.5, map - 0.5);
             let y = (by + ang.sin() * dist).clamp(0.5, map - 0.5);
             if let Some((ex, ey, er)) = extra_solid {
@@ -2532,8 +2739,8 @@ impl MatchSim {
             }
         }
         (
-            (bx + base + 0.4).clamp(0.5, map - 0.5),
-            (by + base + 0.4).clamp(0.5, map - 0.5),
+            (bx + base + 0.2).clamp(0.5, map - 0.5),
+            (by + base + 0.2).clamp(0.5, map - 0.5),
         )
     }
 
@@ -2733,37 +2940,44 @@ impl MatchSim {
         visible
     }
 
+    /// Teams that still have anything on the map (units or buildings).
+    /// HQ loss marks a player DEAD for scoreboard/build, but leftover army keeps them in the fight.
+    fn teams_with_forces(&self) -> HashMap<u8, f32> {
+        let mut teams: HashMap<u8, f32> = HashMap::new();
+        for entity in self.entities.values() {
+            if entity.hp <= 0.0 {
+                continue;
+            }
+            let Some(player) = self.players.get(&entity.owner) else {
+                continue;
+            };
+            *teams.entry(player.team).or_default() += entity.hp.max(0.0);
+        }
+        teams
+    }
+
     fn check_victory(&mut self) {
         if self.ended {
             return;
         }
+        let force_teams = self.teams_with_forces();
+
         if self.created_at.elapsed() >= self.max_duration {
             self.ended = true;
             self.end_reason = "Time limit".into();
-            // Highest remaining HQ hp team wins loosely: most alive players' team.
-            let mut team_alive: HashMap<u8, u32> = HashMap::new();
-            for player in self.players.values().filter(|p| p.alive) {
-                *team_alive.entry(player.team).or_default() += 1;
-            }
-            self.winner_team = team_alive
+            self.winner_team = force_teams
                 .into_iter()
-                .max_by_key(|(_, c)| *c)
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(t, _)| t);
             return;
         }
 
-        let alive_teams: HashSet<u8> = self
-            .players
-            .values()
-            .filter(|p| p.alive)
-            .map(|p| p.team)
-            .collect();
-
+        // Don't end on HQ death alone — only when one side has nothing left on the field.
         // Drop-in matches: don't end while only one commander has joined yet.
-        if self.players.len() >= 2 && alive_teams.len() <= 1 {
+        if self.players.len() >= 2 && force_teams.len() <= 1 {
             self.ended = true;
-            self.winner_team = alive_teams.into_iter().next();
-            self.end_reason = "Last command standing".into();
+            self.winner_team = force_teams.into_keys().next();
+            self.end_reason = "Last force standing".into();
         }
     }
 
