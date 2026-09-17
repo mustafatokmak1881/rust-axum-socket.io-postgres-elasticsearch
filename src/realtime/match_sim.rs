@@ -168,6 +168,8 @@ pub struct UnitDef {
     pub damage: f32,
     pub speed: f32,
     pub range: f32,
+    /// Time between shots (realistic reload / burst spacing).
+    pub attack_ms: u32,
 }
 
 pub fn buildables() -> &'static [BuildDef] {
@@ -228,63 +230,78 @@ pub fn buildables() -> &'static [BuildDef] {
 pub fn trainables() -> &'static [UnitDef] {
     // Scale: HQ visual ~1.4 world units ≈ ~20 m → 1 wu ≈ 14 m.
     // Speeds are world-units / second (applied each tick as speed * dt).
+    // Balance: infantry cheap & common; tanks rare, slow reload, lethal.
     &[
         UnitDef {
             unit: "ranger",
             name: "Ranger",
             from_building: "barracks",
-            cost_supplies: 150,
+            cost_supplies: 120,
             cost_fuel: 0,
-            cost_munitions: 50,
-            train_ms: 4_000,
-            hp: 120.0,
-            damage: 12.0,
+            cost_munitions: 40,
+            train_ms: 3_500,
+            hp: 90.0,
+            damage: 10.0,
             // ~5 m/s jog → ≈ 0.35 wu/s
             speed: 0.35,
             range: 4.0,
+            attack_ms: 1_000,
         },
         UnitDef {
             unit: "missile_defender",
             name: "Missile Defender",
             from_building: "barracks",
-            cost_supplies: 200,
-            cost_fuel: 0,
-            cost_munitions: 100,
-            train_ms: 5_000,
-            hp: 100.0,
-            damage: 18.0,
+            cost_supplies: 280,
+            cost_fuel: 40,
+            cost_munitions: 160,
+            train_ms: 8_000,
+            hp: 95.0,
+            // Anti-armor punch — can threaten tanks in numbers
+            damage: 55.0,
             // heavier infantry ~4 m/s
             speed: 0.28,
             range: 7.0,
+            attack_ms: 3_200,
         },
         UnitDef {
             unit: "tank",
             name: "Crusader Tank",
             from_building: "war_factory",
-            cost_supplies: 700,
-            cost_fuel: 200,
-            cost_munitions: 200,
-            train_ms: 10_000,
-            hp: 500.0,
-            damage: 40.0,
-            // combat pace ~8 m/s
-            speed: 0.55,
-            range: 5.5,
+            cost_supplies: 2_200,
+            cost_fuel: 900,
+            cost_munitions: 700,
+            train_ms: 48_000,
+            hp: 1_600.0,
+            // One shell deletes infantry; several needed vs another tank
+            damage: 200.0,
+            // slower combat pace ~6 m/s
+            speed: 0.42,
+            range: 7.0,
+            attack_ms: 4_000,
         },
         UnitDef {
             unit: "tank_desert",
             name: "Desert Crusader",
             from_building: "war_factory",
-            cost_supplies: 700,
-            cost_fuel: 200,
-            cost_munitions: 200,
-            train_ms: 10_000,
-            hp: 500.0,
-            damage: 40.0,
-            speed: 0.55,
-            range: 5.5,
+            cost_supplies: 2_200,
+            cost_fuel: 900,
+            cost_munitions: 700,
+            train_ms: 48_000,
+            hp: 1_600.0,
+            damage: 200.0,
+            speed: 0.42,
+            range: 7.0,
+            attack_ms: 4_000,
         },
     ]
+}
+
+fn attack_cooldown_for(kind: &str) -> u32 {
+    trainables()
+        .iter()
+        .find(|u| u.unit == kind)
+        .map(|u| u.attack_ms)
+        .unwrap_or(1_000)
 }
 
 /// Client `BUILDING_MODELS[].target` — max visual dimension after fit.
@@ -1207,7 +1224,7 @@ impl MatchSim {
                     let dy = target.y - entity.y;
                     let dist = (dx * dx + dy * dy).sqrt();
                     if dist <= entity.range && entity.attack_cooldown_ms == 0 {
-                        entity.attack_cooldown_ms = 800;
+                        entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
                         entity.dirty = true;
                         let dmg = entity.damage;
                         let tx = target.x;

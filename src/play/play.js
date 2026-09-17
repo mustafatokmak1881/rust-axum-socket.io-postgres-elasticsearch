@@ -340,7 +340,7 @@ function renderUnitList(items) {
       (item) => `
       <button type="button" class="unit-item" data-unit="${escapeHtml(item.unit)}" data-from="${escapeHtml(item.from_building)}">
         <strong>${escapeHtml(item.name)}</strong>
-        <small>from ${escapeHtml(item.from_building)} · ${item.cost_supplies}s</small>
+        <small>from ${escapeHtml(item.from_building)} · ${item.cost_supplies}s/${item.cost_fuel}f · ${Math.round((item.train_ms || 0) / 1000)}s</small>
       </button>`,
     )
     .join("");
@@ -2047,20 +2047,30 @@ function createTankMesh(teamColor) {
   const cupola = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.14), matStd(0x3d4730));
   cupola.position.set(0, 0.12, -0.02);
   turret.add(cupola);
+
+  // Barrel group recoils along local -Z when the main gun fires.
+  const barrelGroup = new THREE.Group();
+  barrelGroup.name = "tankBarrel";
+  barrelGroup.position.set(0, 0.125, 0);
   const barrel = new THREE.Mesh(
     new THREE.CylinderGeometry(0.012, 0.015, 0.22, 6),
     matStd(0x1a1a16, { metalness: 0.65, roughness: 0.4 }),
   );
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0.125, 0.12);
-  turret.add(barrel);
+  barrel.position.set(0, 0, 0.12);
+  barrelGroup.add(barrel);
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0, 0.125, 0.24);
-  turret.add(tip);
+  tip.position.set(0, 0, 0.24);
+  barrelGroup.add(tip);
+  turret.add(barrelGroup);
   g.add(turret);
 
   g.userData.unitHeight = 0.16;
+  g.userData.isTank = true;
+  g.userData.hullTurnRate = 2.0;
+  g.userData.turretTurnRate = 1.35;
+  g.userData.barrelRecoil = 0;
   return g;
 }
 
@@ -2116,12 +2126,13 @@ function upsertMesh(entity) {
     mesh = null;
   }
 
-  // Upgrade old unit boxes / static infantry to walk-capable rigs.
+  // Upgrade old unit boxes / static infantry to walk-capable / tank turret rigs.
   if (mesh && entity.unit) {
     const kind = String(entity.kind || "");
     const isTank = kind.includes("tank");
     const needsWalkRig =
       !mesh.userData.isUnitRig ||
+      (isTank && (!mesh.userData.isTank || !mesh.getObjectByName("tankBarrel"))) ||
       (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 3));
     if (needsWalkRig) {
       scene.remove(mesh);
@@ -2269,22 +2280,58 @@ function faceMeshToward(mesh, x1, z1) {
   const dx = x1 - mesh.position.x;
   const dz = z1 - mesh.position.z;
   if (dx * dx + dz * dz < 1e-6) return;
-  mesh.userData.faceYaw = Math.atan2(dx, dz);
-  // Snap quickly when firing so the muzzle lines up with the tracer.
-  mesh.rotation.y = mesh.userData.faceYaw;
+  const yaw = Math.atan2(dx, dz);
+  if (mesh.userData.isTank) {
+    // Aim with the turret; hull stays on its travel heading.
+    mesh.userData.aimYaw = yaw;
+  } else {
+    mesh.userData.faceYaw = yaw;
+    // Infantry snap onto the shot line quickly.
+    mesh.rotation.y = yaw;
+  }
+}
+
+function shortestAngle(from, to) {
+  let diff = to - from;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return diff;
 }
 
 function smoothUnitFacing(mesh, dt) {
   if (!mesh?.userData?.isUnitRig) return;
+
+  if (mesh.userData.isTank) {
+    const hullRate = mesh.userData.hullTurnRate || 2.0;
+    const turretRate = mesh.userData.turretTurnRate || 1.35;
+    const turret = mesh.getObjectByName("muzzleRoot");
+
+    // Hull slowly follows travel direction.
+    if (mesh.userData.faceYaw != null) {
+      const diff = shortestAngle(mesh.rotation.y, mesh.userData.faceYaw);
+      const maxStep = hullRate * dt;
+      mesh.rotation.y += Math.max(-maxStep, Math.min(maxStep, diff));
+    }
+
+    // Turret independently tracks aim (or hull heading if no aim yet).
+    if (turret) {
+      const aim =
+        mesh.userData.aimYaw != null ? mesh.userData.aimYaw : mesh.userData.faceYaw;
+      if (aim != null) {
+        const desiredLocal = shortestAngle(0, aim - mesh.rotation.y);
+        const cur = turret.rotation.y;
+        const diff = shortestAngle(cur, desiredLocal);
+        const maxStep = turretRate * dt;
+        turret.rotation.y = cur + Math.max(-maxStep, Math.min(maxStep, diff));
+      }
+    }
+    return;
+  }
+
   if (mesh.userData.faceYaw == null) return;
-  const target = mesh.userData.faceYaw;
-  let cur = mesh.rotation.y;
-  let diff = target - cur;
-  // Shortest angle
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
+  const diff = shortestAngle(mesh.rotation.y, mesh.userData.faceYaw);
   const turn = Math.min(1, dt * 12);
-  mesh.rotation.y = cur + diff * turn;
+  mesh.rotation.y += diff * turn;
 }
 
 function updateInfantryWalk(mesh, dt, now) {
@@ -2337,11 +2384,6 @@ function spawnShotFx(shot) {
   if (!scene) return;
   const fromMesh = state.meshes.get(shot.from);
   const toMesh = state.meshes.get(shot.to);
-  const you = state.match?.you;
-  const fromEnt = state.entities.get(shot.from);
-  const toEnt = state.entities.get(shot.to);
-  const involvesYou =
-    (fromEnt && fromEnt.owner === you) || (toEnt && toEnt.owner === you);
 
   faceMeshToward(fromMesh, shot.x1, shot.y1);
 
@@ -2356,54 +2398,132 @@ function spawnShotFx(shot) {
       )
     : new THREE.Vector3(shot.x1, 0.12, shot.y1);
 
-  const kind = String(shot.kind || "");
-  const isTank = kind.includes("tank");
-  const isMissile = kind.includes("missile") || kind === "turret";
+  const kind = String(shot.kind || fromMesh?.userData?.kind || "");
+  const isTank = kind.includes("tank") || !!fromMesh?.userData?.isTank;
+  const isMissile = kind.includes("missile");
+  const dir = new THREE.Vector3().subVectors(end, start);
+  const dist = Math.max(0.05, dir.length());
+  dir.normalize();
 
-  // Tracer streak
-  const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
-  const mat = new THREE.LineBasicMaterial({
-    color: isTank ? 0xff9933 : isMissile ? 0x66ddff : 0xffe066,
-    transparent: true,
-    opacity: involvesYou ? 0.95 : 0.7,
-    depthTest: true,
-  });
-  const line = new THREE.Line(geo, mat);
-  scene.add(line);
+  const now = performance.now();
+  const fx = {
+    type: isTank ? "shell" : isMissile ? "missile" : "bullet",
+    born: now,
+    life: isTank ? 380 : isMissile ? 520 : 90,
+    start: start.clone(),
+    end: end.clone(),
+    dir: dir.clone(),
+    dist,
+    fromMesh: fromMesh || null,
+    parts: [],
+  };
 
-  // Muzzle flash sprite (simple bright sphere)
-  const flash = new THREE.Mesh(
-    new THREE.SphereGeometry(isTank ? 0.06 : 0.035, 6, 6),
-    new THREE.MeshBasicMaterial({
-      color: 0xfff2a8,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-    }),
-  );
-  flash.position.copy(start);
-  scene.add(flash);
+  if (isTank) {
+    // Heavy muzzle blast
+    const blast = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05, 8, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xffcc66,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+      }),
+    );
+    blast.position.copy(start);
+    scene.add(blast);
+    fx.parts.push({ mesh: blast, role: "blast" });
 
-  // Impact spark
-  const impact = new THREE.Mesh(
-    new THREE.SphereGeometry(isTank ? 0.05 : 0.03, 6, 6),
-    new THREE.MeshBasicMaterial({
-      color: 0xff5533,
-      transparent: true,
-      opacity: 0.9,
-      depthWrite: false,
-    }),
-  );
-  impact.position.copy(end);
-  scene.add(impact);
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.04, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x9a9a88,
+        transparent: true,
+        opacity: 0.65,
+        depthWrite: false,
+      }),
+    );
+    smoke.position.copy(start).addScaledVector(dir, 0.04);
+    scene.add(smoke);
+    fx.parts.push({ mesh: smoke, role: "smoke" });
 
-  activeFx.push({
-    line,
-    flash,
-    impact,
-    born: performance.now(),
-    life: isTank ? 220 : 160,
-  });
+    // Visible AP shell
+    const shell = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.016, 0.07, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffdd88 }),
+    );
+    shell.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    shell.position.copy(start);
+    scene.add(shell);
+    fx.parts.push({ mesh: shell, role: "projectile" });
+
+    // Barrel kick + slight hull shudder
+    if (fromMesh) {
+      fromMesh.userData.barrelRecoil = 1;
+      fromMesh.userData.hullKick = 1;
+      const barrel = fromMesh.getObjectByName("tankBarrel");
+      if (barrel) barrel.position.z = -0.055;
+    }
+  } else if (isMissile) {
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.03, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0xaaccee,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+      }),
+    );
+    smoke.position.copy(start);
+    scene.add(smoke);
+    fx.parts.push({ mesh: smoke, role: "blast" });
+
+    const rocket = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.01, 0.014, 0.08, 5),
+      new THREE.MeshBasicMaterial({ color: 0x88ddff }),
+    );
+    rocket.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    rocket.position.copy(start);
+    scene.add(rocket);
+    fx.parts.push({ mesh: rocket, role: "projectile" });
+  } else {
+    // Rifle: brief muzzle flash + fast thin tracer bullet
+    const flash = new THREE.Mesh(
+      new THREE.SphereGeometry(0.018, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0xfff6c8,
+        transparent: true,
+        opacity: 1,
+        depthWrite: false,
+      }),
+    );
+    flash.position.copy(start);
+    scene.add(flash);
+    fx.parts.push({ mesh: flash, role: "blast" });
+
+    const tip = start.clone().addScaledVector(dir, Math.min(0.55, dist * 0.35));
+    const tracerGeo = new THREE.BufferGeometry().setFromPoints([start, tip]);
+    const tracer = new THREE.Line(
+      tracerGeo,
+      new THREE.LineBasicMaterial({
+        color: 0xffe8a0,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+      }),
+    );
+    scene.add(tracer);
+    fx.parts.push({ mesh: tracer, role: "tracer", tipLen: Math.min(0.55, dist * 0.35) });
+
+    const bullet = new THREE.Mesh(
+      new THREE.SphereGeometry(0.008, 5, 5),
+      new THREE.MeshBasicMaterial({ color: 0xfff0b0 }),
+    );
+    bullet.position.copy(start);
+    scene.add(bullet);
+    fx.parts.push({ mesh: bullet, role: "projectile" });
+  }
+
+  activeFx.push(fx);
 }
 
 function playShots(shots) {
@@ -2412,29 +2532,127 @@ function playShots(shots) {
   }
 }
 
+function disposeFxPart(part) {
+  if (!part?.mesh) return;
+  scene?.remove(part.mesh);
+  part.mesh.geometry?.dispose?.();
+  if (part.mesh.material) {
+    if (Array.isArray(part.mesh.material)) part.mesh.material.forEach((m) => m.dispose?.());
+    else part.mesh.material.dispose?.();
+  }
+}
+
 function updateCombatFx(now) {
+  // Tank barrel spring-back + hull kick settle
+  for (const mesh of state.meshes.values()) {
+    if (!mesh.userData?.isTank) continue;
+    const barrel = mesh.getObjectByName("tankBarrel");
+    if (mesh.userData.barrelRecoil > 0) {
+      mesh.userData.barrelRecoil = Math.max(0, mesh.userData.barrelRecoil - 0.045);
+      if (barrel) {
+        barrel.position.z = -0.055 * mesh.userData.barrelRecoil;
+      }
+    } else if (barrel && barrel.position.z !== 0) {
+      barrel.position.z *= 0.7;
+      if (Math.abs(barrel.position.z) < 0.001) barrel.position.z = 0;
+    }
+    if (mesh.userData.hullKick > 0) {
+      mesh.userData.hullKick = Math.max(0, mesh.userData.hullKick - 0.06);
+      // Visual shudder: tiny pitch on turret
+      const turret = mesh.getObjectByName("muzzleRoot");
+      if (turret) {
+        turret.rotation.x = -0.08 * mesh.userData.hullKick;
+      }
+    } else {
+      const turret = mesh.getObjectByName("muzzleRoot");
+      if (turret && turret.rotation.x) {
+        turret.rotation.x *= 0.75;
+        if (Math.abs(turret.rotation.x) < 0.001) turret.rotation.x = 0;
+      }
+    }
+  }
+
   for (let i = activeFx.length - 1; i >= 0; i--) {
     const fx = activeFx[i];
-    const t = (now - fx.born) / fx.life;
-    if (t >= 1) {
-      scene?.remove(fx.line);
-      scene?.remove(fx.flash);
-      scene?.remove(fx.impact);
-      fx.line.geometry.dispose();
-      fx.line.material.dispose();
-      fx.flash.geometry.dispose();
-      fx.flash.material.dispose();
-      fx.impact.geometry.dispose();
-      fx.impact.material.dispose();
-      activeFx.splice(i, 1);
-      continue;
+    const t = Math.min(1, (now - fx.born) / fx.life);
+    const pos = fx.start.clone().lerp(fx.end, t);
+
+    for (const part of fx.parts) {
+      if (part.role === "projectile") {
+        part.mesh.position.copy(pos);
+      } else if (part.role === "tracer") {
+        const tip = fx.start.clone().addScaledVector(fx.dir, part.tipLen || 0.4);
+        const head = pos.clone();
+        const tail = head.clone().addScaledVector(fx.dir, -(part.tipLen || 0.4));
+        // Keep tracer behind the bullet head
+        const a = t < 0.15 ? fx.start : tail;
+        const b = head;
+        part.mesh.geometry.setFromPoints([a, b]);
+        part.mesh.geometry.attributes.position.needsUpdate = true;
+        part.mesh.material.opacity = 0.95 * (1 - t * 0.5);
+      } else if (part.role === "blast") {
+        const fade = Math.max(0, 1 - t * 4);
+        part.mesh.material.opacity = fade;
+        const grow = fx.type === "shell" ? 1 + t * 6 : 1 + t * 3;
+        part.mesh.scale.setScalar(grow);
+      } else if (part.role === "smoke") {
+        part.mesh.material.opacity = 0.55 * (1 - t);
+        part.mesh.scale.setScalar(1 + t * 5);
+        part.mesh.position.copy(fx.start).addScaledVector(fx.dir, 0.04 + t * 0.08);
+      }
     }
-    const fade = 1 - t;
-    fx.line.material.opacity = fade * 0.85;
-    fx.flash.material.opacity = fade;
-    fx.flash.scale.setScalar(1 + t * 1.8);
-    fx.impact.material.opacity = fade * 0.9;
-    fx.impact.scale.setScalar(1 + t * 2.2);
+
+    if (t >= 1) {
+      // Impact burst at destination
+      if (fx.type === "shell") {
+        const boom = new THREE.Mesh(
+          new THREE.SphereGeometry(0.06, 8, 8),
+          new THREE.MeshBasicMaterial({
+            color: 0xff6622,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+          }),
+        );
+        boom.position.copy(fx.end);
+        scene.add(boom);
+        activeFx.push({
+          type: "impact",
+          born: now,
+          life: 280,
+          parts: [{ mesh: boom, role: "blast" }],
+          start: fx.end.clone(),
+          end: fx.end.clone(),
+          dir: new THREE.Vector3(0, 1, 0),
+          dist: 0,
+        });
+      } else if (fx.type === "bullet") {
+        const spark = new THREE.Mesh(
+          new THREE.SphereGeometry(0.012, 5, 5),
+          new THREE.MeshBasicMaterial({
+            color: 0xffcc66,
+            transparent: true,
+            opacity: 0.85,
+            depthWrite: false,
+          }),
+        );
+        spark.position.copy(fx.end);
+        scene.add(spark);
+        activeFx.push({
+          type: "impact",
+          born: now,
+          life: 120,
+          parts: [{ mesh: spark, role: "blast" }],
+          start: fx.end.clone(),
+          end: fx.end.clone(),
+          dir: new THREE.Vector3(0, 1, 0),
+          dist: 0,
+        });
+      }
+
+      for (const part of fx.parts) disposeFxPart(part);
+      activeFx.splice(i, 1);
+    }
   }
 }
 
