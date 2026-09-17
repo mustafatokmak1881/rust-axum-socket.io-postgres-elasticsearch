@@ -486,12 +486,12 @@ const Sfx = {
   rifleRest: 0.5,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
   ranges: {
-    rifle: { ref: 6, max: 28, exp: 1.85 },
-    tank: { ref: 18, max: 150, exp: 1.2 },
-    missile: { ref: 8, max: 48, exp: 1.6 },
-    build: { ref: 5, max: 22, exp: 1.85 },
-    collapse: { ref: 8, max: 56, exp: 1.5 },
-    complete: { ref: 5, max: 26, exp: 1.85 },
+    rifle: { ref: 3.5, max: 16, exp: 2.6 },
+    tank: { ref: 5.5, max: 28, exp: 2.35 },
+    missile: { ref: 4.5, max: 20, exp: 2.4 },
+    build: { ref: 3.5, max: 14, exp: 2.5 },
+    collapse: { ref: 5, max: 22, exp: 2.2 },
+    complete: { ref: 3.5, max: 14, exp: 2.5 },
   },
 
   ensure() {
@@ -567,18 +567,50 @@ const Sfx = {
     return { x: 0, z: 0 };
   },
 
+  /** Ground radius the current camera actually sees. */
+  viewRadius() {
+    const dist = controls?.getDistance?.() || CAMERA_DIST;
+    return Math.max(5, dist * 0.95);
+  },
+
+  panAt(worldX) {
+    const ear = this.listenerXZ();
+    const span = this.viewRadius() * 0.85;
+    return Math.max(-0.95, Math.min(0.95, (worldX - ear.x) / span));
+  },
+
   /**
-   * 0 = inaudible, 1 = full. Natural falloff: loud nearby, quiet mid-range, mute far.
+   * 0 = mute, 1 = at the look-point. Steep falloff so near vs far is obvious.
    */
   volumeAt(worldX, worldY, range) {
     const spec = range || this.ranges.rifle;
-    const { ref, max } = spec;
     const ear = this.listenerXZ();
+    const zoom = (controls?.getDistance?.() || CAMERA_DIST) / CAMERA_DIST;
+    const z = Math.max(0.8, Math.min(1.4, zoom));
+    const ref = spec.ref * z;
+    const max = spec.max * z;
     const d = Math.hypot(worldX - ear.x, worldY - ear.z);
     if (!(d < max)) return 0;
     if (d <= ref) return 1;
     const t = (d - ref) / (max - ref);
-    return Math.pow(1 - t, spec.exp || 1.85);
+    // Extra square so mid-screen is already clearly quieter than under the cursor.
+    return Math.pow(1 - t, spec.exp || 2.4);
+  },
+
+  /** Gain used for one-shot samples — do not flatten with pow<1. */
+  sampleGain(vol, peak) {
+    return Math.max(0.0001, peak * vol * vol);
+  },
+
+  startSpatialSource(src, x, y, vol, dest, peak) {
+    const g = this.ctx.createGain();
+    g.gain.value = this.sampleGain(vol, peak);
+    const pan = this.ctx.createStereoPanner();
+    pan.pan.value = this.panAt(x);
+    src.connect(g);
+    g.connect(pan);
+    pan.connect(dest);
+    src.start();
   },
 
   noiseBuffer(seconds = 0.2) {
@@ -634,20 +666,17 @@ const Sfx = {
   rifle(x, y) {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.rifle);
-    if (vol <= 0.004) return;
+    if (vol <= 0.008) return;
     const now = performance.now();
-    if (now - this.lastRifleAt < 42) return;
-    this.lastRifleAt = now;
+    // Distant pops must not steal the slot from a shot under the camera.
+    if (vol < 0.35 && now - this.lastRifleAt < 42) return;
+    if (vol >= 0.35 || now - this.lastRifleAt >= 42) this.lastRifleAt = now;
     const play = (buf) => {
       if (!buf || !this.ctx) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
       src.playbackRate.value = 0.96 + Math.random() * 0.08;
-      const g = this.ctx.createGain();
-      g.gain.value = Math.min(1.1, 0.85 * Math.pow(vol, 0.5) * 1.35);
-      src.connect(g);
-      g.connect(this.dest("rifle"));
-      src.start();
+      this.startSpatialSource(src, x, y, vol, this.dest("rifle"), 1.05);
     };
     if (this.soldierShootBuf) play(this.soldierShootBuf);
     else void this.loadSoldierShoot().then(play);
@@ -656,17 +685,13 @@ const Sfx = {
   tankCannon(x, y) {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.tank);
-    if (vol <= 0.002) return;
-    this.duckRifles(1.1);
+    if (vol <= 0.006) return;
+    this.duckRifles(0.7 + vol * 0.6);
     const play = (buf) => {
       if (!buf || !this.ctx) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
-      const g = this.ctx.createGain();
-      g.gain.value = Math.min(1.35, 0.9 * Math.pow(vol, 0.4) * 1.55);
-      src.connect(g);
-      g.connect(this.dest("tank"));
-      src.start();
+      this.startSpatialSource(src, x, y, vol, this.dest("tank"), 1.25);
     };
     if (this.tankShootBuf) play(this.tankShootBuf);
     else void this.loadTankShoot().then(play);
@@ -769,8 +794,10 @@ const Sfx = {
     if (!node) {
       const g = this.ctx.createGain();
       g.gain.value = 0.0001;
-      g.connect(this.dest("tank"));
-      node = { src: null, g, x, y, throttle: 0, stopping: false };
+      const pan = this.ctx.createStereoPanner();
+      g.connect(pan);
+      pan.connect(this.dest("tank"));
+      node = { src: null, g, pan, x, y, throttle: 0, stopping: false };
       this.engines.set(id, node);
       if (this.tankMoveBuf) this.startEngineLoop(node);
     }
@@ -889,9 +916,10 @@ const Sfx = {
       if (node.stopping) continue;
       const vol = this.volumeAt(node.x, node.y, this.ranges.tank);
       const th = node.throttle || 0;
-      const target = Math.max(0.0001, vol * 0.85 * (0.5 + th * 0.5));
+      const target = Math.max(0.0001, this.sampleGain(vol, 0.95) * (0.45 + th * 0.55));
       try {
-        node.g.gain.setTargetAtTime(target, t0, 0.1);
+        node.g.gain.setTargetAtTime(target, t0, 0.08);
+        if (node.pan) node.pan.pan.setTargetAtTime(this.panAt(node.x), t0, 0.08);
         node.src?.playbackRate?.setTargetAtTime(0.94 + th * 0.12, t0, 0.2);
       } catch {
         // ignore
