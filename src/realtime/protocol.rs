@@ -86,6 +86,9 @@ pub enum ServerMsg {
         /// Full commander roster — sent about once per second for Tab scoreboard.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scoreboard: Option<Vec<ScoreboardRow>>,
+        /// First 5 minutes: whole map is visible to everyone.
+        #[serde(default)]
+        global_vision: bool,
     },
     MatchEnd {
         match_id: Uuid,
@@ -227,6 +230,9 @@ pub struct MatchSnapshot {
     pub team: u8,
     pub ffa: bool,
     pub aoi_radius: f32,
+    /// Opening window — everyone sees the whole map.
+    #[serde(default)]
+    pub global_vision: bool,
     pub focus: [f32; 2],
     /// Packed little-endian u64 words of explored cells (row-major).
     pub explored: Vec<u8>,

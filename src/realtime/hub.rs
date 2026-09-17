@@ -446,6 +446,7 @@ impl MatchHub {
                             } else {
                                 None
                             };
+                            let global_vision = rt.sim.global_vision_active();
                             outgoing.push((
                                 uid,
                                 ServerMsg::Delta {
@@ -457,6 +458,7 @@ impl MatchHub {
                                     explored_new,
                                     shots,
                                     scoreboard,
+                                    global_vision,
                                 },
                             ));
                         }

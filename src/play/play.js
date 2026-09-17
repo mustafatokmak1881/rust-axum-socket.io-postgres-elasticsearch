@@ -298,6 +298,7 @@ function enterMatch(snapshot) {
   state.entities.clear();
   clearWorldMeshes();
   aoiRadius = Number(snapshot.aoi_radius) || 28;
+  globalVision = snapshot.global_vision !== false;
   for (const entity of snapshot.entities || []) {
     state.entities.set(entity.id, entity);
   }
@@ -466,10 +467,20 @@ function mergeDelta(into, extra) {
   into.removed = [...removed];
   into.shots = [...(into.shots || []), ...(extra.shots || [])];
   if (extra.scoreboard) into.scoreboard = extra.scoreboard;
+  if (typeof extra.global_vision === "boolean") into.global_vision = extra.global_vision;
 }
 
 function applyDelta(msg) {
   updateResources(msg.resources);
+  if (typeof msg.global_vision === "boolean") {
+    const wasOpen = globalVision;
+    globalVision = msg.global_vision;
+    if (wasOpen && !globalVision) {
+      // Fog just closed — restamp with real vision discs.
+      lastVisionAt = 0;
+      refreshLiveVision();
+    }
+  }
   if (msg.scoreboard) {
     state.scoreboard = msg.scoreboard;
     if (!$("#scoreboard")?.hidden) renderScoreboard();
@@ -518,7 +529,7 @@ function applyDelta(msg) {
   playShots(msg.shots || []);
   updateArmyCounts();
   $("#match-caption").textContent =
-    `Tick ${msg.tick} · ${state.entities.size} entities · vision fog`;
+    `Tick ${msg.tick} · ${state.entities.size} entities · ${globalVision ? "open map" : "vision fog"}`;
 }
 
 function syncBuildingSfx(prev, entity) {
@@ -1301,6 +1312,8 @@ let fogExploredData = null; // Uint8Array size*size — 0/1 explored
 let fogVisionData = null;   // Uint8Array size*size — 0/1 currently visible
 let fogDataTexture = null;
 let aoiRadius = 20;
+/** Opening window: full map visible until server closes fog. */
+let globalVision = true;
 let lastFocusSentAt = 0;
 let lastFocusSent = { x: 0, z: 0 };
 const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false, overUi: false };
@@ -1324,7 +1337,9 @@ const BUILDING_MODELS = {
 };
 
 /** Bump when BUILDING_MODELS targets change so cached meshes refit. */
-const BUILDING_FIT_VERSION = 3;
+const BUILDING_FIT_VERSION = 4;
+/** Procedural Patriot mesh revision — forces remesh of old batteries. */
+const PATRIOT_RIG_VERSION = 2;
 
 async function prepareStlGeometry(url, targetSize) {
   const loader = new STLLoader();
@@ -1459,164 +1474,255 @@ function createBuildingMesh(kind, fallbackMat) {
   return mesh;
 }
 
-/** Hand-built MIM-104 style launcher + radar — no external model. */
+/** Hand-built MIM-104 Patriot — sized vs Crusader tank (~0.28 long) & infantry (~0.08 tall).
+ *  Real launcher ~10 m → ~0.40 wu; elevated tubes ~4–5 m → ~0.35 wu. */
 function createPatriotBatteryMesh(fallbackMat) {
   const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
-  const olive = new THREE.MeshStandardMaterial({
-    color: 0x4a553c,
-    metalness: 0.28,
-    roughness: 0.62,
-  });
-  const dark = new THREE.MeshStandardMaterial({
-    color: 0x232722,
-    metalness: 0.45,
-    roughness: 0.48,
-  });
-  const steel = new THREE.MeshStandardMaterial({
-    color: 0x6e766c,
-    metalness: 0.72,
-    roughness: 0.32,
-  });
-  const team = new THREE.MeshStandardMaterial({
-    color: accent,
-    metalness: 0.22,
-    roughness: 0.55,
-  });
-  const glass = new THREE.MeshStandardMaterial({
-    color: 0x1a2830,
-    metalness: 0.8,
-    roughness: 0.15,
-    transparent: true,
-    opacity: 0.85,
-  });
+  const olive = 0x4a5538;
+  const oliveDark = 0x353c2c;
+  const oliveLight = 0x5a6648;
+  const desert = 0x6b6550;
+  const metal = 0x3a3c38;
+  const metalBright = 0x5c6058;
+  const rubber = 0x141210;
+  const glassCol = 0x1a2830;
 
   const root = new THREE.Group();
   root.userData.building = true;
   root.userData.isPatriot = true;
+  root.userData.patriotRigVersion = PATRIOT_RIG_VERSION;
   root.userData.modelKind = "turret";
   root.userData.isFallback = false;
   root.userData.keepMtlColors = true;
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-  root.userData.unitHeight = 1.15;
+  root.userData.unitHeight = 0.36;
 
-  // Concrete pad
-  const pad = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.06, 1.15), dark);
-  pad.position.y = 0.03;
-  pad.receiveShadow = true;
-  root.add(pad);
+  const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
+    const m = new THREE.Mesh(
+      geo,
+      matStd(color, {
+        metalness: opts.metalness ?? 0.35,
+        roughness: opts.roughness ?? 0.55,
+        transparent: opts.transparent,
+        opacity: opts.opacity,
+      }),
+    );
+    if (opts.transparent) {
+      m.material.transparent = true;
+      m.material.opacity = opts.opacity ?? 0.85;
+      m.material.depthWrite = (opts.opacity ?? 0.85) >= 0.95;
+    }
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = opts.cast !== false;
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  };
 
-  // Trailer / chassis
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.14, 0.55), olive);
-  chassis.position.set(0.05, 0.13, 0.05);
-  chassis.castShadow = true;
-  root.add(chassis);
+  // —— Soft gravel pad (tight footprint) ——
+  add(root, new THREE.BoxGeometry(0.52, 0.018, 0.34), 0x3a3830, 0, 0.009, 0, 0, 0, 0, {
+    metalness: 0.05,
+    roughness: 0.92,
+    cast: false,
+  });
+  add(root, new THREE.BoxGeometry(0.48, 0.006, 0.3), 0x2e2c26, 0, 0.02, 0, 0, 0, 0, {
+    metalness: 0.08,
+    roughness: 0.88,
+    cast: false,
+  });
 
-  // Team stripe on chassis
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.03, 0.08), team);
-  stripe.position.set(0.05, 0.21, -0.18);
-  root.add(stripe);
+  // —— M983-style tractor stub (short) ——
+  const tractor = new THREE.Group();
+  tractor.position.set(-0.16, 0, 0);
+  root.add(tractor);
+  add(tractor, new THREE.BoxGeometry(0.14, 0.055, 0.13), oliveDark, 0, 0.055, 0);
+  add(tractor, new THREE.BoxGeometry(0.1, 0.07, 0.12), olive, -0.01, 0.11, 0);
+  add(tractor, new THREE.BoxGeometry(0.08, 0.028, 0.01), glassCol, -0.01, 0.125, 0.062, 0, 0, 0, {
+    metalness: 0.7,
+    roughness: 0.18,
+    transparent: true,
+    opacity: 0.8,
+  });
+  // Cab wheels
+  for (const z of [-0.055, 0.055]) {
+    add(tractor, new THREE.CylinderGeometry(0.028, 0.028, 0.022, 12), rubber, 0.02, 0.028, z, 0, 0, Math.PI / 2, {
+      metalness: 0.15,
+      roughness: 0.85,
+    });
+    add(tractor, new THREE.CylinderGeometry(0.012, 0.012, 0.024, 8), metal, 0.02, 0.028, z, 0, 0, Math.PI / 2, {
+      metalness: 0.6,
+      roughness: 0.4,
+    });
+  }
 
-  // Road wheels (static)
-  for (const z of [-0.22, 0.22]) {
-    for (const x of [-0.28, 0.18, 0.48]) {
-      const wheel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.07, 0.07, 0.06, 10),
-        dark,
-      );
-      wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(x, 0.07, z);
-      root.add(wheel);
+  // —— Launcher trailer bed ——
+  const bed = new THREE.Group();
+  bed.position.set(0.08, 0, 0);
+  root.add(bed);
+  add(bed, new THREE.BoxGeometry(0.34, 0.04, 0.15), olive, 0, 0.048, 0);
+  add(bed, new THREE.BoxGeometry(0.32, 0.012, 0.14), oliveDark, 0, 0.07, 0);
+  // Side rails
+  add(bed, new THREE.BoxGeometry(0.33, 0.018, 0.012), metalBright, 0, 0.08, -0.078, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  add(bed, new THREE.BoxGeometry(0.33, 0.018, 0.012), metalBright, 0, 0.08, 0.078, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  // Team ID stripe
+  add(bed, new THREE.BoxGeometry(0.3, 0.008, 0.02), accent, 0, 0.078, -0.05, 0, 0, 0, {
+    metalness: 0.2,
+    roughness: 0.55,
+  });
+  // Trailer wheels (dual axle)
+  for (const x of [-0.08, 0.1]) {
+    for (const z of [-0.072, 0.072]) {
+      add(bed, new THREE.CylinderGeometry(0.026, 0.026, 0.02, 12), rubber, x, 0.026, z, 0, 0, Math.PI / 2, {
+        metalness: 0.12,
+        roughness: 0.88,
+      });
+      add(bed, new THREE.CylinderGeometry(0.01, 0.01, 0.022, 8), metal, x, 0.026, z, 0, 0, Math.PI / 2, {
+        metalness: 0.65,
+        roughness: 0.35,
+      });
     }
   }
-
-  // Control cabin
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 0.36), olive);
-  cabin.position.set(-0.42, 0.28, 0.02);
-  cabin.castShadow = true;
-  root.add(cabin);
-  const window = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.02), glass);
-  window.position.set(-0.42, 0.34, 0.2);
-  root.add(window);
-
-  // Radar mast + phased-array face
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.72, 8), steel);
-  mast.position.set(-0.15, 0.48, -0.38);
-  root.add(mast);
-  const radar = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.36, 0.05), steel);
-  radar.position.set(-0.15, 0.88, -0.38);
-  radar.rotation.x = -0.25;
-  radar.castShadow = true;
-  root.add(radar);
-  const radarFace = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.02), glass);
-  radarFace.position.set(-0.15, 0.88, -0.35);
-  radarFace.rotation.x = -0.25;
-  root.add(radarFace);
-
-  // Rotating launcher assembly (yaw)
-  const launcher = new THREE.Group();
-  launcher.name = "muzzleRoot";
-  launcher.position.set(0.22, 0.22, 0.08);
-  root.add(launcher);
-
-  const pivot = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.1, 10), dark);
-  pivot.position.y = 0.05;
-  launcher.add(pivot);
-
-  // Elevation cradle (~55°)
-  const cradle = new THREE.Group();
-  cradle.position.set(0, 0.12, 0);
-  cradle.rotation.x = -0.95;
-  launcher.add(cradle);
-
-  const cradleBox = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.1, 0.55), olive);
-  cradleBox.position.z = 0.12;
-  cradleBox.castShadow = true;
-  cradle.add(cradleBox);
-
-  // Four canister tubes (2×2)
-  const tubeMat = steel;
-  const tubePositions = [
-    [-0.12, 0.08, 0.05],
-    [0.12, 0.08, 0.05],
-    [-0.12, 0.08, 0.28],
-    [0.12, 0.08, 0.28],
-  ];
-  for (const [tx, ty, tz] of tubePositions) {
-    const tube = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.055, 0.06, 0.72, 10),
-      tubeMat,
-    );
-    tube.rotation.x = Math.PI / 2;
-    tube.position.set(tx, ty, tz);
-    tube.castShadow = true;
-    cradle.add(tube);
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 10), dark);
-    cap.rotation.x = Math.PI / 2;
-    cap.position.set(tx, ty, tz + 0.37);
-    cradle.add(cap);
+  // Stabilizer jacks
+  for (const [jx, jz] of [
+    [-0.14, -0.09],
+    [-0.14, 0.09],
+    [0.14, -0.09],
+    [0.14, 0.09],
+  ]) {
+    add(bed, new THREE.CylinderGeometry(0.006, 0.008, 0.04, 6), metal, jx, 0.02, jz, 0, 0, 0, {
+      metalness: 0.7,
+      roughness: 0.35,
+    });
+    add(bed, new THREE.CylinderGeometry(0.014, 0.014, 0.006, 8), desert, jx, 0.004, jz, 0, 0, 0, {
+      metalness: 0.2,
+      roughness: 0.8,
+      cast: false,
+    });
   }
 
-  // Muzzle tip for FX (front of upper-right tube)
+  // —— Hydraulics / elevation base ——
+  const launcher = new THREE.Group();
+  launcher.name = "muzzleRoot";
+  launcher.position.set(0.1, 0.075, 0);
+  root.add(launcher);
+
+  add(launcher, new THREE.CylinderGeometry(0.028, 0.034, 0.03, 14), metal, 0, 0.015, 0, 0, 0, 0, {
+    metalness: 0.65,
+    roughness: 0.35,
+  });
+  add(launcher, new THREE.BoxGeometry(0.06, 0.02, 0.06), oliveDark, 0, 0.032, 0);
+
+  // Elevation cradle (~50°)
+  const cradle = new THREE.Group();
+  cradle.position.set(0, 0.04, 0);
+  cradle.rotation.x = -0.88;
+  launcher.add(cradle);
+
+  add(cradle, new THREE.BoxGeometry(0.16, 0.028, 0.2), olive, 0, 0.02, 0.06);
+  add(cradle, new THREE.BoxGeometry(0.14, 0.016, 0.18), oliveDark, 0, 0.038, 0.06);
+  // Hydraulic ram
+  add(cradle, new THREE.CylinderGeometry(0.008, 0.008, 0.14, 8), metalBright, -0.07, -0.02, 0.02, 0.9, 0, 0, {
+    metalness: 0.75,
+    roughness: 0.28,
+  });
+  add(cradle, new THREE.CylinderGeometry(0.006, 0.006, 0.1, 8), metal, 0.07, -0.015, 0.03, 0.9, 0, 0, {
+    metalness: 0.75,
+    roughness: 0.28,
+  });
+
+  // Four sealed canisters (2×2) — classic Patriot look
+  const tubes = [
+    [-0.038, 0.028, 0.0],
+    [0.038, 0.028, 0.0],
+    [-0.038, 0.028, 0.095],
+    [0.038, 0.028, 0.095],
+  ];
+  for (const [tx, ty, tz] of tubes) {
+    add(cradle, new THREE.CylinderGeometry(0.02, 0.022, 0.26, 12), oliveLight, tx, ty, tz + 0.02, Math.PI / 2, 0, 0, {
+      metalness: 0.4,
+      roughness: 0.45,
+    });
+    // Nose fairing / blast door
+    add(cradle, new THREE.CylinderGeometry(0.018, 0.02, 0.012, 12), metal, tx, ty, tz + 0.155, Math.PI / 2, 0, 0, {
+      metalness: 0.7,
+      roughness: 0.3,
+    });
+    // Rear seal
+    add(cradle, new THREE.CylinderGeometry(0.019, 0.019, 0.008, 10), oliveDark, tx, ty, tz - 0.115, Math.PI / 2, 0, 0, {
+      metalness: 0.45,
+      roughness: 0.5,
+    });
+    // Band clamp
+    add(cradle, new THREE.TorusGeometry(0.021, 0.003, 6, 14), metalBright, tx, ty, tz + 0.04, 0, 0, Math.PI / 2, {
+      metalness: 0.8,
+      roughness: 0.25,
+    });
+  }
+
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0.12, 0.08, 0.55);
+  tip.position.set(0.038, 0.028, 0.2);
   cradle.add(tip);
 
-  // Engagement ring (subtle, sits on ground)
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.72, 0.78, 40),
-    new THREE.MeshBasicMaterial({
-      color: accent,
-      transparent: true,
-      opacity: 0.22,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    }),
-  );
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.04;
-  ring.userData.skipBuildingOpacity = true;
-  root.add(ring);
+  // —— AN/MPQ-53 style phased-array (compact mast beside launcher) ——
+  const radar = new THREE.Group();
+  radar.position.set(-0.02, 0, -0.12);
+  root.add(radar);
+  add(radar, new THREE.CylinderGeometry(0.012, 0.016, 0.2, 10), metal, 0, 0.12, 0, 0, 0, 0, {
+    metalness: 0.7,
+    roughness: 0.32,
+  });
+  add(radar, new THREE.BoxGeometry(0.04, 0.02, 0.04), oliveDark, 0, 0.03, 0);
+  // Array face (slight tilt)
+  const array = new THREE.Group();
+  array.position.set(0, 0.24, 0);
+  array.rotation.x = -0.35;
+  radar.add(array);
+  add(array, new THREE.BoxGeometry(0.14, 0.12, 0.018), metalBright, 0, 0, 0, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+  add(array, new THREE.BoxGeometry(0.12, 0.1, 0.006), 0x1e2a32, 0, 0, 0.012, 0, 0, 0, {
+    metalness: 0.85,
+    roughness: 0.12,
+  });
+  // Phase slots (detail lines)
+  for (let i = -2; i <= 2; i++) {
+    add(array, new THREE.BoxGeometry(0.11, 0.004, 0.004), 0x0e161c, 0, i * 0.018, 0.016, 0, 0, 0, {
+      metalness: 0.5,
+      roughness: 0.4,
+      cast: false,
+    });
+  }
+  add(array, new THREE.BoxGeometry(0.03, 0.03, 0.02), desert, 0, -0.08, -0.01, 0, 0, 0, {
+    metalness: 0.3,
+    roughness: 0.6,
+  });
+
+  // —— Small ECS / generator box ——
+  add(root, new THREE.BoxGeometry(0.08, 0.055, 0.06), oliveDark, -0.18, 0.045, 0.1);
+  add(root, new THREE.BoxGeometry(0.06, 0.012, 0.045), metal, -0.18, 0.075, 0.1, 0, 0, 0, {
+    metalness: 0.6,
+    roughness: 0.4,
+  });
+  add(root, new THREE.CylinderGeometry(0.01, 0.01, 0.03, 8), metalBright, -0.18, 0.095, 0.1, 0, 0, 0, {
+    metalness: 0.7,
+    roughness: 0.3,
+  });
+
+  // Cable run between radar and launcher
+  add(root, new THREE.BoxGeometry(0.12, 0.008, 0.012), rubber, 0.02, 0.028, -0.06, 0, 0.4, 0, {
+    metalness: 0.1,
+    roughness: 0.9,
+    cast: false,
+  });
 
   return root;
 }
@@ -1995,6 +2101,24 @@ function refreshLiveVision() {
   if (now - lastVisionAt < 280) return;
   lastVisionAt = now;
 
+  const tex = fogDataTexture.image?.data;
+  if (!tex) return;
+  const cells = mapSize * mapSize;
+
+  if (globalVision) {
+    fogVisionData.fill(255);
+    fogExploredData.fill(255);
+    for (let i = 0; i < cells; i++) {
+      const o = i * 4;
+      tex[o] = 255;
+      tex[o + 1] = 255;
+      tex[o + 2] = 0;
+      tex[o + 3] = 255;
+    }
+    fogDataTexture.needsUpdate = true;
+    return;
+  }
+
   fogVisionData.fill(0);
   const you = state.match?.you;
   const stamped = [];
@@ -2022,9 +2146,7 @@ function refreshLiveVision() {
   }
 
   // Pack into RGBA texture: R=explored, G=visible
-  const tex = fogDataTexture.image?.data;
-  if (!tex) return;
-  for (let i = 0; i < mapSize * mapSize; i++) {
+  for (let i = 0; i < cells; i++) {
     const o = i * 4;
     tex[o] = fogExploredData[i];
     tex[o + 1] = fogVisionData[i];
@@ -2426,7 +2548,7 @@ function buildingRadius(kind) {
     barracks: 1.35,
     power_plant: 1.7,
     supply: 1.7,
-    turret: 1.4,
+    turret: 0.55,
   }[kind] ?? 1.35;
   return visual * 0.42;
 }
@@ -3680,8 +3802,12 @@ function upsertMesh(entity) {
     mesh = null;
   }
 
-  // Swap old command-center placeholder turrets for the procedural Patriot.
-  if (mesh && entity.kind === "turret" && !mesh.userData.isPatriot) {
+  // Swap / upgrade procedural Patriot batteries.
+  if (
+    mesh &&
+    entity.kind === "turret" &&
+    (!mesh.userData.isPatriot || (mesh.userData.patriotRigVersion || 0) < PATRIOT_RIG_VERSION)
+  ) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
     state.meshes.delete(entity.id);
@@ -4232,7 +4358,7 @@ function spawnShotFx(shot) {
   } else if (isMissile) {
     const isPatriot = kind.includes("patriot") || kind === "turret";
     const smoke = new THREE.Mesh(
-      new THREE.SphereGeometry(isPatriot ? 0.045 : 0.03, 6, 6),
+      new THREE.SphereGeometry(isPatriot ? 0.022 : 0.03, 6, 6),
       new THREE.MeshBasicMaterial({
         color: isPatriot ? 0xddeeff : 0xaaccee,
         transparent: true,
@@ -4246,9 +4372,9 @@ function spawnShotFx(shot) {
 
     const rocket = new THREE.Mesh(
       new THREE.CylinderGeometry(
-        isPatriot ? 0.016 : 0.01,
-        isPatriot ? 0.022 : 0.014,
-        isPatriot ? 0.14 : 0.08,
+        isPatriot ? 0.008 : 0.01,
+        isPatriot ? 0.011 : 0.014,
+        isPatriot ? 0.07 : 0.08,
         6,
       ),
       new THREE.MeshBasicMaterial({ color: isPatriot ? 0xffffff : 0x88ddff }),
@@ -4259,9 +4385,9 @@ function spawnShotFx(shot) {
     fx.parts.push({ mesh: rocket, role: "projectile" });
 
     if (isPatriot) {
-      fx.life = 680;
+      fx.life = 620;
       const flare = new THREE.Mesh(
-        new THREE.SphereGeometry(0.02, 6, 6),
+        new THREE.SphereGeometry(0.012, 6, 6),
         new THREE.MeshBasicMaterial({
           color: 0xffaa44,
           transparent: true,

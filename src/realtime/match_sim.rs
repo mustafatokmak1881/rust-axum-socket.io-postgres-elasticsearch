@@ -526,7 +526,7 @@ fn building_visual_size(kind: &str) -> f32 {
         "war_factory" => 2.1,
         "barracks" => 1.35,
         "power_plant" | "supply" => 1.7,
-        "turret" => 1.4,
+        "turret" => 0.55,
         _ => 1.35,
     }
 }
@@ -584,6 +584,8 @@ pub struct MatchSim {
     pub max_duration: Duration,
     /// Pending stream jobs (build completes etc.) mirrored conceptually to Redis Streams.
     pub stream_jobs: VecDeque<StreamJob>,
+    /// Becomes false once the opening global-vision window ends (triggers one AOI resync).
+    global_vision_open: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -615,6 +617,7 @@ impl MatchSim {
             created_at: Instant::now(),
             max_duration: Duration::from_secs(30 * 60),
             stream_jobs: VecDeque::new(),
+            global_vision_open: true,
         };
 
         for (user_id, name, faction, team, flag) in roster.into_iter() {
@@ -1007,6 +1010,7 @@ impl MatchSim {
             team: player.team,
             ffa: self.ffa,
             aoi_radius: aoi::AOI_RADIUS,
+            global_vision: self.global_vision_active(),
             focus,
             explored: player.explored.to_bytes(),
             resources: player.resources.view(),
@@ -1072,6 +1076,12 @@ impl MatchSim {
 
     /// Stamp current unit/building vision into the player's explored map.
     pub fn reveal_vision_for(&mut self, user_id: Uuid) -> Vec<u16> {
+        if self.global_vision_active() {
+            if let Some(player) = self.players.get_mut(&user_id) {
+                player.explored.reveal_all();
+            }
+            return Vec::new();
+        }
         let sources: Vec<(f32, f32, f32)> = self
             .entities
             .values()
@@ -1086,6 +1096,11 @@ impl MatchSim {
             newly.extend(player.explored.reveal_circle(x, y, radius));
         }
         newly
+    }
+
+    /// First five minutes of the match: full map intel for every commander.
+    pub fn global_vision_active(&self) -> bool {
+        self.created_at.elapsed() < Duration::from_secs(aoi::GLOBAL_VISION_SECS)
     }
 
     pub fn place_building(
@@ -1452,6 +1467,12 @@ impl MatchSim {
             return;
         }
         self.tick += 1;
+        if self.global_vision_open && !self.global_vision_active() {
+            self.global_vision_open = false;
+            for player in self.players.values_mut() {
+                player.aoi_known.clear();
+            }
+        }
         let dt_ms = 1000 / TICK_HZ;
         self.grid
             .rebuild(self.entities.values().map(|e| (e.id, e.x, e.y)));
@@ -2906,7 +2927,11 @@ impl MatchSim {
     }
 
     /// Own units always; enemies only if they sit inside a friendly vision disc.
+    /// During the opening global-vision window, every living entity is visible.
     fn visible_ids_for(&self, viewer: Uuid) -> HashSet<Uuid> {
+        if self.global_vision_active() {
+            return self.entities.keys().copied().collect();
+        }
         let mut visible = HashSet::with_capacity(64);
         let mut sources: Vec<(f32, f32, f32)> = Vec::new();
         for entity in self.entities.values() {

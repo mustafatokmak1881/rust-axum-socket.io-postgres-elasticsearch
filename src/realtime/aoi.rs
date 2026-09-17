@@ -10,6 +10,9 @@ pub const VISION_HQ: f32 = 20.0;
 pub const VISION_BUILDING: f32 = 13.0;
 pub const VISION_UNIT: f32 = 11.0;
 
+/// Opening window where every commander sees the whole map.
+pub const GLOBAL_VISION_SECS: u64 = 5 * 60;
+
 pub fn entity_provides_vision(entity: &Entity) -> bool {
     entity.building || entity.unit
 }
@@ -80,20 +83,31 @@ impl ExploredMap {
                 if x < 0 || y < 0 || x >= size || y >= size {
                     continue;
                 }
-                let fx = x as f32 + 0.5;
-                let fy = y as f32 + 0.5;
-                let ddx = fx - cx;
-                let ddy = fy - cy;
-                if ddx * ddx + ddy * ddy > r2 {
+                let fx = x as f32 + 0.5 - cx;
+                let fy = y as f32 + 0.5 - cy;
+                if fx * fx + fy * fy > r2 {
                     continue;
                 }
                 if self.reveal_cell(x as u16, y as u16) {
-                    let idx = (y as u16).saturating_mul(self.size).saturating_add(x as u16);
-                    newly.push(idx);
+                    newly.push((y as u16).saturating_mul(self.size).saturating_add(x as u16));
                 }
             }
         }
         newly
+    }
+
+    /// Full map scout — used during the opening global-vision window.
+    pub fn reveal_all(&mut self) {
+        for w in &mut self.bits {
+            *w = u64::MAX;
+        }
+        let cells = (self.size as usize).saturating_mul(self.size as usize);
+        let rem = cells % 64;
+        if rem != 0 {
+            if let Some(last) = self.bits.last_mut() {
+                *last &= (1u64 << rem) - 1;
+            }
+        }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
