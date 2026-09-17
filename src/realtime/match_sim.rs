@@ -257,9 +257,9 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 0,
             cost_munitions: 40,
             train_ms: 3_500,
-            // 3× longer infantry fights: hits still hurt, one round never drops a man.
-            hp: 525.0,
-            damage: 50.0,
+            // A few connecting rifle rounds drop a soldier; fights stay longer than one shot.
+            hp: 300.0,
+            damage: 75.0,
             // Combat jog ~5–6 km/h → well below tank cross-country pace.
             speed: 0.20,
             range: 4.5,
@@ -274,8 +274,8 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 40,
             cost_munitions: 160,
             train_ms: 8_000,
-            hp: 495.0,
-            // Guided punch vs armor; infantry is wounded over several hits (see hit_damage).
+            hp: 280.0,
+            // Guided punch vs armor; infantry still takes more than one hit (see hit_damage).
             damage: 280.0,
             // Laden AT team — slower than rifle infantry.
             speed: 0.16,
@@ -291,7 +291,7 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_munitions: 700,
             train_ms: 48_000,
             hp: 7_200.0,
-            // 3× TTK vs armor; infantry takes several shells via hit_damage().
+            // 3× TTK vs armor; infantry falls in a couple of shells via hit_damage().
             damage: 400.0,
             // Cross-country combat pace ~3× infantry jog.
             speed: 0.58,
@@ -330,11 +330,11 @@ fn is_rifle_infantry(kind: &str) -> bool {
     !kind.contains("tank") && !kind.contains("missile")
 }
 
-/// Infantry fights last ~3× longer: heavy weapons don't delete a soldier in one connect.
+/// Infantry: a few rifle hits or a couple of shells — not a one-shot, not a sponge.
 fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     let infantry = target.unit && !target.kind.contains("tank");
     if infantry && (attacker_kind.contains("tank") || attacker_kind.contains("missile")) {
-        (base * 0.28).max(48.0)
+        (base * 0.50).max(90.0)
     } else {
         base
     }
@@ -366,7 +366,7 @@ fn shot_hit_chance(
     } else if attacker_kind.contains("missile") {
         range * 0.32
     } else {
-        range * 0.22
+        range * 0.30
     };
     let dist_mul = 1.0 / (1.0 + (dist / d0).powi(2));
 
@@ -376,7 +376,7 @@ fn shot_hit_chance(
     } else if attacker_kind.contains("missile") {
         0.72
     } else {
-        0.70
+        0.78
     };
 
     let size_mul = if target.building {
@@ -384,12 +384,12 @@ fn shot_hit_chance(
     } else if target.kind.contains("tank") {
         1.40
     } else {
-        1.0
+        1.12
     };
 
     let vis = exposure.clamp(0.12, 1.35);
     let prone_mul = if target.prone && target.unit && !target.kind.contains("tank") {
-        0.38
+        0.55
     } else {
         1.0
     };
