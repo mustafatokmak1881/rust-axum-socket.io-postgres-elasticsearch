@@ -730,7 +730,7 @@ const Sfx = {
   loadTankMove() {
     if (this.tankMoveBuf) return Promise.resolve(this.tankMoveBuf);
     if (this.tankMoveWait) return this.tankMoveWait;
-    if (!this.ensure()) return Promise.resolve(null);
+    if (!this.ctx) return Promise.resolve(null);
     this.tankMoveWait = fetch("/assets/sounds/tank-move.mp3")
       .then((res) => {
         if (!res.ok) throw new Error("tank-move");
