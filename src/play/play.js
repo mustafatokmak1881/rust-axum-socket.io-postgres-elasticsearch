@@ -1544,16 +1544,37 @@ function stampVisionCircle(data, size, cx, cy, radius) {
   }
 }
 
+let lastVisionAt = 0;
+
 function refreshLiveVision() {
   if (!fogVisionData || !fogExploredData || !fogDataTexture) return;
+  const now = performance.now();
+  if (now - lastVisionAt < 100) return;
+  lastVisionAt = now;
+
   fogVisionData.fill(0);
   const you = state.match?.you;
+  const stamped = [];
   for (const entity of state.entities.values()) {
     if (entity.owner !== you) continue;
     const radius = visionRadiusFor(entity);
     if (!radius) continue;
+    // Infantry blobs overlap — one stamp covers a squad and saves ~50× circle fills.
+    if (entity.unit && !entity.building) {
+      let covered = false;
+      for (let i = 0; i < stamped.length; i++) {
+        const s = stamped[i];
+        const dx = entity.x - s[0];
+        const dy = entity.y - s[1];
+        if (dx * dx + dy * dy < 16) {
+          covered = true;
+          break;
+        }
+      }
+      if (covered) continue;
+      stamped.push([entity.x, entity.y]);
+    }
     stampVisionCircle(fogVisionData, mapSize, entity.x, entity.y, radius);
-    // Client-side explore while moving (server confirms via explored_new).
     stampVisionCircle(fogExploredData, mapSize, entity.x, entity.y, radius);
   }
 
@@ -3183,7 +3204,9 @@ function upsertMesh(entity) {
       mesh.userData.destZ = entity.y;
       if (prevX == null) mesh.position.set(entity.x, 0, entity.y);
     } else {
-      mesh.position.set(entity.x, 0, entity.y);
+      mesh.userData.destX = entity.x;
+      mesh.userData.destZ = entity.y;
+      if (prevX == null) mesh.position.set(entity.x, 0, entity.y);
     }
     if (mesh.userData.lastTint !== colors[0]) {
       tintUnitMesh(mesh, colors);
@@ -3193,18 +3216,12 @@ function upsertMesh(entity) {
       const dx = entity.x - prevX;
       const dz = entity.y - prevZ;
       const dist = Math.hypot(dx, dz);
-      if (dist > 0.01 && !mesh.userData.knock) {
+      if (dist > 0.008 && !mesh.userData.knock) {
         mesh.userData.moving = true;
         mesh.userData.faceYaw = Math.atan2(dx, dz);
         mesh.userData.moveSeenAt = performance.now();
         mesh.userData.lastMoveDist = dist;
-      } else if (!mesh.userData.knock && !mesh.userData.isTank) {
-        mesh.userData.moving = false;
-        mesh.userData.moveSeenAt = 0;
-        mesh.userData.lastMoveDist = 0;
       }
-    } else if (!mesh.userData.isTank) {
-      mesh.userData.moving = false;
     }
     mesh.userData.lastX = entity.x;
     mesh.userData.lastZ = entity.y;
@@ -3371,6 +3388,31 @@ function smoothUnitFacing(mesh, dt) {
   mesh.rotation.y += diff * turn;
 }
 
+function updateInfantryDrive(mesh, dt) {
+  if (!mesh?.userData?.isInfantry || mesh.userData.knock) return;
+  const destX = mesh.userData.destX;
+  const destZ = mesh.userData.destZ;
+  if (destX == null || destZ == null) return;
+  const dx = destX - mesh.position.x;
+  const dz = destZ - mesh.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist > 0.004) {
+    mesh.userData.faceYaw = Math.atan2(dx, dz);
+    const speed = 0.22 * dt;
+    const step = Math.min(dist, speed);
+    mesh.position.x += (dx / dist) * step;
+    mesh.position.z += (dz / dist) * step;
+    mesh.userData.moving = true;
+  } else {
+    mesh.position.x = destX;
+    mesh.position.z = destZ;
+    const seen = mesh.userData.moveSeenAt || 0;
+    if (!seen || performance.now() - seen > 200) {
+      mesh.userData.moving = false;
+    }
+  }
+}
+
 function updateInfantryWalk(mesh, dt, now) {
   if (!mesh?.userData?.isInfantry) return;
   let walk = mesh.userData.walk;
@@ -3400,14 +3442,14 @@ function updateInfantryWalk(mesh, dt, now) {
     mesh.position.y = blend * 0.022;
   }
 
-  // Keep walking briefly between sparse network ticks only after a real step.
+  // Network snapshots are ~100 ms; keep the cycle alive across missed frames.
   const lastDist = mesh.userData.lastMoveDist || 0;
   const recentlyMoved =
     mesh.userData.moving === true ||
-    (lastDist > 0.01 &&
+    (lastDist > 0.008 &&
       mesh.userData.moveSeenAt != null &&
       mesh.userData.moveSeenAt > 0 &&
-      now - mesh.userData.moveSeenAt < 70);
+      now - mesh.userData.moveSeenAt < 220);
 
   if (recentlyMoved) {
     const crawl = 0.22 + (1 - blend) * 0.78;
@@ -3916,6 +3958,7 @@ function animate() {
     } else {
       smoothUnitFacing(mesh, dt);
       updateTankDrive(mesh, dt);
+      updateInfantryDrive(mesh, dt);
       updateInfantryWalk(mesh, dt, now);
     }
   }
