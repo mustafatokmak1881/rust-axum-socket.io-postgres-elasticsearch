@@ -9,6 +9,8 @@ pub const AOI_RADIUS: f32 = 20.0;
 pub const VISION_HQ: f32 = 20.0;
 pub const VISION_BUILDING: f32 = 13.0;
 pub const VISION_UNIT: f32 = 11.0;
+/// Finished radar station — lights up a large sector of the map.
+pub const VISION_RADAR: f32 = 34.0;
 
 /// Opening window where every commander sees the whole map.
 pub const GLOBAL_VISION_SECS: u64 = 5 * 60;
@@ -20,6 +22,13 @@ pub fn entity_provides_vision(entity: &Entity) -> bool {
 pub fn vision_radius(entity: &Entity) -> f32 {
     if entity.kind == "hq" {
         VISION_HQ
+    } else if entity.kind == "radar" {
+        // Dish only sweeps once construction finishes.
+        if entity.build_remaining_ms > 0 {
+            VISION_BUILDING * 0.45
+        } else {
+            VISION_RADAR
+        }
     } else if entity.building {
         VISION_BUILDING
     } else if entity.unit {

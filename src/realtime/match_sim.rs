@@ -240,12 +240,13 @@ pub fn buildables() -> &'static [BuildDef] {
         BuildDef {
             kind: "turret",
             name: "Patriot Battery",
-            cost_supplies: 700,
+            cost_supplies: 900,
             cost_fuel: 0,
-            cost_munitions: 500,
-            build_ms: 9_000,
-            power: -15,
-            hp: 1400.0,
+            cost_munitions: 750,
+            build_ms: 11_000,
+            power: -25,
+            // Hardened launcher + radar van — not soft like a hut.
+            hp: 2_600.0,
         },
         BuildDef {
             kind: "bunker",
@@ -255,15 +256,27 @@ pub fn buildables() -> &'static [BuildDef] {
             cost_munitions: 420,
             build_ms: 14_000,
             power: -25,
-            // Reinforced concrete — soaks a lot of tank HE.
-            hp: 6_400.0,
+            // Buried concrete — soaks tank HE far better than soft buildings.
+            hp: 5_500.0,
+        },
+        BuildDef {
+            kind: "radar",
+            name: "Radar Station",
+            cost_supplies: 1_100,
+            cost_fuel: 250,
+            cost_munitions: 350,
+            build_ms: 16_000,
+            power: -40,
+            // Soft support building — lights up a huge vision disc.
+            hp: 1_400.0,
         },
     ]
 }
 
 pub fn trainables() -> &'static [UnitDef] {
     // Scale: HQ visual ~2.15 wu ≈ 22–28 m → 1 wu ≈ 12–13 m.
-    // Combat: frequent fire, low hit chance, high damage on connect (realistic lethality).
+    // Power ladder (real-world roles, game-compressed ranges):
+    //   rifle < mortar HE < bunker MG (soft) < tank gun < MLRS saturation < Patriot guided.
     &[
         UnitDef {
             unit: "ranger",
@@ -273,31 +286,28 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 0,
             cost_munitions: 40,
             train_ms: 3_500,
-            // A few connecting rifle rounds drop a soldier; fights stay longer than one shot.
-            hp: 300.0,
-            damage: 75.0,
-            // Combat jog ~5–6 km/h → well below tank cross-country pace.
+            // A few connecting rifle rounds drop a soldier.
+            hp: 280.0,
+            damage: 85.0,
             speed: 0.20,
             range: 4.5,
-            // Semi-auto under fire — not a spray; mag dump then a real reload.
-            attack_ms: 850,
+            attack_ms: 800,
         },
         UnitDef {
             unit: "mortar",
             name: "Mortar",
             from_building: "barracks",
-            // Heavier crew + ammo — clearly above ranger cost.
             cost_supplies: 480,
             cost_fuel: 60,
             cost_munitions: 280,
             train_ms: 12_000,
-            hp: 260.0,
-            // HE bomb: strong vs soft / buildings; tanks shrug more (see hit_damage).
-            damage: 340.0,
-            // Tube + baseplate — slower than rifle infantry.
+            // Crew-served tube — fragile, lobbed HE.
+            hp: 240.0,
+            damage: 380.0,
             speed: 0.14,
-            range: 9.5,
-            attack_ms: 5_600,
+            // Standoff vs rifle; still short of MLRS / Patriot.
+            range: 11.0,
+            attack_ms: 5_200,
         },
         UnitDef {
             unit: "tank",
@@ -307,13 +317,13 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 900,
             cost_munitions: 700,
             train_ms: 48_000,
+            // MBT-class hull — benchmark armor.
             hp: 7_200.0,
-            // 3× TTK vs armor; infantry falls in a couple of shells via hit_damage().
-            damage: 400.0,
-            // Cross-country combat pace ~3× infantry jog.
+            // APFSDS / HE: ~12 shells to kill peer armor (not 18+).
+            damage: 580.0,
             speed: 0.58,
-            range: 7.5,
-            attack_ms: 5_200,
+            range: 8.5,
+            attack_ms: 4_800,
         },
         UnitDef {
             // M270 MLRS — soft-skin launcher, long-range rocket ripple (not a tank).
@@ -324,15 +334,12 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 650,
             cost_munitions: 1_450,
             train_ms: 42_000,
-            // Aluminum cab + pod — shrugs fragments, not AP.
-            hp: 2_400.0,
-            // Per-rocket HE; full pod is a 6-shot ripple (see mag_ammo).
-            damage: 160.0,
-            // Bradley-derived chassis — slower than a Crusader in combat pace.
+            // Aluminum cab — shrugs fragments, dies to tank guns fast.
+            hp: 2_200.0,
+            // Unitary / DPICM rocket — devastating soft kill, chips armor.
+            damage: 420.0,
             speed: 0.42,
-            // Standoff artillery — outranges tanks / bunkers, not map-wide.
-            range: 16.0,
-            // Long reload after the 6-rocket ripple empties the pod.
+            range: 17.0,
             attack_ms: 9_200,
         },
     ]
@@ -340,10 +347,11 @@ pub fn trainables() -> &'static [UnitDef] {
 
 fn attack_cooldown_for(kind: &str) -> u32 {
     if kind == "turret" {
-        return 2_800;
+        // MIM-104 class: salvo cadence — guided punch, not MG spray.
+        return 1_850;
     }
     if kind == "bunker" {
-        return 95; // MG cyclic rate between rounds in a burst
+        return 90; // MG cyclic rate between rounds in a burst
     }
     trainables()
         .iter()
@@ -354,14 +362,14 @@ fn attack_cooldown_for(kind: &str) -> u32 {
 
 const RIFLE_MAG: u8 = 30;
 const RIFLE_RELOAD_MS: u32 = 5_000;
-/// Patriot engagement bubble — anything that steps into this gets a missile.
-const PATRIOT_RANGE: f32 = 13.5;
-const PATRIOT_DAMAGE: f32 = 520.0;
+/// Patriot engagement bubble — long-range guided intercept.
+const PATRIOT_RANGE: f32 = 17.0;
+const PATRIOT_DAMAGE: f32 = 780.0;
 /// Pillbox MG nest — shorter than Patriot, shreds infantry.
-const BUNKER_RANGE: f32 = 8.5;
-const BUNKER_DAMAGE: f32 = 55.0;
+const BUNKER_RANGE: f32 = 8.0;
+const BUNKER_DAMAGE: f32 = 68.0;
 const BUNKER_MAG: u8 = 40;
-const BUNKER_RELOAD_MS: u32 = 2_400;
+const BUNKER_RELOAD_MS: u32 = 2_200;
 const BUNKER_SLEW_RATE: f32 = 1.85;
 const BUNKER_SCAN_RATE: f32 = 0.75;
 const BUNKER_AIM_ALIGN: f32 = 0.12;
@@ -413,43 +421,59 @@ const MLRS_SALVO: u8 = 6;
 /// Gap between rockets in a ripple (~real M270 spacing, shortened for game pace).
 const MLRS_RIPPLE_MS: u32 = 140;
 const MLRS_RELOAD_MS: u32 = 9_200;
-/// Patriot launcher slew (~55°/s) — waits on bearing like a tank turret.
-const PATRIOT_SLEW_RATE: f32 = 0.95;
-const PATRIOT_AIM_ALIGN: f32 = 0.08;
+/// Patriot launcher slew — faster track than before (still waits for bearing).
+const PATRIOT_SLEW_RATE: f32 = 1.25;
+const PATRIOT_AIM_ALIGN: f32 = 0.07;
 /// Idle search sweep when no contact.
-const PATRIOT_SCAN_RATE: f32 = 0.55;
+const PATRIOT_SCAN_RATE: f32 = 0.65;
 
 /// Infantry: a few rifle hits drop a soldier. Tank HE in the burst radius is lethal.
+/// Hierarchy mirrors real roles: rifle ≪ mortar ≪ MG nest (soft) ≪ tank ≪ MLRS AoE ≪ Patriot.
 fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     let infantry = target.unit && is_soft_unit(&target.kind);
     let armored = is_vehicle_kind(&target.kind);
+    let soft_vehicle = target.kind.contains("mlrs");
     if infantry && attacker_kind.contains("tank") {
         10_000.0
-    } else if infantry && attacker_kind.contains("mlrs") {
-        // Single rocket HE — usually drops a soldier in the seat, not the whole grid.
-        (base * 0.85).max(120.0)
-    } else if infantry && attacker_kind.contains("mortar") {
-        // Mortar HE: usually one solid hit drops a soldier in the blast seat.
-        (base * 0.95).max(220.0)
-    } else if infantry && attacker_kind == "bunker" {
-        (base * 1.15).max(48.0)
-    } else if armored && attacker_kind == "bunker" {
-        // MG vs armor — mostly sparks.
-        (base * 0.12).max(4.0)
     } else if infantry && (attacker_kind.contains("missile") || attacker_kind == "turret") {
-        (base * 0.55).max(110.0)
-    } else if armored && attacker_kind.contains("mlrs") {
-        // Unguided rockets vs AFV — area fire, not a tank killer.
-        (base * 0.32).max(40.0)
-    } else if armored && attacker_kind.contains("mortar") {
-        // Soft HE vs armor — chips, does not delete tanks.
-        (base * 0.28).max(70.0)
+        // PAC warhead — one connect deletes a soft target.
+        10_000.0
+    } else if infantry && attacker_kind.contains("mlrs") {
+        // Rocket HE / DPICM — lethal in the seat.
+        10_000.0
+    } else if infantry && attacker_kind.contains("mortar") {
+        (base * 0.95).max(250.0)
+    } else if infantry && attacker_kind == "bunker" {
+        (base * 1.2).max(55.0)
+    } else if armored && attacker_kind == "bunker" {
+        // MG vs armor — sparks only.
+        (base * 0.08).max(3.0)
+    } else if armored && is_rifle_infantry(attacker_kind) {
+        // 5.56/7.62 vs AFV — negligible.
+        (base * 0.06).max(2.0)
     } else if armored && attacker_kind == "turret" {
-        // Guided SAM punch vs armor.
-        (base * 1.15).max(base)
-    } else if armored && attacker_kind.contains("tank") && target.kind.contains("mlrs") {
-        // Tank gun vs soft launcher — brutal.
-        (base * 1.85).max(base)
+        // Guided hit — brutal vs soft launchers, heavy punch vs MBT.
+        if soft_vehicle {
+            (base * 1.45).max(base)
+        } else {
+            (base * 1.05).max(base)
+        }
+    } else if armored && attacker_kind.contains("mlrs") {
+        // Saturation HE vs armor — mission-kills soft AFVs faster than MBTs.
+        if soft_vehicle {
+            (base * 0.75).max(200.0)
+        } else {
+            (base * 0.42).max(140.0)
+        }
+    } else if armored && attacker_kind.contains("mortar") {
+        (base * 0.22).max(55.0)
+    } else if armored && attacker_kind.contains("tank") && soft_vehicle {
+        // Tank gun vs soft launcher — catastrophic.
+        (base * 2.1).max(base)
+    } else if target.building && attacker_kind == "turret" {
+        (base * 0.85).max(400.0)
+    } else if target.building && attacker_kind.contains("mlrs") {
+        (base * 1.1).max(base)
     } else {
         base
     }
@@ -477,18 +501,16 @@ fn shot_hit_chance(
     let range = range.max(0.05);
     // Distance where hit chance has dropped to ~50% of point-blank.
     let d0 = if attacker_kind.contains("tank") {
-        range * 0.42
+        range * 0.45
     } else if attacker_kind.contains("mlrs") {
-        // Area saturation — still accurate enough mid-standoff.
-        range * 0.50
+        range * 0.52
     } else if attacker_kind == "bunker" {
-        range * 0.38
+        range * 0.40
     } else if attacker_kind.contains("mortar") {
-        // Lobbed fire: mid-range is the sweet spot.
-        range * 0.48
+        range * 0.50
     } else if attacker_kind.contains("missile") || attacker_kind == "turret" {
         // Guided: stays lethal farther out.
-        range * 0.55
+        range * 0.62
     } else {
         range * 0.30
     };
@@ -496,15 +518,15 @@ fn shot_hit_chance(
 
     // Point-blank connect rate (before size / cover / prone).
     let weapon_near = if attacker_kind.contains("tank") {
+        0.86
+    } else if attacker_kind == "turret" || attacker_kind.contains("missile") {
         0.84
     } else if attacker_kind.contains("mlrs") {
-        0.62
-    } else if attacker_kind == "bunker" {
         0.70
-    } else if attacker_kind.contains("mortar") {
-        0.68
-    } else if attacker_kind.contains("missile") {
+    } else if attacker_kind == "bunker" {
         0.72
+    } else if attacker_kind.contains("mortar") {
+        0.70
     } else {
         0.78
     };
@@ -618,7 +640,8 @@ fn building_visual_size(kind: &str) -> f32 {
         "barracks" => 1.35,
         "power_plant" | "supply" => 1.7,
         "turret" => 0.55,
-        "bunker" => 0.72,
+        "bunker" => 0.34,
+        "radar" => 0.7,
         _ => 1.35,
     }
 }
@@ -2177,15 +2200,15 @@ impl MatchSim {
             }
             let falloff = (1.0 - dist / RADIUS).clamp(0.0, 1.0);
             let dmg = if is_infantry {
-                220.0 * falloff
+                280.0 * falloff
             } else if self
                 .entities
                 .get(&id)
                 .is_some_and(|e| is_vehicle_kind(&e.kind))
             {
-                28.0 * falloff
+                42.0 * falloff
             } else {
-                70.0 * falloff
+                95.0 * falloff
             };
             if dmg < 1.0 {
                 continue;
@@ -2210,7 +2233,7 @@ impl MatchSim {
         y: f32,
         primary: Uuid,
     ) {
-        const RADIUS: f32 = 1.55;
+        const RADIUS: f32 = 1.75;
         let mut victims: Vec<(Uuid, f32, bool)> = Vec::new();
         self.grid.for_each_nearby(x, y, RADIUS + MAX_ENTITY_RADIUS, |id| {
             let Some(e) = self.entities.get(&id) else {
@@ -2251,23 +2274,23 @@ impl MatchSim {
             }
             let falloff = (1.0 - dist / RADIUS).clamp(0.0, 1.0);
             let dmg = if is_infantry {
-                // Per-rocket splash — lethal near the impact, not a map wipe.
-                180.0 * falloff
+                // DPICM / HE — lethal in the beaten zone.
+                10_000.0
             } else if self
                 .entities
                 .get(&id)
                 .is_some_and(|e| e.kind.contains("tank"))
             {
-                28.0 * falloff
+                95.0 * falloff
             } else if self
                 .entities
                 .get(&id)
                 .is_some_and(|e| e.kind.contains("mlrs"))
             {
-                70.0 * falloff
+                220.0 * falloff
             } else {
-                // Buildings soak multiple rockets.
-                85.0 * falloff
+                // Buildings soak multiple rockets but each still hurts.
+                200.0 * falloff
             };
             if dmg < 1.0 {
                 continue;
@@ -2342,10 +2365,10 @@ impl MatchSim {
                 .get(&id)
                 .is_some_and(|e| is_vehicle_kind(&e.kind))
             {
-                45.0 * falloff
+                70.0 * falloff
             } else {
                 // Buildings take modest splash
-                55.0 * falloff
+                85.0 * falloff
             };
             if dmg < 1.0 {
                 continue;
@@ -2744,7 +2767,7 @@ impl MatchSim {
         let from_id = entity.id;
         let hit_p = shot_hit_chance(&entity.kind, target, dist, entity.range, cover.exposure);
         let mut rng = rand::thread_rng();
-        let hit = rng.gen_range(0.0..1.0) < hit_p.max(0.55);
+        let hit = rng.gen_range(0.0..1.0) < hit_p.max(0.72);
         let (ix, iy) = if hit {
             (tx, ty)
         } else {

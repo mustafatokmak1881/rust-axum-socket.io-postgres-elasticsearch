@@ -1581,6 +1581,9 @@ function createBuildingMesh(kind, fallbackMat) {
   if (kind === "bunker") {
     return createBunkerMesh(fallbackMat);
   }
+  if (kind === "radar") {
+    return createRadarStationMesh(fallbackMat);
+  }
   const template = templateForKind(kind);
   if (template) {
     const mesh = template.clone(true);
@@ -1872,23 +1875,24 @@ function createPatriotBatteryMesh(fallbackMat) {
 /** Reinforced MG pillbox — crew silhouettes + rotating cupola. */
 function createBunkerMesh(fallbackMat) {
   const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
-  const concrete = 0x5a5848;
-  const concreteDark = 0x3e3c34;
-  const sandbag = 0x6b6550;
-  const metal = 0x2a2c28;
-  const camo = 0x4a5538;
-  const skin = 0xc9a882;
-  const helmet = 0x3a4a30;
+  const concrete = 0x4e4c42;
+  const concreteDark = 0x35342c;
+  const dirt = 0x3a3428;
+  const dirtLight = 0x4a4436;
+  const sandbag = 0x5c5644;
+  const metal = 0x1e201c;
+  const slit = 0x0a0c08;
 
   const root = new THREE.Group();
   root.userData.building = true;
   root.userData.isBunker = true;
-  root.userData.bunkerRigVersion = 1;
+  root.userData.bunkerRigVersion = 2;
   root.userData.modelKind = "bunker";
   root.userData.isFallback = false;
   root.userData.keepMtlColors = true;
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-  root.userData.unitHeight = 0.42;
+  // Almost flush with ground — only the embrasure sticks up.
+  root.userData.unitHeight = 0.14;
   root.userData.turretTurnRate = 1.85;
   root.userData.scanRate = 0.75;
   root.userData.aimYaw = 0;
@@ -1897,8 +1901,8 @@ function createBunkerMesh(fallbackMat) {
     const m = new THREE.Mesh(
       geo,
       matStd(color, {
-        metalness: opts.metalness ?? 0.15,
-        roughness: opts.roughness ?? 0.78,
+        metalness: opts.metalness ?? 0.12,
+        roughness: opts.roughness ?? 0.85,
       }),
     );
     m.position.set(x, y, z);
@@ -1909,103 +1913,181 @@ function createBunkerMesh(fallbackMat) {
     return m;
   };
 
-  // Earth berm / pad
-  add(root, new THREE.BoxGeometry(0.78, 0.04, 0.68), 0x3a3830, 0, 0.02, 0, 0, 0, 0, {
-    roughness: 0.95,
+  // Low earth mound — bunker is mostly buried.
+  add(root, new THREE.CylinderGeometry(0.22, 0.28, 0.05, 12), dirt, 0, 0.02, 0, 0, 0, 0, {
+    roughness: 0.96,
+    cast: false,
+  });
+  add(root, new THREE.CylinderGeometry(0.16, 0.2, 0.035, 10), dirtLight, 0, 0.045, 0.02, 0, 0, 0, {
+    roughness: 0.94,
     cast: false,
   });
 
-  // Main concrete blockhouse
-  add(root, new THREE.BoxGeometry(0.58, 0.28, 0.48), concrete, 0, 0.18, 0);
-  add(root, new THREE.BoxGeometry(0.62, 0.06, 0.52), concreteDark, 0, 0.33, 0);
-  // Sloped front glacis
-  add(root, new THREE.BoxGeometry(0.56, 0.1, 0.14), concreteDark, 0, 0.14, 0.28, -0.45, 0, 0);
+  // Small concrete ring / roof slab at ground level
+  add(root, new THREE.CylinderGeometry(0.11, 0.12, 0.035, 10), concrete, 0, 0.055, 0, 0, 0, 0, {
+    roughness: 0.8,
+  });
+  add(root, new THREE.CylinderGeometry(0.09, 0.09, 0.02, 10), concreteDark, 0, 0.075, 0);
 
-  // Embrasure slits (dark recesses)
-  for (const z of [-0.12, 0.08, 0.22]) {
-    add(root, new THREE.BoxGeometry(0.1, 0.04, 0.04), 0x121410, 0.3, 0.22, z, 0, 0, 0, {
-      metalness: 0.4,
-      roughness: 0.5,
-      cast: false,
-    });
-    add(root, new THREE.BoxGeometry(0.1, 0.04, 0.04), 0x121410, -0.3, 0.22, z, 0, 0, 0, {
-      metalness: 0.4,
-      roughness: 0.5,
-      cast: false,
-    });
-  }
-  add(root, new THREE.BoxGeometry(0.22, 0.05, 0.05), 0x121410, 0, 0.24, 0.26, 0, 0, 0, {
+  // Tiny embrasure block — the only "building" you really see
+  add(root, new THREE.BoxGeometry(0.16, 0.055, 0.1), concreteDark, 0, 0.095, 0.04);
+  // Firing slit (dark recess)
+  add(root, new THREE.BoxGeometry(0.1, 0.022, 0.04), slit, 0, 0.1, 0.08, 0, 0, 0, {
+    metalness: 0.35,
+    roughness: 0.45,
     cast: false,
   });
-
-  // Sandbag ring
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2;
-    add(
-      root,
-      new THREE.BoxGeometry(0.1, 0.06, 0.07),
-      sandbag,
-      Math.cos(a) * 0.34,
-      0.08,
-      Math.sin(a) * 0.3,
-      0,
-      -a,
-      0,
-      { roughness: 0.9 },
-    );
-  }
-
-  // Team stripe
-  add(root, new THREE.BoxGeometry(0.5, 0.03, 0.04), accent, 0, 0.34, -0.22, 0, 0, 0, {
-    metalness: 0.2,
-    roughness: 0.55,
-  });
-
-  // —— Rotating MG cupola ——
-  const cupola = new THREE.Group();
-  cupola.name = "muzzleRoot";
-  cupola.position.set(0.02, 0.34, 0.02);
-  root.add(cupola);
-  add(cupola, new THREE.CylinderGeometry(0.09, 0.1, 0.08, 12), concreteDark, 0, 0.04, 0, 0, 0, 0, {
-    metalness: 0.25,
-    roughness: 0.7,
-  });
-  add(cupola, new THREE.CylinderGeometry(0.07, 0.07, 0.03, 10), metal, 0, 0.09, 0, 0, 0, 0, {
+  // Slit lip / armor plate
+  add(root, new THREE.BoxGeometry(0.12, 0.012, 0.02), metal, 0, 0.118, 0.09, 0, 0, 0, {
     metalness: 0.55,
     roughness: 0.4,
   });
 
-  // Twin MG barrels
-  for (const x of [-0.018, 0.018]) {
-    add(cupola, new THREE.CylinderGeometry(0.008, 0.009, 0.16, 6), metal, x, 0.08, 0.1, Math.PI / 2, 0, 0, {
-      metalness: 0.7,
-      roughness: 0.3,
-    });
-  }
-  const tip = new THREE.Object3D();
-  tip.name = "muzzle";
-  tip.position.set(0, 0.08, 0.18);
-  cupola.add(tip);
-
-  // Crew helmets visible in slits (3–4 soldiers)
-  const crewSlots = [
-    [-0.16, 0.26, 0.14],
-    [0.16, 0.26, 0.14],
-    [-0.12, 0.28, -0.1],
-    [0.14, 0.28, -0.08],
-  ];
-  for (const [cx, cy, cz] of crewSlots) {
-    add(root, new THREE.BoxGeometry(0.028, 0.022, 0.03), helmet, cx, cy, cz);
-    add(root, new THREE.BoxGeometry(0.022, 0.016, 0.02), skin, cx, cy - 0.014, cz + 0.006, 0, 0, 0, {
+  // A couple of sandbags blending into the berm
+  for (const [sx, sz, sy] of [
+    [-0.12, 0.06, 0.06],
+    [0.12, 0.05, 0.055],
+    [-0.08, -0.1, 0.05],
+    [0.09, -0.08, 0.05],
+  ]) {
+    add(root, new THREE.BoxGeometry(0.055, 0.028, 0.04), sandbag, sx, sy, sz, 0, Math.atan2(sx, sz) * 0.3, 0, {
+      roughness: 0.92,
       cast: false,
     });
-    add(root, new THREE.BoxGeometry(0.04, 0.03, 0.028), camo, cx, cy - 0.04, cz - 0.01);
   }
 
-  // Antenna
-  add(root, new THREE.CylinderGeometry(0.004, 0.004, 0.22, 5), metal, -0.22, 0.48, -0.16, 0, 0, 0, {
+  // Tiny team mark on the roof slab
+  add(root, new THREE.BoxGeometry(0.05, 0.008, 0.02), accent, 0, 0.088, -0.05, 0, 0, 0, {
+    metalness: 0.2,
+    roughness: 0.55,
+  });
+
+  // —— MG in the slit (yaw only; stays low) ——
+  const cupola = new THREE.Group();
+  cupola.name = "muzzleRoot";
+  cupola.position.set(0, 0.1, 0.06);
+  root.add(cupola);
+
+  // Gun mount barely visible in the embrasure
+  add(cupola, new THREE.BoxGeometry(0.04, 0.02, 0.03), metal, 0, 0, 0, 0, 0, 0, {
     metalness: 0.6,
     roughness: 0.35,
+  });
+  // Single MG barrel poking out
+  add(cupola, new THREE.CylinderGeometry(0.006, 0.007, 0.11, 6), metal, 0, 0.005, 0.07, Math.PI / 2, 0, 0, {
+    metalness: 0.75,
+    roughness: 0.28,
+  });
+  add(cupola, new THREE.CylinderGeometry(0.009, 0.009, 0.02, 6), metal, 0, 0.005, 0.04, Math.PI / 2, 0, 0, {
+    metalness: 0.65,
+    roughness: 0.35,
+  });
+
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0, 0.005, 0.13);
+  cupola.add(tip);
+
+  return root;
+}
+
+
+/** Long-range radar dish — support building, no weapons. */
+function createRadarStationMesh(fallbackMat) {
+  const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
+  const hull = 0x4a5240;
+  const hullDark = 0x32382c;
+  const metal = 0x2a2c28;
+  const dish = 0x5a6250;
+  const dishDark = 0x3a4034;
+  const panel = 0x1a2228;
+
+  const root = new THREE.Group();
+  root.userData.building = true;
+  root.userData.isRadar = true;
+  root.userData.radarRigVersion = 1;
+  root.userData.modelKind = "radar";
+  root.userData.isFallback = false;
+  root.userData.keepMtlColors = true;
+  root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.unitHeight = 0.55;
+  root.userData.scanRate = 0.85;
+
+  const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
+    const m = new THREE.Mesh(
+      geo,
+      matStd(color, {
+        metalness: opts.metalness ?? 0.25,
+        roughness: opts.roughness ?? 0.7,
+      }),
+    );
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = opts.cast !== false;
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  };
+
+  // Pad
+  add(root, new THREE.CylinderGeometry(0.32, 0.34, 0.04, 14), hullDark, 0, 0.02, 0, 0, 0, 0, {
+    roughness: 0.9,
+    cast: false,
+  });
+  // Equipment hut
+  add(root, new THREE.BoxGeometry(0.28, 0.16, 0.22), hull, -0.08, 0.12, -0.06, 0, 0, 0);
+  add(root, new THREE.BoxGeometry(0.12, 0.08, 0.02), panel, -0.08, 0.14, 0.06, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.45,
+  });
+  // Team stripe
+  add(root, new THREE.BoxGeometry(0.2, 0.02, 0.04), accent, -0.08, 0.21, -0.06, 0, 0, 0, {
+    metalness: 0.2,
+    roughness: 0.55,
+  });
+
+  // Mast
+  add(root, new THREE.CylinderGeometry(0.028, 0.035, 0.38, 8), metal, 0.12, 0.25, 0.08, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  add(root, new THREE.CylinderGeometry(0.04, 0.04, 0.03, 10), metal, 0.12, 0.44, 0.08, 0, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.45,
+  });
+
+  // Rotating dish assembly
+  const dishRoot = new THREE.Group();
+  dishRoot.name = "radarDish";
+  dishRoot.position.set(0.12, 0.46, 0.08);
+  root.add(dishRoot);
+
+  // Dish bowl (open toward +Z when elevated)
+  const bowl = new THREE.Mesh(
+    new THREE.SphereGeometry(0.18, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    matStd(dish, { metalness: 0.35, roughness: 0.55 }),
+  );
+  bowl.rotation.x = Math.PI * 0.55;
+  bowl.position.set(0, 0.02, 0.02);
+  bowl.castShadow = true;
+  bowl.receiveShadow = true;
+  dishRoot.add(bowl);
+
+  add(dishRoot, new THREE.CylinderGeometry(0.012, 0.012, 0.14, 6), metal, 0, 0.02, 0.1, Math.PI / 2, 0, 0, {
+    metalness: 0.6,
+    roughness: 0.35,
+  });
+  add(dishRoot, new THREE.SphereGeometry(0.025, 8, 8), dishDark, 0, 0.02, 0.16, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.5,
+  });
+  // Elevation tilt
+  dishRoot.rotation.x = -0.55;
+
+  // Side antenna stub
+  add(root, new THREE.CylinderGeometry(0.006, 0.006, 0.2, 5), metal, -0.18, 0.28, -0.12, 0.2, 0, 0.15, {
+    metalness: 0.55,
+    roughness: 0.4,
   });
 
   return root;
@@ -2837,7 +2919,8 @@ function buildingRadius(kind) {
     power_plant: 1.7,
     supply: 1.7,
     turret: 0.55,
-    bunker: 0.72,
+    bunker: 0.34,
+    radar: 0.7,
   }[kind] ?? 1.35;
   return visual * 0.42;
 }
@@ -3344,7 +3427,11 @@ function attachOwnerMarkings(mesh, entity) {
 
 function labelHeightFor(entity) {
   if (entity.building) {
-    return entity.kind === "hq" ? 2.05 : 1.5;
+    if (entity.kind === "hq") return 2.05;
+    if (entity.kind === "bunker") return 0.42;
+    if (entity.kind === "radar") return 0.72;
+    if (entity.kind === "turret") return 0.85;
+    return 1.5;
   }
   const h = unitDims(entity.kind).h || 0.08;
   return h + (String(entity.kind || "").includes("tank") || String(entity.kind || "").includes("mlrs") ? 0.1 : 0.05);
@@ -4287,7 +4374,7 @@ function disposeMeshTree(mesh) {
 }
 
 function buildingHasProperModel(kind) {
-  if (kind === "turret" || kind === "bunker") return true;
+  if (kind === "turret" || kind === "bunker" || kind === "radar") return true;
   return Boolean(templateForKind(kind) || geometryForKind(kind));
 }
 
@@ -4320,7 +4407,18 @@ function upsertMesh(entity) {
   if (
     mesh &&
     entity.kind === "bunker" &&
-    (!mesh.userData.isBunker || (mesh.userData.bunkerRigVersion || 0) < 1)
+    (!mesh.userData.isBunker || (mesh.userData.bunkerRigVersion || 0) < 2)
+  ) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
+  if (
+    mesh &&
+    entity.kind === "radar" &&
+    (!mesh.userData.isRadar || (mesh.userData.radarRigVersion || 0) < 1)
   ) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
@@ -4881,7 +4979,7 @@ function spawnShotFx(shot) {
         fromMesh,
         isTankMg && fromMesh.getObjectByName("mgMuzzle") ? "mgMuzzle" : "muzzle",
       )
-    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : isBunkerMg ? 0.38 : isMlrs ? 0.22 : 0.12, shot.y0);
+    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : isBunkerMg ? 0.12 : isMlrs ? 0.22 : 0.12, shot.y0);
   // Always use server impact point so misses fly wide of the mesh.
   const endY = didHit
     ? (toMesh?.userData?.unitHeight || (toMesh?.userData?.building ? 0.6 : 0.12) || 0.12) * 0.55
@@ -5796,7 +5894,10 @@ function animate() {
     } else if (mesh.userData.corpse) {
       if (now - (mesh.userData.corpseAt || 0) > 900) reap.push(mesh);
     } else {
-      if (mesh.userData.isPatriot || mesh.userData.isBunker) smoothPatriotFacing(mesh, dt);
+      if (mesh.userData.isRadar) {
+        const dish = mesh.getObjectByName("radarDish");
+        if (dish) dish.rotation.y += (mesh.userData.scanRate || 0.85) * dt;
+      } else if (mesh.userData.isPatriot || mesh.userData.isBunker) smoothPatriotFacing(mesh, dt);
       else smoothUnitFacing(mesh, dt);
       updateTankDrive(mesh, dt);
       updateInfantryDrive(mesh, dt);
