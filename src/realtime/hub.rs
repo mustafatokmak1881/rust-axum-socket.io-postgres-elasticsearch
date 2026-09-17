@@ -414,6 +414,7 @@ impl MatchHub {
                 tokio::time::interval(Duration::from_millis(1000 / match_sim::TICK_HZ as u64));
             loop {
                 interval.tick().await;
+                let mut outgoing: Vec<(Uuid, ServerMsg)> = Vec::new();
                 let ended = {
                     let mut rt = runtime.write().await;
                     rt.sim.tick_once();
@@ -427,14 +428,20 @@ impl MatchHub {
 
                     if rt.sim.tick % match_sim::BROADCAST_EVERY as u64 == 0 {
                         let member_ids: Vec<Uuid> = rt.members.keys().copied().collect();
+                        let tick = rt.sim.tick;
+                        outgoing.reserve(member_ids.len());
                         for uid in member_ids {
+                            if rt.sim.players.get(&uid).is_some_and(|p| !p.connected) {
+                                rt.sim.reveal_vision_for(uid);
+                                continue;
+                            }
                             let (entities, removed, resources, explored_new, shots) =
                                 rt.sim.delta_for(uid);
                             let focus = rt.sim.players.get(&uid).map(|p| p.focus);
-                            hub.send(
+                            outgoing.push((
                                 uid,
                                 ServerMsg::Delta {
-                                    tick: rt.sim.tick,
+                                    tick,
                                     entities,
                                     removed,
                                     resources,
@@ -442,7 +449,7 @@ impl MatchHub {
                                     explored_new,
                                     shots,
                                 },
-                            );
+                            ));
                         }
                         rt.sim.clear_frame_flags();
                     }
@@ -452,6 +459,10 @@ impl MatchHub {
                     }
                     rt.sim.ended
                 };
+
+                for (uid, msg) in outgoing {
+                    hub.send(uid, msg);
+                }
 
                 if ended {
                     let (winner, reason, players) = {

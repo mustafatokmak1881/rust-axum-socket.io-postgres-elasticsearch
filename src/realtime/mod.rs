@@ -1,4 +1,5 @@
 pub mod aoi;
+pub mod grid;
 pub mod hub;
 pub mod match_sim;
 pub mod protocol;

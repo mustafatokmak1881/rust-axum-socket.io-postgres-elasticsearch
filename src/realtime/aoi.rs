@@ -1,6 +1,5 @@
 //! Generals-style vision + explored fog-of-war helpers.
-
-use uuid::Uuid;
+//! Hot-path visibility uses the spatial grid in `MatchSim::visible_ids_for`.
 
 use super::match_sim::Entity;
 
@@ -25,46 +24,6 @@ pub fn vision_radius(entity: &Entity) -> f32 {
     } else {
         0.0
     }
-}
-
-pub fn in_viewer_vision<'a>(
-    entities: impl IntoIterator<Item = &'a Entity>,
-    viewer: Uuid,
-    x: f32,
-    y: f32,
-) -> bool {
-    for entity in entities {
-        if entity.owner != viewer || !entity_provides_vision(entity) {
-            continue;
-        }
-        let radius = vision_radius(entity);
-        if radius <= 0.0 {
-            continue;
-        }
-        let dx = entity.x - x;
-        let dy = entity.y - y;
-        if dx * dx + dy * dy <= radius * radius {
-            return true;
-        }
-    }
-    false
-}
-
-/// Own entities always visible; enemies only inside current vision circles.
-pub fn visible_entities<'a>(
-    entities: impl IntoIterator<Item = &'a Entity> + Clone,
-    viewer: Uuid,
-) -> Vec<&'a Entity> {
-    let all: Vec<&'a Entity> = entities.into_iter().collect();
-    all.iter()
-        .copied()
-        .filter(|entity| {
-            if entity.owner == viewer {
-                return true;
-            }
-            in_viewer_vision(all.iter().copied(), viewer, entity.x, entity.y)
-        })
-        .collect()
 }
 
 #[derive(Clone, Debug)]

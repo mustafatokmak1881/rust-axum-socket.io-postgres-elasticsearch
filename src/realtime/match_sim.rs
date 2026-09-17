@@ -5,6 +5,7 @@ use rand::Rng;
 use uuid::Uuid;
 
 use super::aoi;
+use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
     BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ShotEvent, TrainableInfo,
 };
@@ -508,6 +509,8 @@ pub struct MatchSim {
     pub tick: u64,
     pub players: HashMap<Uuid, PlayerState>,
     pub entities: HashMap<Uuid, Entity>,
+    /// Spatial hash of `entities` — rebuilt/kept in sync for neighbor queries.
+    grid: SpatialGrid,
     pub removed: Vec<Uuid>,
     /// Shots fired since last client broadcast (cleared in clear_frame_flags).
     pub shots: Vec<ShotEvent>,
@@ -540,6 +543,7 @@ impl MatchSim {
             tick: 0,
             players: HashMap::new(),
             entities: HashMap::new(),
+            grid: SpatialGrid::new(),
             removed: Vec::new(),
             shots: Vec::new(),
             ended: false,
@@ -574,38 +578,35 @@ impl MatchSim {
             );
 
             let hq_id = Uuid::new_v4();
-            sim.entities.insert(
-                hq_id,
-                Entity {
-                    id: hq_id,
-                    kind: "hq".into(),
-                    owner: user_id,
-                    team,
-                    x,
-                    y,
-                    hp: 7500.0,
-                    max_hp: 7500.0,
-                    building: true,
-                    unit: false,
-                    flag,
-                    build_remaining_ms: 0,
-                    train_queue: VecDeque::new(),
-                    target: None,
-                    move_to: None,
-                    speed: 0.0,
-                    damage: 0.0,
-                    range: 0.0,
-                    attack_cooldown_ms: 0,
-                    mag_ammo: 0,
-                    dirty: true,
-                    stuck_frames: 0,
-                    detour: None,
-                    detour_ttl: 0,
-                    last_escape_ang: 0.0,
-                    prone: false,
-                    prone_until_tick: 0,
-                },
-            );
+            sim.put_entity(Entity {
+                id: hq_id,
+                kind: "hq".into(),
+                owner: user_id,
+                team,
+                x,
+                y,
+                hp: 7500.0,
+                max_hp: 7500.0,
+                building: true,
+                unit: false,
+                flag,
+                build_remaining_ms: 0,
+                train_queue: VecDeque::new(),
+                target: None,
+                move_to: None,
+                speed: 0.0,
+                damage: 0.0,
+                range: 0.0,
+                attack_cooldown_ms: 0,
+                mag_ammo: 0,
+                dirty: true,
+                stuck_frames: 0,
+                detour: None,
+                detour_ttl: 0,
+                last_escape_ang: 0.0,
+                prone: false,
+                prone_until_tick: 0,
+            });
             sim.spawn_starting_force(user_id, team, x, y);
             sim.reveal_vision_for(user_id);
         }
@@ -649,16 +650,27 @@ impl MatchSim {
             let ix = x.floor() as i32;
             let iy = y.floor() as i32;
 
-            let blocked = self.entities.values().any(|e| {
+            let fx = ix as f32 + 0.5;
+            let fy = iy as f32 + 0.5;
+            let sep = MIN_SEP * 0.85;
+            let mut blocked = false;
+            self.grid.for_each_nearby(fx, fy, sep + MAX_ENTITY_RADIUS, |id| {
+                let Some(e) = self.entities.get(&id) else {
+                    return false;
+                };
                 if !e.building {
                     return false;
                 }
-                let dx = e.x - (ix as f32 + 0.5);
-                let dy = e.y - (iy as f32 + 0.5);
-                dx * dx + dy * dy < (MIN_SEP * 0.85) * (MIN_SEP * 0.85)
+                let dx = e.x - fx;
+                let dy = e.y - fy;
+                if dx * dx + dy * dy < sep * sep {
+                    blocked = true;
+                    return true;
+                }
+                false
             });
             if !blocked {
-                return (ix as f32 + 0.5, iy as f32 + 0.5);
+                return (fx, fy);
             }
         }
 
@@ -712,38 +724,35 @@ impl MatchSim {
         );
 
         let hq_id = Uuid::new_v4();
-        self.entities.insert(
-            hq_id,
-            Entity {
-                id: hq_id,
-                kind: "hq".into(),
-                owner: user_id,
-                team,
-                x,
-                y,
-                hp: 7500.0,
-                max_hp: 7500.0,
-                building: true,
-                unit: false,
-                flag,
-                build_remaining_ms: 0,
-                train_queue: VecDeque::new(),
-                target: None,
-                move_to: None,
-                speed: 0.0,
-                damage: 0.0,
-                range: 0.0,
-                attack_cooldown_ms: 0,
-                mag_ammo: 0,
-                dirty: true,
-                stuck_frames: 0,
-                detour: None,
-                detour_ttl: 0,
-                last_escape_ang: 0.0,
-                prone: false,
-                prone_until_tick: 0,
-            },
-        );
+        self.put_entity(Entity {
+            id: hq_id,
+            kind: "hq".into(),
+            owner: user_id,
+            team,
+            x,
+            y,
+            hp: 7500.0,
+            max_hp: 7500.0,
+            building: true,
+            unit: false,
+            flag,
+            build_remaining_ms: 0,
+            train_queue: VecDeque::new(),
+            target: None,
+            move_to: None,
+            speed: 0.0,
+            damage: 0.0,
+            range: 0.0,
+            attack_cooldown_ms: 0,
+            mag_ammo: 0,
+            dirty: true,
+            stuck_frames: 0,
+            detour: None,
+            detour_ttl: 0,
+            last_escape_ang: 0.0,
+            prone: false,
+            prone_until_tick: 0,
+        });
         self.spawn_starting_force(user_id, team, x, y);
         self.reveal_vision_for(user_id);
 
@@ -783,42 +792,49 @@ impl MatchSim {
 
     fn insert_unit(&mut self, owner: Uuid, team: u8, def: &UnitDef, x: f32, y: f32) {
         let id = Uuid::new_v4();
-        self.entities.insert(
+        self.put_entity(Entity {
             id,
-            Entity {
-                id,
-                kind: def.unit.into(),
-                owner,
-                team,
-                x,
-                y,
-                hp: def.hp,
-                max_hp: def.hp,
-                building: false,
-                unit: true,
-                flag: None,
-                build_remaining_ms: 0,
-                train_queue: VecDeque::new(),
-                target: None,
-                move_to: None,
-                speed: def.speed,
-                damage: def.damage,
-                range: def.range,
-                attack_cooldown_ms: 0,
-                mag_ammo: if is_rifle_infantry(def.unit) {
-                    RIFLE_MAG
-                } else {
-                    0
-                },
-                dirty: true,
-                stuck_frames: 0,
-                detour: None,
-                detour_ttl: 0,
-                last_escape_ang: 0.0,
-                prone: false,
-                prone_until_tick: 0,
+            kind: def.unit.into(),
+            owner,
+            team,
+            x,
+            y,
+            hp: def.hp,
+            max_hp: def.hp,
+            building: false,
+            unit: true,
+            flag: None,
+            build_remaining_ms: 0,
+            train_queue: VecDeque::new(),
+            target: None,
+            move_to: None,
+            speed: def.speed,
+            damage: def.damage,
+            range: def.range,
+            attack_cooldown_ms: 0,
+            mag_ammo: if is_rifle_infantry(def.unit) {
+                RIFLE_MAG
+            } else {
+                0
             },
-        );
+            dirty: true,
+            stuck_frames: 0,
+            detour: None,
+            detour_ttl: 0,
+            last_escape_ang: 0.0,
+            prone: false,
+            prone_until_tick: 0,
+        });
+    }
+
+    fn put_entity(&mut self, entity: Entity) {
+        self.grid.upsert(entity.id, entity.x, entity.y);
+        self.entities.insert(entity.id, entity);
+    }
+
+    fn take_entity(&mut self, id: Uuid) -> Option<Entity> {
+        self.grid.remove(id);
+        self.entities.remove(&id)
     }
 
     pub fn buildable_info() -> Vec<BuildableInfo> {
@@ -858,9 +874,10 @@ impl MatchSim {
     pub fn snapshot_for(&self, user_id: Uuid) -> Option<MatchSnapshot> {
         let player = self.players.values().find(|p| p.is(user_id))?;
         let focus = player.focus;
-        let entities = aoi::visible_entities(self.entities.values(), user_id)
+        let entities = self
+            .visible_ids_for(user_id)
             .into_iter()
-            .map(|e| self.entity_view(e))
+            .filter_map(|id| self.entities.get(&id).map(|e| self.entity_view(e)))
             .collect();
 
         Some(MatchSnapshot {
@@ -928,29 +945,50 @@ impl MatchSim {
         }
 
         let place_r = building_radius(kind);
-        let blocked = self.entities.values().any(|e| {
-            if !e.building {
-                return false;
-            }
-            let other_r = building_radius(&e.kind);
-            let dx = e.x - fx;
-            let dy = e.y - fy;
-            let min_dist = place_r + other_r + collision_pad();
-            dx * dx + dy * dy < min_dist * min_dist
-        });
+        let mut blocked = false;
+        self.grid.for_each_nearby(
+            fx,
+            fy,
+            place_r + MAX_ENTITY_RADIUS + collision_pad(),
+            |id| {
+                let Some(e) = self.entities.get(&id) else {
+                    return false;
+                };
+                if !e.building {
+                    return false;
+                }
+                let other_r = building_radius(&e.kind);
+                let dx = e.x - fx;
+                let dy = e.y - fy;
+                let min_dist = place_r + other_r + collision_pad();
+                if dx * dx + dy * dy < min_dist * min_dist {
+                    blocked = true;
+                    return true;
+                }
+                false
+            },
+        );
         if blocked {
             return Err("Tile occupied");
         }
 
         // Cannot plant structures inside another commander's base footprint.
-        let in_enemy_land = self.entities.values().any(|e| {
+        let mut in_enemy_land = false;
+        self.grid.for_each_nearby(fx, fy, 14.0 + place_r, |id| {
+            let Some(e) = self.entities.get(&id) else {
+                return false;
+            };
             if !e.building || e.team == my_team || e.hp <= 0.0 {
                 return false;
             }
             let dx = e.x - fx;
             let dy = e.y - fy;
             let block = Self::enemy_build_block_radius(&e.kind) + place_r;
-            dx * dx + dy * dy < block * block
+            if dx * dx + dy * dy < block * block {
+                in_enemy_land = true;
+                return true;
+            }
+            false
         });
         if in_enemy_land {
             return Err("Enemy territory");
@@ -980,38 +1018,35 @@ impl MatchSim {
 
         let flag = player.flag.clone();
         let id = Uuid::new_v4();
-        self.entities.insert(
+        self.put_entity(Entity {
             id,
-            Entity {
-                id,
-                kind: def.kind.into(),
-                owner: user_id,
-                team: my_team,
-                x: fx,
-                y: fy,
-                hp: def.hp,
-                max_hp: def.hp,
-                building: true,
-                unit: false,
-                flag,
-                build_remaining_ms: def.build_ms,
-                train_queue: VecDeque::new(),
-                target: None,
-                move_to: None,
-                speed: 0.0,
-                damage: 0.0,
-                range: 0.0,
-                attack_cooldown_ms: 0,
-                mag_ammo: 0,
-                dirty: true,
-                stuck_frames: 0,
-                detour: None,
-                detour_ttl: 0,
-                last_escape_ang: 0.0,
-                prone: false,
-                prone_until_tick: 0,
-            },
-        );
+            kind: def.kind.into(),
+            owner: user_id,
+            team: my_team,
+            x: fx,
+            y: fy,
+            hp: def.hp,
+            max_hp: def.hp,
+            building: true,
+            unit: false,
+            flag,
+            build_remaining_ms: def.build_ms,
+            train_queue: VecDeque::new(),
+            target: None,
+            move_to: None,
+            speed: 0.0,
+            damage: 0.0,
+            range: 0.0,
+            attack_cooldown_ms: 0,
+            mag_ammo: 0,
+            dirty: true,
+            stuck_frames: 0,
+            detour: None,
+            detour_ttl: 0,
+            last_escape_ang: 0.0,
+            prone: false,
+            prone_until_tick: 0,
+        });
 
         // Redis-stream style delayed job marker.
         self.stream_jobs.push_back(StreamJob {
@@ -1148,6 +1183,8 @@ impl MatchSim {
         }
         self.tick += 1;
         let dt_ms = 1000 / TICK_HZ;
+        self.grid
+            .rebuild(self.entities.values().map(|e| (e.id, e.x, e.y)));
 
         // Income from supply buildings.
         if self.tick % u64::from(TICK_HZ) == 0 {
@@ -1173,7 +1210,7 @@ impl MatchSim {
             .map(|e| e.id)
             .collect();
         for id in building_ids {
-            let Some(mut entity) = self.entities.remove(&id) else {
+            let Some(mut entity) = self.take_entity(id) else {
                 continue;
             };
 
@@ -1230,14 +1267,14 @@ impl MatchSim {
                                 prone: false,
                                 prone_until_tick: 0,
                             };
-                            self.entities.insert(uid, spawn);
+                            self.put_entity(spawn);
                         }
                     }
                 }
             }
 
             // Buildings do not fire for now — only units (soldiers/tanks) attack.
-            self.entities.insert(id, entity);
+            self.put_entity(entity);
         }
 
         // Units move after buildings are all back in the map (solid obstacles).
@@ -1248,7 +1285,7 @@ impl MatchSim {
             .map(|e| e.id)
             .collect();
         for id in unit_ids {
-            let Some(mut entity) = self.entities.remove(&id) else {
+            let Some(mut entity) = self.take_entity(id) else {
                 continue;
             };
 
@@ -1604,7 +1641,7 @@ impl MatchSim {
                 }
             }
 
-            self.entities.insert(id, entity);
+            self.put_entity(entity);
         }
 
         self.separate_units(dt_ms);
@@ -1619,7 +1656,7 @@ impl MatchSim {
             .map(|e| e.id)
             .collect();
         for id in dead {
-            if let Some(entity) = self.entities.remove(&id) {
+            if let Some(entity) = self.take_entity(id) {
                 self.removed.push(id);
                 if entity.kind == "hq" {
                     if let Some(player) = self.players.get_mut(&entity.owner) {
@@ -1644,20 +1681,23 @@ impl MatchSim {
         primary: Uuid,
     ) {
         const RADIUS: f32 = 1.15;
-        let victims: Vec<(Uuid, f32, bool)> = self
-            .entities
-            .values()
-            .filter(|e| e.team != team && e.hp > 0.0 && (e.unit || e.building))
-            .filter_map(|e| {
-                let dx = e.x - x;
-                let dy = e.y - y;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > RADIUS {
-                    return None;
-                }
-                Some((e.id, dist, e.unit && !e.kind.contains("tank")))
-            })
-            .collect();
+        let mut victims: Vec<(Uuid, f32, bool)> = Vec::new();
+        self.grid.for_each_nearby(x, y, RADIUS + MAX_ENTITY_RADIUS, |id| {
+            let Some(e) = self.entities.get(&id) else {
+                return false;
+            };
+            if e.team == team || e.hp <= 0.0 || !(e.unit || e.building) {
+                return false;
+            }
+            let dx = e.x - x;
+            let dy = e.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > RADIUS {
+                return false;
+            }
+            victims.push((e.id, dist, e.unit && !e.kind.contains("tank")));
+            false
+        });
 
         let inx = x - from_x;
         let iny = y - from_y;
@@ -1734,29 +1774,41 @@ impl MatchSim {
             }
         }
         // Another building between impact and victim.
-        for other in self.entities.values() {
-            if other.id == primary || other.id == victim.id || other.hp <= 0.0 {
-                continue;
-            }
-            let Some(r) = occluder_radius(other) else {
-                continue;
-            };
-            if !other.building {
-                continue;
-            }
-            let (gap, t) = segment_point_gap(
-                impact_x,
-                impact_y,
-                victim.x,
-                victim.y,
-                other.x,
-                other.y,
-            );
-            if t > 0.08 && t < 0.92 && gap < r {
-                return true;
-            }
-        }
-        false
+        let mut wall = false;
+        self.grid.for_each_in_aabb(
+            impact_x.min(victim.x) - MAX_ENTITY_RADIUS,
+            impact_y.min(victim.y) - MAX_ENTITY_RADIUS,
+            impact_x.max(victim.x) + MAX_ENTITY_RADIUS,
+            impact_y.max(victim.y) + MAX_ENTITY_RADIUS,
+            |id| {
+                let Some(other) = self.entities.get(&id) else {
+                    return false;
+                };
+                if other.id == primary || other.id == victim.id || other.hp <= 0.0 {
+                    return false;
+                }
+                let Some(r) = occluder_radius(other) else {
+                    return false;
+                };
+                if !other.building {
+                    return false;
+                }
+                let (gap, t) = segment_point_gap(
+                    impact_x,
+                    impact_y,
+                    victim.x,
+                    victim.y,
+                    other.x,
+                    other.y,
+                );
+                if t > 0.08 && t < 0.92 && gap < r {
+                    wall = true;
+                    return true;
+                }
+                false
+            },
+        );
+        wall
     }
 
     /// Line of fire from (ax,ay) to `target`. Buildings/tanks block; hugging a corner is a peek.
@@ -1779,62 +1831,74 @@ impl MatchSim {
         let mut exposure = 1.0;
         let mut used_cover = false;
 
-        for other in self.entities.values() {
-            if other.id == from_id || other.id == target.id || other.hp <= 0.0 {
-                continue;
-            }
-            let Some(r) = occluder_radius(other) else {
-                continue;
-            };
-
-            let ocx = other.x - ax;
-            let ocy = other.y - ay;
-            // Cover behind the shooter does not sit on the firing line.
-            if ocx * ux + ocy * uy < -0.05 {
-                continue;
-            }
-
-            let (gap, t) = segment_point_gap(ax, ay, tx, ty, other.x, other.y);
-
-            // Shooter peeking around this same wall — don't eat their own muzzle.
-            let shooter_hug = {
-                let sdx = other.x - ax;
-                let sdy = other.y - ay;
-                (sdx * sdx + sdy * sdy).sqrt() < r + 0.55
-            };
-            if t < 0.14 && shooter_hug {
-                continue;
-            }
-
-            let tdx = other.x - tx;
-            let tdy = other.y - ty;
-            let hug = (tdx * tdx + tdy * tdy).sqrt();
-            let hugging_target = !target.building && hug < r + 0.5;
-
-            if t > 0.06 && t < 0.97 && gap < r {
-                if hugging_target && gap > r * 0.62 {
-                    // Ray clips the edge — peeking a corner, not fully behind.
-                    exposure *= 0.22;
-                    used_cover = true;
-                } else {
-                    blocked = true;
-                    break;
+        self.grid.for_each_in_aabb(
+            ax.min(tx) - MAX_ENTITY_RADIUS,
+            ay.min(ty) - MAX_ENTITY_RADIUS,
+            ax.max(tx) + MAX_ENTITY_RADIUS,
+            ay.max(ty) + MAX_ENTITY_RADIUS,
+            |id| {
+                let Some(other) = self.entities.get(&id) else {
+                    return false;
+                };
+                if other.id == from_id || other.id == target.id || other.hp <= 0.0 {
+                    return false;
                 }
-            } else if hugging_target {
-                // Cover sits in front of the target even if the ray just misses the hull.
-                let to_cover_x = other.x - tx;
-                let to_cover_y = other.y - ty;
-                let clen = (to_cover_x * to_cover_x + to_cover_y * to_cover_y).sqrt().max(0.001);
-                // From the target, is this cover toward the shooter?
-                let toward_shooter = (-ux) * (to_cover_x / clen) + (-uy) * (to_cover_y / clen);
-                if toward_shooter > 0.2 && gap < r + 0.28 {
-                    let peek = ((gap - r).max(0.0) / 0.28).clamp(0.0, 1.0);
-                    // peek=0 almost behind; peek=1 just using nearby cover.
-                    exposure *= 0.18 + peek * 0.42;
-                    used_cover = true;
+                let Some(r) = occluder_radius(other) else {
+                    return false;
+                };
+
+                let ocx = other.x - ax;
+                let ocy = other.y - ay;
+                // Cover behind the shooter does not sit on the firing line.
+                if ocx * ux + ocy * uy < -0.05 {
+                    return false;
                 }
-            }
-        }
+
+                let (gap, t) = segment_point_gap(ax, ay, tx, ty, other.x, other.y);
+
+                // Shooter peeking around this same wall — don't eat their own muzzle.
+                let shooter_hug = {
+                    let sdx = other.x - ax;
+                    let sdy = other.y - ay;
+                    (sdx * sdx + sdy * sdy).sqrt() < r + 0.55
+                };
+                if t < 0.14 && shooter_hug {
+                    return false;
+                }
+
+                let tdx = other.x - tx;
+                let tdy = other.y - ty;
+                let hug = (tdx * tdx + tdy * tdy).sqrt();
+                let hugging_target = !target.building && hug < r + 0.5;
+
+                if t > 0.06 && t < 0.97 && gap < r {
+                    if hugging_target && gap > r * 0.62 {
+                        // Ray clips the edge — peeking a corner, not fully behind.
+                        exposure *= 0.22;
+                        used_cover = true;
+                    } else {
+                        blocked = true;
+                        return true;
+                    }
+                } else if hugging_target {
+                    // Cover sits in front of the target even if the ray just misses the hull.
+                    let to_cover_x = other.x - tx;
+                    let to_cover_y = other.y - ty;
+                    let clen = (to_cover_x * to_cover_x + to_cover_y * to_cover_y)
+                        .sqrt()
+                        .max(0.001);
+                    // From the target, is this cover toward the shooter?
+                    let toward_shooter = (-ux) * (to_cover_x / clen) + (-uy) * (to_cover_y / clen);
+                    if toward_shooter > 0.2 && gap < r + 0.28 {
+                        let peek = ((gap - r).max(0.0) / 0.28).clamp(0.0, 1.0);
+                        // peek=0 almost behind; peek=1 just using nearby cover.
+                        exposure *= 0.18 + peek * 0.42;
+                        used_cover = true;
+                    }
+                }
+                false
+            },
+        );
 
         if blocked {
             return ShotCover {
@@ -1864,7 +1928,15 @@ impl MatchSim {
     ) -> Option<Uuid> {
         let mut best_unit: Option<(Uuid, f32)> = None;
         let mut best_building: Option<(Uuid, f32)> = None;
-        for other in self.entities.values() {
+        let mut candidates: Vec<Uuid> = Vec::new();
+        self.grid.for_each_nearby(x, y, range + MAX_ENTITY_RADIUS, |id| {
+            candidates.push(id);
+            false
+        });
+        for id in candidates {
+            let Some(other) = self.entities.get(&id) else {
+                continue;
+            };
             if other.team == team || other.hp <= 0.0 {
                 continue;
             }
@@ -1934,34 +2006,45 @@ impl MatchSim {
         solid_units: bool,
         overrun_team: Option<u8>,
     ) -> bool {
-        for other in self.entities.values() {
-            if other.id == self_id || Some(other.id) == ignore {
-                continue;
-            }
-            if !other.building && !other.unit {
-                continue;
-            }
-            if other.unit {
-                if let Some(team) = overrun_team {
-                    // Tanks drive through enemy infantry; still blocked by enemy tanks.
-                    if other.team != team && !other.kind.contains("tank") {
-                        continue;
+        let mut hit = false;
+        self.grid.for_each_nearby(
+            x,
+            y,
+            self_r + MAX_ENTITY_RADIUS + collision_pad(),
+            |id| {
+                let Some(other) = self.entities.get(&id) else {
+                    return false;
+                };
+                if other.id == self_id || Some(other.id) == ignore {
+                    return false;
+                }
+                if !other.building && !other.unit {
+                    return false;
+                }
+                if other.unit {
+                    if let Some(team) = overrun_team {
+                        // Tanks drive through enemy infantry; still blocked by enemy tanks.
+                        if other.team != team && !other.kind.contains("tank") {
+                            return false;
+                        }
+                    }
+                    if !solid_units {
+                        return false;
                     }
                 }
-                if !solid_units {
-                    continue;
+                // Under-construction buildings still block.
+                let other_r = entity_radius(other);
+                let min_d = self_r + other_r + collision_pad();
+                let dx = other.x - x;
+                let dy = other.y - y;
+                if dx * dx + dy * dy < min_d * min_d {
+                    hit = true;
+                    return true;
                 }
-            }
-            // Under-construction buildings still block.
-            let other_r = entity_radius(other);
-            let min_d = self_r + other_r + collision_pad();
-            let dx = other.x - x;
-            let dy = other.y - y;
-            if dx * dx + dy * dy < min_d * min_d {
-                return true;
-            }
-        }
-        false
+                false
+            },
+        );
+        hit
     }
 
     fn steer_step_ex(
@@ -2152,10 +2235,17 @@ impl MatchSim {
 
         let mut crushed: Vec<Uuid> = Vec::new();
         for &(_tid, team, tx, ty, tr) in &tanks {
-            for other in self.entities.values() {
-                if !other.unit || other.hp <= 0.0 || other.team == team || other.kind.contains("tank")
+            let query_r = tr * 0.92 + MAX_UNIT_RADIUS * 0.25;
+            self.grid.for_each_nearby(tx, ty, query_r, |id| {
+                let Some(other) = self.entities.get(&id) else {
+                    return false;
+                };
+                if !other.unit
+                    || other.hp <= 0.0
+                    || other.team == team
+                    || other.kind.contains("tank")
                 {
-                    continue;
+                    return false;
                 }
                 let dx = other.x - tx;
                 let dy = other.y - ty;
@@ -2164,7 +2254,8 @@ impl MatchSim {
                 if dx * dx + dy * dy <= crush_r * crush_r {
                     crushed.push(other.id);
                 }
-            }
+                false
+            });
         }
         crushed.sort_unstable();
         crushed.dedup();
@@ -2179,7 +2270,7 @@ impl MatchSim {
     }
 
     fn separate_units(&mut self, dt_ms: u32) {
-        // Soft separation is expensive O(n²); every other tick is enough visually.
+        // Neighbor-only separation; every other tick is enough visually.
         if self.tick % 2 == 1 {
             return;
         }
@@ -2196,42 +2287,57 @@ impl MatchSim {
         let strength = 2.8 * (dt_ms as f32 / 1000.0) * 2.0;
         let mut pushes: HashMap<Uuid, (f32, f32)> = HashMap::new();
 
-        for (i, &a_id) in ids.iter().enumerate() {
+        for &a_id in &ids {
             let Some(a) = self.entities.get(&a_id) else {
                 continue;
             };
             let ar = unit_radius(&a.kind);
-            for &b_id in ids.iter().skip(i + 1) {
-                let Some(b) = self.entities.get(&b_id) else {
-                    continue;
-                };
-                // Don't push tanks off the infantry they are crushing.
-                let a_tank = a.kind.contains("tank");
-                let b_tank = b.kind.contains("tank");
-                if a_tank && !b_tank && a.team != b.team {
-                    continue;
-                }
-                if b_tank && !a_tank && a.team != b.team {
-                    continue;
-                }
-                let br = unit_radius(&b.kind);
-                let dx = a.x - b.x;
-                let dy = a.y - b.y;
-                let dist = (dx * dx + dy * dy).sqrt();
-                let min_d = ar + br + collision_pad();
-                if dist >= min_d || dist < 1e-4 {
-                    continue;
-                }
-                let push = (min_d - dist) * 0.5;
-                let nx = dx / dist;
-                let ny = dy / dist;
-                let pa = pushes.entry(a_id).or_insert((0.0, 0.0));
-                pa.0 += nx * push;
-                pa.1 += ny * push;
-                let pb = pushes.entry(b_id).or_insert((0.0, 0.0));
-                pb.0 -= nx * push;
-                pb.1 -= ny * push;
-            }
+            let ax = a.x;
+            let ay = a.y;
+            let a_tank = a.kind.contains("tank");
+            let a_team = a.team;
+            self.grid.for_each_nearby(
+                ax,
+                ay,
+                ar + MAX_UNIT_RADIUS + collision_pad(),
+                |b_id| {
+                    if b_id <= a_id {
+                        return false;
+                    }
+                    let Some(b) = self.entities.get(&b_id) else {
+                        return false;
+                    };
+                    if !b.unit {
+                        return false;
+                    }
+                    // Don't push tanks off the infantry they are crushing.
+                    let b_tank = b.kind.contains("tank");
+                    if a_tank && !b_tank && a_team != b.team {
+                        return false;
+                    }
+                    if b_tank && !a_tank && a_team != b.team {
+                        return false;
+                    }
+                    let br = unit_radius(&b.kind);
+                    let dx = ax - b.x;
+                    let dy = ay - b.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    let min_d = ar + br + collision_pad();
+                    if dist >= min_d || dist < 1e-4 {
+                        return false;
+                    }
+                    let push = (min_d - dist) * 0.5;
+                    let nx = dx / dist;
+                    let ny = dy / dist;
+                    let pa = pushes.entry(a_id).or_insert((0.0, 0.0));
+                    pa.0 += nx * push;
+                    pa.1 += ny * push;
+                    let pb = pushes.entry(b_id).or_insert((0.0, 0.0));
+                    pb.0 -= nx * push;
+                    pb.1 -= ny * push;
+                    false
+                },
+            );
         }
 
         for (id, (px, py)) in pushes {
@@ -2250,11 +2356,13 @@ impl MatchSim {
                 entity.y = ny;
                 entity.dirty = true;
             }
+            self.grid.upsert(id, nx, ny);
         }
     }
 
     fn clamp_entities_to_map(&mut self) {
         let map = self.map_size as f32;
+        let mut moved: Vec<(Uuid, f32, f32)> = Vec::new();
         for entity in self.entities.values_mut() {
             if !entity.unit {
                 continue;
@@ -2265,8 +2373,47 @@ impl MatchSim {
                 entity.x = nx;
                 entity.y = ny;
                 entity.dirty = true;
+                moved.push((entity.id, nx, ny));
             }
         }
+        for (id, x, y) in moved {
+            self.grid.upsert(id, x, y);
+        }
+    }
+
+    /// Own units always; enemies only if they sit inside a friendly vision disc.
+    fn visible_ids_for(&self, viewer: Uuid) -> HashSet<Uuid> {
+        let mut visible = HashSet::with_capacity(64);
+        let mut sources: Vec<(f32, f32, f32)> = Vec::new();
+        for entity in self.entities.values() {
+            if entity.owner != viewer {
+                continue;
+            }
+            visible.insert(entity.id);
+            if aoi::entity_provides_vision(entity) {
+                let radius = aoi::vision_radius(entity);
+                if radius > 0.0 {
+                    sources.push((entity.x, entity.y, radius));
+                }
+            }
+        }
+        for (sx, sy, radius) in sources {
+            self.grid.for_each_nearby(sx, sy, radius, |id| {
+                if visible.contains(&id) {
+                    return false;
+                }
+                let Some(entity) = self.entities.get(&id) else {
+                    return false;
+                };
+                let dx = entity.x - sx;
+                let dy = entity.y - sy;
+                if dx * dx + dy * dy <= radius * radius {
+                    visible.insert(id);
+                }
+                false
+            });
+        }
+        visible
     }
 
     fn check_victory(&mut self) {
@@ -2315,16 +2462,13 @@ impl MatchSim {
     ) {
         let explored_new = self.reveal_vision_for(user_id);
 
-        let Some(player) = self.players.get(&user_id) else {
+        let Some(player) = self.players.get_mut(&user_id) else {
             return (vec![], vec![], None, explored_new, vec![]);
         };
         let resources = Some(player.resources.view());
-        let previously_known = player.aoi_known.clone();
+        let previously_known = std::mem::take(&mut player.aoi_known);
 
-        let visible_ids: HashSet<Uuid> = aoi::visible_entities(self.entities.values(), user_id)
-            .into_iter()
-            .map(|e| e.id)
-            .collect();
+        let visible_ids = self.visible_ids_for(user_id);
 
         let mut entities = Vec::new();
         for id in &visible_ids {
