@@ -512,10 +512,8 @@ function applyDelta(msg) {
   const tankHits = (msg.shots || []).filter(
     (s) => s.hit !== false && String(s.kind || "").includes("tank") && s.x1 != null && s.y1 != null,
   );
-  const removedBuildings = [];
   for (const id of msg.removed || []) {
     const prev = state.entities.get(id);
-    if (prev?.building) removedBuildings.push(prev);
     state.entities.delete(id);
     const mesh = state.meshes.get(id);
     const kind = String(prev?.kind || mesh?.userData?.kind || "");
@@ -534,13 +532,21 @@ function applyDelta(msg) {
       Sfx.stopEngine(id);
       continue;
     }
+    if (mesh && (prev?.building || mesh.userData.building)) {
+      beginBuildingWreck(
+        mesh,
+        prev?.x ?? mesh.position.x,
+        prev?.y ?? mesh.position.z,
+        kind,
+      );
+      Sfx.stopBuild(id);
+      continue;
+    }
     reapUnitMesh(mesh);
     Sfx.stopBuild(id);
     Sfx.stopEngine(id);
   }
-  for (const b of removedBuildings) {
-    Sfx.buildingCollapse(b.x, b.y);
-  }
+  // Collapse SFX is triggered inside beginBuildingWreck.
 
   if (msg.removed?.length) {
     const dead = new Set(msg.removed);
@@ -4746,6 +4752,11 @@ function upsertMesh(entity) {
 
   updateProgressBar(mesh, entity);
   updateHpBar(mesh, entity);
+  if (entity.building && !constructing) {
+    syncBuildingDamageFire(mesh, entity);
+  } else if (entity.building && constructing) {
+    clearDamageFire(mesh);
+  }
 
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;
@@ -5617,7 +5628,11 @@ function updateCombatFx(now) {
       } else if (part.role === "blast") {
         const fade = Math.max(
           0,
-          1 - t * (fx.type === "tank_boom" || fx.type === "patriot_boom" ? 1.45 : 4),
+          1 -
+            t *
+              (fx.type === "tank_boom" || fx.type === "patriot_boom" || fx.type === "building_boom"
+                ? 1.35
+                : 4),
         );
         part.mesh.material.opacity = fade;
         const grow =
@@ -5625,10 +5640,15 @@ function updateCombatFx(now) {
             ? 1 + t * 8
             : fx.type === "patriot_boom"
               ? 1 + t * 11
-              : 1 + t * 3;
+              : fx.type === "building_boom"
+                ? 1 + t * 10
+                : 1 + t * 3;
         part.mesh.scale.setScalar(grow);
-        if (fx.type === "tank_boom" || fx.type === "patriot_boom") {
-          part.mesh.position.y = fx.start.y + t * (fx.type === "patriot_boom" ? 0.35 : 0.25);
+        if (fx.type === "tank_boom" || fx.type === "patriot_boom" || fx.type === "building_boom") {
+          part.mesh.position.y =
+            fx.start.y +
+            t *
+              (fx.type === "building_boom" ? 0.55 : fx.type === "patriot_boom" ? 0.35 : 0.25);
         }
       } else if (part.role === "ring") {
         if (fx.type === "patriot") {
@@ -5636,9 +5656,9 @@ function updateCombatFx(now) {
           part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.06 - t * 0.04);
           part.mesh.material.opacity = 0.5 * (1 - t);
           part.mesh.scale.setScalar(1 + t * 6);
-        } else if (fx.type === "patriot_boom") {
+        } else if (fx.type === "patriot_boom" || fx.type === "building_boom") {
           part.mesh.material.opacity = 0.9 * (1 - t);
-          const s = 1 + t * 14;
+          const s = 1 + t * (fx.type === "building_boom" ? 12 : 14);
           part.mesh.scale.set(s, s, s);
         } else if (fx.type === "mlrs") {
           part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.06 - t * 0.04);
@@ -5653,11 +5673,17 @@ function updateCombatFx(now) {
         const drift = part.mesh.userData.drift;
         if (drift) {
           part.mesh.position.x = fx.start.x + drift.x * t;
-          part.mesh.position.y = fx.start.y + drift.y * t;
+          part.mesh.position.y = fx.start.y + drift.y * t * (1 - t * 0.35);
           part.mesh.position.z = fx.start.z + drift.z * t;
+          if (fx.type === "building_boom") {
+            part.mesh.rotation.x += 0.08;
+            part.mesh.rotation.z += 0.06;
+          }
         }
         part.mesh.material.opacity = 0.55 * (1 - t);
-        part.mesh.scale.setScalar(1 + t * (fx.type === "patriot_boom" ? 5.5 : 4));
+        part.mesh.scale.setScalar(
+          1 + t * (fx.type === "patriot_boom" || fx.type === "building_boom" ? 5.5 : 4),
+        );
       } else if (part.role === "smoke") {
         if (fx.type === "patriot" || fx.type === "mlrs") {
           part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.035);
@@ -5946,6 +5972,329 @@ function spawnPatriotImpact(at) {
 }
 
 const TANK_WRECK_MS = 10_000;
+const BUILDING_WRECK_MS = 10_000;
+
+function clearDamageFire(mesh) {
+  const fire = mesh?.userData?.damageFire;
+  if (!fire) return;
+  mesh.remove(fire);
+  fire.traverse((obj) => {
+    obj.geometry?.dispose?.();
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose?.());
+      else obj.material.dispose?.();
+    }
+  });
+  mesh.userData.damageFire = null;
+  mesh.userData.damageFlames = null;
+  mesh.userData.damageSmokes = null;
+  mesh.userData.damageFireLevel = 0;
+}
+
+/** Live building: catch fire as HP drops (light → heavy). */
+function syncBuildingDamageFire(mesh, entity) {
+  if (!mesh?.userData?.building || mesh.userData.wreck) return;
+  const maxHp = Math.max(1, entity.max_hp || entity.hp || 1);
+  const ratio = Math.max(0, Math.min(1, (entity.hp ?? maxHp) / maxHp));
+  let level = 0;
+  if (ratio <= 0.28) level = 2;
+  else if (ratio <= 0.55) level = 1;
+
+  if (level === (mesh.userData.damageFireLevel || 0) && mesh.userData.damageFire) {
+    return;
+  }
+  clearDamageFire(mesh);
+  mesh.userData.damageFireLevel = level;
+  if (level === 0) return;
+
+  const h = mesh.userData.unitHeight || labelHeightFor(entity) * 0.45 || 0.6;
+  const fireRoot = new THREE.Group();
+  fireRoot.name = "damageFire";
+  fireRoot.position.set(0, h * 0.35, 0);
+  const count = level === 2 ? 5 : 3;
+  const flames = [];
+  for (let i = 0; i < count; i++) {
+    const flame = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05 + i * 0.018 + level * 0.02, 7, 7),
+      new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xff5522 : 0xffcc55,
+        transparent: true,
+        opacity: 0.75 - i * 0.08,
+        depthWrite: false,
+      }),
+    );
+    flame.position.set(
+      (Math.random() - 0.5) * 0.35 * level,
+      0.05 + i * 0.05,
+      (Math.random() - 0.5) * 0.3 * level,
+    );
+    fireRoot.add(flame);
+    flames.push(flame);
+  }
+  const smokes = [];
+  const smokeN = level === 2 ? 5 : 3;
+  for (let i = 0; i < smokeN; i++) {
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07 + Math.random() * 0.05, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x3a3830,
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+      }),
+    );
+    smoke.position.set((Math.random() - 0.5) * 0.2, 0.12 + i * 0.08, (Math.random() - 0.5) * 0.2);
+    smoke.userData.baseY = smoke.position.y;
+    smoke.userData.phase = Math.random() * Math.PI * 2;
+    fireRoot.add(smoke);
+    smokes.push(smoke);
+  }
+  mesh.add(fireRoot);
+  mesh.userData.damageFire = fireRoot;
+  mesh.userData.damageFlames = flames;
+  mesh.userData.damageSmokes = smokes;
+}
+
+function updateDamageFire(mesh, now) {
+  const flames = mesh.userData.damageFlames;
+  if (!flames?.length) return;
+  const level = mesh.userData.damageFireLevel || 1;
+  for (let i = 0; i < flames.length; i++) {
+    const f = flames[i];
+    if (!f?.material) continue;
+    const flicker = 0.7 + Math.sin(now * 0.02 + i * 2.1) * 0.3;
+    f.scale.setScalar(flicker * (0.9 + level * 0.15));
+    f.position.y = 0.05 + i * 0.05 + Math.sin(now * 0.015 + i) * 0.02;
+    f.material.opacity = (0.7 - i * 0.07) * (0.75 + flicker * 0.25);
+  }
+  const smokes = mesh.userData.damageSmokes || [];
+  for (let i = 0; i < smokes.length; i++) {
+    const s = smokes[i];
+    if (!s?.material) continue;
+    const phase = s.userData.phase || 0;
+    const rise = (now * 0.0004 + phase) % 1;
+    s.position.y = (s.userData.baseY || 0.12) + rise * 0.55;
+    s.position.x = Math.sin(now * 0.0015 + phase) * 0.06;
+    s.scale.setScalar(1 + rise * 2.2);
+    s.material.opacity = 0.42 * (1 - rise);
+  }
+}
+
+/** Structural collapse blast — taller fireball + flying debris chunks. */
+function spawnBuildingExplosion(at, scale = 1) {
+  if (!scene) return;
+  const now = performance.now();
+  const parts = [];
+  const s = scale;
+
+  const fireball = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14 * s, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: 0xff6622,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    }),
+  );
+  fireball.position.copy(at);
+  scene.add(fireball);
+  parts.push({ mesh: fireball, role: "blast" });
+
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.07 * s, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff0a0,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    }),
+  );
+  core.position.copy(at);
+  scene.add(core);
+  parts.push({ mesh: core, role: "blast" });
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.12 * s, 0.28 * s, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0xc8a060,
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(at.x, 0.05, at.z);
+  scene.add(ring);
+  parts.push({ mesh: ring, role: "ring" });
+
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2;
+    const chunk = new THREE.Mesh(
+      new THREE.BoxGeometry(0.04 * s, 0.03 * s, 0.05 * s),
+      new THREE.MeshBasicMaterial({
+        color: 0x4a4538,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+      }),
+    );
+    chunk.position.copy(at);
+    chunk.userData.drift = new THREE.Vector3(
+      Math.cos(ang) * (0.5 + Math.random() * 0.4) * s,
+      0.6 + Math.random() * 0.7,
+      Math.sin(ang) * (0.5 + Math.random() * 0.4) * s,
+    );
+    scene.add(chunk);
+    parts.push({ mesh: chunk, role: "debris" });
+  }
+
+  for (let i = 0; i < 6; i++) {
+    const ang = (i / 6) * Math.PI * 2 + 0.3;
+    const dust = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08 * s + Math.random() * 0.04, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x6a6558,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      }),
+    );
+    dust.position.set(at.x + Math.cos(ang) * 0.08, at.y + 0.08, at.z + Math.sin(ang) * 0.08);
+    dust.userData.drift = new THREE.Vector3(Math.cos(ang) * 0.4, 0.45, Math.sin(ang) * 0.4);
+    scene.add(dust);
+    parts.push({ mesh: dust, role: "debris" });
+  }
+
+  activeFx.push({
+    type: "building_boom",
+    born: now,
+    life: 780,
+    parts,
+    start: at.clone(),
+    end: at.clone(),
+    dir: new THREE.Vector3(0, 1, 0),
+    dist: 0,
+  });
+}
+
+function buildingWreckScale(kind) {
+  const k = String(kind || "");
+  if (k === "hq") return 1.6;
+  if (k === "war_factory") return 1.4;
+  if (k === "barracks" || k === "power_plant" || k === "supply") return 1.15;
+  if (k === "radar") return 1.0;
+  if (k === "turret" || k === "bunker") return 0.75;
+  return 1.1;
+}
+
+/** Building death: collapse boom, rubble settle, burn ~10s, then remove. */
+function beginBuildingWreck(mesh, x, z, kind) {
+  if (!mesh || mesh.userData.wreck) return;
+  const px = x ?? mesh.position.x;
+  const pz = z ?? mesh.position.z;
+  const scale = buildingWreckScale(kind);
+  clearDamageFire(mesh);
+  Sfx.buildingCollapse(px, pz);
+  spawnBuildingExplosion(new THREE.Vector3(px, 0.35 * scale, pz), scale);
+  setTimeout(() => {
+    if (!mesh.userData?.wreck || !scene) return;
+    spawnBuildingExplosion(
+      new THREE.Vector3(mesh.position.x + (Math.random() - 0.5) * 0.2, 0.25 * scale, mesh.position.z),
+      scale * 0.7,
+    );
+  }, 320 + Math.random() * 280);
+
+  mesh.userData.wreck = true;
+  mesh.userData.wreckKind = "building";
+  mesh.userData.wreckAt = performance.now();
+  mesh.userData.wreckLife = BUILDING_WRECK_MS;
+  mesh.userData.aimAt = null;
+
+  mesh.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    if (obj.parent?.name === "wreckFire" || obj.parent?.name === "damageFire") return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const next = mats.map((m) => {
+      const c = m.clone();
+      if (c.color) c.color.multiplyScalar(0.32);
+      if ("metalness" in c) c.metalness = 0.08;
+      if ("roughness" in c) c.roughness = 0.95;
+      if ("emissive" in c && c.emissive) c.emissive.setHex(0x331100);
+      return c;
+    });
+    obj.material = Array.isArray(obj.material) ? next : next[0];
+  });
+
+  // Collapse / settle — heavier lean than a tank kill.
+  const side = Math.random() < 0.5 ? -1 : 1;
+  mesh.rotation.z += side * (0.12 + Math.random() * 0.18);
+  mesh.rotation.x += 0.04 + Math.random() * 0.1;
+  mesh.position.y = -0.02 * scale;
+
+  const fireRoot = new THREE.Group();
+  fireRoot.name = "wreckFire";
+  const baseH = mesh.userData.unitHeight || 0.5;
+  fireRoot.position.set(0, Math.max(0.15, baseH * 0.25), 0);
+  const flames = [];
+  for (let i = 0; i < 7; i++) {
+    const flame = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06 * scale + i * 0.02, 7, 7),
+      new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xff5522 : 0xffdd66,
+        transparent: true,
+        opacity: 0.88 - i * 0.07,
+        depthWrite: false,
+      }),
+    );
+    flame.position.set(
+      (Math.random() - 0.5) * 0.45 * scale,
+      0.08 + i * 0.06,
+      (Math.random() - 0.5) * 0.4 * scale,
+    );
+    fireRoot.add(flame);
+    flames.push(flame);
+  }
+  const smokes = [];
+  for (let i = 0; i < 8; i++) {
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08 * scale + Math.random() * 0.06, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x2e2c28,
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+      }),
+    );
+    smoke.position.set(
+      (Math.random() - 0.5) * 0.3 * scale,
+      0.15 + i * 0.09,
+      (Math.random() - 0.5) * 0.3 * scale,
+    );
+    smoke.userData.baseY = smoke.position.y;
+    smoke.userData.phase = Math.random() * Math.PI * 2;
+    fireRoot.add(smoke);
+    smokes.push(smoke);
+  }
+  mesh.add(fireRoot);
+  mesh.userData.wreckFlames = flames;
+  mesh.userData.wreckSmokes = smokes;
+  mesh.userData.wreckFire = fireRoot;
+  mesh.userData.wreckScale = scale;
+
+  for (const name of ["selRing", "ownerLabel", "hpBar", "progressBar"]) {
+    const ui = mesh.getObjectByName(name);
+    if (ui) {
+      mesh.remove(ui);
+      ui.geometry?.dispose?.();
+      ui.material?.map?.dispose?.();
+      ui.material?.dispose?.();
+    }
+  }
+  mesh.userData.selRing = null;
+  mesh.userData.ownerLabel = null;
+  mesh.userData.hpBar = null;
+}
 
 /** Kill a tank visually: boom SFX, tip the hull, burn ~10s, then remove. */
 function beginTankWreck(mesh, x, z) {
@@ -6055,15 +6404,17 @@ function updateTankWreck(mesh, now, dt) {
   const life = mesh.userData.wreckLife || TANK_WRECK_MS;
   const t = Math.min(1, age / life);
   const fade = t > 0.82 ? 1 - (t - 0.82) / 0.18 : 1;
+  const isBuilding = mesh.userData.wreckKind === "building";
+  const scale = mesh.userData.wreckScale || 1;
 
   const flames = mesh.userData.wreckFlames || [];
   for (let i = 0; i < flames.length; i++) {
     const f = flames[i];
     if (!f?.material) continue;
     const flicker = 0.75 + Math.sin(now * 0.018 + i * 1.7) * 0.25;
-    f.scale.setScalar(flicker * (1.05 - t * 0.35));
-    f.position.y = 0.04 + i * 0.035 + Math.sin(now * 0.012 + i) * 0.012;
-    f.material.opacity = (0.85 - i * 0.1) * fade * (1 - t * 0.35);
+    f.scale.setScalar(flicker * (1.05 - t * 0.35) * (isBuilding ? 1.15 : 1));
+    f.position.y = (isBuilding ? 0.08 : 0.04) + i * (isBuilding ? 0.06 : 0.035) + Math.sin(now * 0.012 + i) * 0.012;
+    f.material.opacity = (0.85 - i * 0.08) * fade * (1 - t * 0.35);
     f.material.color.setHex(flicker > 0.9 ? 0xffee66 : 0xff5522);
   }
 
@@ -6073,25 +6424,16 @@ function updateTankWreck(mesh, now, dt) {
     if (!s?.material) continue;
     const phase = s.userData.phase || 0;
     const rise = ((now * 0.00035 + phase) % 1);
-    s.position.y = (s.userData.baseY || 0.1) + rise * 0.45;
-    s.position.x = Math.sin(now * 0.002 + phase) * 0.04;
-    s.scale.setScalar(1 + rise * 1.8);
+    s.position.y = (s.userData.baseY || 0.1) + rise * (isBuilding ? 0.7 : 0.45);
+    s.position.x = Math.sin(now * 0.002 + phase) * (isBuilding ? 0.08 : 0.04);
+    s.scale.setScalar(1 + rise * (isBuilding ? 2.4 : 1.8));
     s.material.opacity = 0.5 * (1 - rise) * fade * (0.85 - t * 0.4);
   }
 
-  // Hull sinks into ash near the end.
+  // Hull / rubble sinks into ash near the end.
   if (t > 0.75) {
-    mesh.position.y = 0.02 - (t - 0.75) * 0.12;
-    mesh.traverse((obj) => {
-      if (!obj.isMesh || !obj.material) return;
-      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      for (const m of mats) {
-        if (m.transparent == null || m === flames[0]?.material) continue;
-        if ("opacity" in m && obj.parent?.name !== "wreckFire") {
-          // leave fire mats alone; hull fade via overall group not easy — skip
-        }
-      }
-    });
+    const sink = isBuilding ? 0.35 * scale : 0.12;
+    mesh.position.y = (isBuilding ? -0.02 * scale : 0.02) - (t - 0.75) * sink;
   }
   void dt;
 }
@@ -6235,12 +6577,14 @@ function animate() {
       if (mesh.userData.corpse && !mesh.userData.knock) reap.push(mesh);
     } else if (mesh.userData.wreck) {
       updateTankWreck(mesh, now, dt);
-      if (now - (mesh.userData.wreckAt || 0) > (mesh.userData.wreckLife || TANK_WRECK_MS)) {
+      const life = mesh.userData.wreckLife || TANK_WRECK_MS;
+      if (now - (mesh.userData.wreckAt || 0) > life) {
         reap.push(mesh);
       }
     } else if (mesh.userData.corpse) {
       if (now - (mesh.userData.corpseAt || 0) > 900) reap.push(mesh);
     } else {
+      if (mesh.userData.damageFire) updateDamageFire(mesh, now);
       if (mesh.userData.isRadar) {
         const dish = mesh.getObjectByName("radarDish");
         if (dish) dish.rotation.y += (mesh.userData.scanRate || 0.85) * dt;
