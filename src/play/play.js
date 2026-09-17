@@ -23,6 +23,7 @@ const state = {
   ready: false,
   reconnectAttempt: 0,
   matchEnded: false,
+  scoreboard: [],
 };
 
 const factionColors = {
@@ -229,6 +230,50 @@ function escapeHtml(value) {
   );
 }
 
+function hexColor(n) {
+  return `#${(Number(n) >>> 0).toString(16).padStart(6, "0")}`;
+}
+
+function renderScoreboard() {
+  const body = $("#scoreboard-body");
+  if (!body) return;
+  const rows = state.scoreboard || [];
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="10" class="muted">Veri yok</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows
+    .map((r) => {
+      const [c0, c1, c2] = r.colors || [0x888888, 0x555555, 0x333333];
+      const cls = [r.you ? "you" : "", r.alive ? "alive" : "dead"].filter(Boolean).join(" ");
+      const faction = String(r.faction || "").toUpperCase();
+      const tag = r.bot ? "BOT" : r.you ? "SEN" : "OYUNCU";
+      const status = r.alive
+        ? `<span class="status on">ACTIVE</span>`
+        : `<span class="status off">DEAD</span>`;
+      return `<tr class="${cls}">
+        <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
+        <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag}</small></div></td>
+        <td>${status}</td>
+        <td>${r.infantry ?? 0}</td>
+        <td>${r.tanks ?? 0}</td>
+        <td>${r.buildings ?? 0}</td>
+        <td>${r.supplies ?? 0}</td>
+        <td>${r.fuel ?? 0}</td>
+        <td>${r.munitions ?? 0}</td>
+        <td>${r.power_used ?? 0}/${r.power ?? 0}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
+function setScoreboardOpen(open) {
+  const el = $("#scoreboard");
+  if (!el || $("#match-screen")?.hidden) return;
+  el.hidden = !open;
+  if (open) renderScoreboard();
+}
+
 function clearWorldMeshes() {
   if (!state.meshes.size) {
     for (const id of [...(Sfx.engines?.keys?.() || [])]) Sfx.stopEngine(id);
@@ -249,6 +294,7 @@ function clearWorldMeshes() {
 
 function enterMatch(snapshot) {
   state.match = snapshot;
+  state.scoreboard = snapshot.scoreboard || [];
   state.entities.clear();
   clearWorldMeshes();
   aoiRadius = Number(snapshot.aoi_radius) || 28;
@@ -408,10 +454,15 @@ function mergeDelta(into, extra) {
   for (const id of extra.removed || []) removed.add(id);
   into.removed = [...removed];
   into.shots = [...(into.shots || []), ...(extra.shots || [])];
+  if (extra.scoreboard) into.scoreboard = extra.scoreboard;
 }
 
 function applyDelta(msg) {
   updateResources(msg.resources);
+  if (msg.scoreboard) {
+    state.scoreboard = msg.scoreboard;
+    if (!$("#scoreboard")?.hidden) renderScoreboard();
+  }
   applyExploredNew(msg.explored_new);
 
   const tankHits = (msg.shots || []).filter(
@@ -4285,6 +4336,10 @@ $("#build-list").addEventListener("click", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
+    if (!$("#scoreboard")?.hidden) {
+      setScoreboardOpen(false);
+      return;
+    }
     if (state.selectedBuild) {
       setBuildPlacement(null);
       return;
@@ -4298,6 +4353,13 @@ window.addEventListener("keydown", (event) => {
   // Ignore shortcuts while typing in inputs.
   const tag = event.target?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) {
+    return;
+  }
+
+  if (event.key === "Tab") {
+    if (!state.match || $("#match-screen")?.hidden) return;
+    event.preventDefault();
+    if (!event.repeat) setScoreboardOpen(true);
     return;
   }
 
@@ -4322,6 +4384,15 @@ window.addEventListener("keydown", (event) => {
     centerCameraOnHq();
   }
 });
+
+window.addEventListener("keyup", (event) => {
+  if (event.key === "Tab") {
+    event.preventDefault();
+    setScoreboardOpen(false);
+  }
+});
+
+window.addEventListener("blur", () => setScoreboardOpen(false));
 
 document.addEventListener("fullscreenchange", () => {
   onResize();

@@ -441,6 +441,11 @@ impl MatchHub {
                             let (entities, removed, resources, explored_new, shots) =
                                 rt.sim.delta_for(uid);
                             let focus = rt.sim.players.get(&uid).map(|p| p.focus);
+                            let scoreboard = if tick % match_sim::TICK_HZ as u64 == 0 {
+                                Some(rt.sim.scoreboard_for(uid))
+                            } else {
+                                None
+                            };
                             outgoing.push((
                                 uid,
                                 ServerMsg::Delta {
@@ -451,6 +456,7 @@ impl MatchHub {
                                     focus_hint: focus,
                                     explored_new,
                                     shots,
+                                    scoreboard,
                                 },
                             ));
                         }

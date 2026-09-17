@@ -83,6 +83,9 @@ pub enum ServerMsg {
         /// Attacks that happened since the last broadcast (muzzle / tracer FX).
         #[serde(default)]
         shots: Vec<ShotEvent>,
+        /// Full commander roster — sent about once per second for Tab scoreboard.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scoreboard: Option<Vec<ScoreboardRow>>,
     },
     MatchEnd {
         match_id: Uuid,
@@ -159,6 +162,26 @@ fn default_shot_hit() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreboardRow {
+    pub id: Uuid,
+    pub name: String,
+    pub faction: String,
+    pub colors: [u32; 3],
+    pub team: u8,
+    pub alive: bool,
+    pub bot: bool,
+    pub you: bool,
+    pub infantry: u32,
+    pub tanks: u32,
+    pub buildings: u32,
+    pub supplies: i32,
+    pub fuel: i32,
+    pub munitions: i32,
+    pub power: i32,
+    pub power_used: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcesView {
     pub supplies: i32,
     pub fuel: i32,
@@ -211,6 +234,8 @@ pub struct MatchSnapshot {
     pub entities: Vec<EntityView>,
     pub buildable: Vec<BuildableInfo>,
     pub trainable: Vec<TrainableInfo>,
+    #[serde(default)]
+    pub scoreboard: Vec<ScoreboardRow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

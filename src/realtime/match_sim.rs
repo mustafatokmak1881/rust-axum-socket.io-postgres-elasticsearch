@@ -8,7 +8,7 @@ use super::aoi;
 use super::bots::{self, BotMind};
 use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
-    BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ShotEvent, TrainableInfo,
+    BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
 };
 
 pub const TICK_HZ: u32 = 20;
@@ -913,7 +913,61 @@ impl MatchSim {
             entities,
             buildable: Self::buildable_info(),
             trainable: Self::trainable_info(),
+            scoreboard: self.scoreboard_for(user_id),
         })
+    }
+
+    /// Tab scoreboard: every commander, army size, and economy.
+    pub fn scoreboard_for(&self, viewer: Uuid) -> Vec<ScoreboardRow> {
+        let mut rows: Vec<ScoreboardRow> = self
+            .players
+            .values()
+            .map(|p| {
+                let mut infantry = 0u32;
+                let mut tanks = 0u32;
+                let mut buildings = 0u32;
+                for e in self.entities.values() {
+                    if e.owner != p.user_id || e.hp <= 0.0 {
+                        continue;
+                    }
+                    if e.building {
+                        buildings += 1;
+                    } else if e.unit {
+                        if e.kind.contains("tank") {
+                            tanks += 1;
+                        } else {
+                            infantry += 1;
+                        }
+                    }
+                }
+                ScoreboardRow {
+                    id: p.user_id,
+                    name: p.label(),
+                    faction: p.faction.clone(),
+                    colors: p.colors,
+                    team: p.team,
+                    alive: p.alive,
+                    bot: p.is_bot(),
+                    you: p.user_id == viewer,
+                    infantry,
+                    tanks,
+                    buildings,
+                    supplies: p.resources.supplies,
+                    fuel: p.resources.fuel,
+                    munitions: p.resources.munitions,
+                    power: p.resources.power,
+                    power_used: p.resources.power_used,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.alive
+                .cmp(&a.alive)
+                .then_with(|| (b.infantry + b.tanks).cmp(&(a.infantry + a.tanks)))
+                .then_with(|| b.supplies.cmp(&a.supplies))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        rows
     }
 
     /// Stamp current unit/building vision into the player's explored map.
@@ -954,6 +1008,13 @@ impl MatchSim {
         };
         if !alive {
             return Err("Eliminated");
+        }
+
+        // One construction at a time — bots and humans both.
+        if self.entities.values().any(|e| {
+            e.owner == user_id && e.building && e.hp > 0.0 && e.build_remaining_ms > 0
+        }) {
+            return Err("Already constructing a building");
         }
 
         let fx = x as f32 + 0.5;

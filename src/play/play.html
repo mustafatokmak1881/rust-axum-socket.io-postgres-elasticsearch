@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a2614'/%3E%3Cpath d='M8 22 V10 h4 l4 8 4-8 h4 v12 h-3.2 V14.5 L16.5 22 h-1L11.2 14.5 V22z' fill='%237cfc00'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/play.css?v=hudPass">
+  <link rel="stylesheet" href="/assets/play.css?v=scoreStatus">
   <script type="importmap">
   {
     "imports": {
@@ -110,11 +110,37 @@
         </div>
       </aside>
 
-      <div class="match-caption" id="match-caption">Edge-scroll · Drag-select · RMB move/attack</div>
+      <div class="match-caption" id="match-caption">Edge-scroll · Drag-select · RMB move/attack · Tab skor</div>
       <div class="status-toast" id="toast" hidden></div>
+
+      <div id="scoreboard" class="scoreboard" hidden>
+        <header>
+          <h2>Komutanlar</h2>
+          <span class="hint">Tab — bırakınca kapanır</span>
+        </header>
+        <div class="scoreboard-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>Ülke / Komutan</th>
+                <th>DURUM</th>
+                <th>ASK</th>
+                <th>TANK</th>
+                <th>BINA</th>
+                <th>SUP</th>
+                <th>FUEL</th>
+                <th>MUN</th>
+                <th>PWR</th>
+              </tr>
+            </thead>
+            <tbody id="scoreboard-body"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
   </div>
 
-  <script type="module" src="/assets/play.js?v=engineSel"></script>
+  <script type="module" src="/assets/play.js?v=scoreStatus"></script>
 </body>
 </html>

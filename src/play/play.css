@@ -404,6 +404,143 @@ input {
   font-size: 13px;
 }
 
+.scoreboard {
+  position: absolute;
+  inset: 64px 8% 72px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #121a10f5, #0a0e08f2);
+  border: 1px solid #6a8a3a;
+  box-shadow: 0 12px 40px #000a;
+  pointer-events: none;
+}
+
+.scoreboard[hidden] { display: none !important; }
+
+.scoreboard > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 12px 18px 8px;
+  border-bottom: 1px solid #3a4a28;
+}
+
+.scoreboard h2 {
+  margin: 0;
+  font-family: Oswald, sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  color: #c8e89a;
+  text-transform: uppercase;
+}
+
+.scoreboard .hint {
+  font-size: 12px;
+  color: #8a9a78;
+  letter-spacing: 0.06em;
+}
+
+.scoreboard-scroll {
+  overflow: auto;
+  flex: 1;
+  padding: 0 8px 12px;
+}
+
+.scoreboard table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.scoreboard th {
+  text-align: left;
+  padding: 10px 8px 6px;
+  color: #8a9a78;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid #2a3a1c;
+  position: sticky;
+  top: 0;
+  background: #121a10;
+}
+
+.scoreboard th:nth-child(n+3),
+.scoreboard td:nth-child(n+3) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.scoreboard td {
+  padding: 8px;
+  border-bottom: 1px solid #1a2414;
+  color: #e8f0d8;
+}
+
+.scoreboard tr.you td {
+  background: #1e301850;
+  color: #fff4ce;
+}
+
+.scoreboard tr.dead td {
+  opacity: 0.55;
+}
+
+.scoreboard .status {
+  display: inline-block;
+  min-width: 52px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  border: 1px solid;
+}
+
+.scoreboard .status.on {
+  color: #9fef4a;
+  border-color: #6a8a3a;
+  background: #1a301850;
+}
+
+.scoreboard .status.off {
+  color: #ff8a7a;
+  border-color: #8a3a2a;
+  background: #30181850;
+}
+
+.scoreboard .swatch {
+  display: inline-flex;
+  width: 28px;
+  height: 12px;
+  vertical-align: middle;
+  border: 1px solid #0008;
+}
+
+.scoreboard .swatch i {
+  flex: 1;
+  display: block;
+}
+
+.scoreboard .who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scoreboard .who strong {
+  font-family: Rajdhani, sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.scoreboard .who small {
+  color: #8a9a78;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .muted { color: #8a9a78; font-size: 12px; }
 
 @media (max-width: 900px) {
