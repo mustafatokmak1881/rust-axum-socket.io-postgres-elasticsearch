@@ -304,6 +304,24 @@ fn attack_cooldown_for(kind: &str) -> u32 {
         .unwrap_or(1_000)
 }
 
+/// Spread group move orders so units don't all fight for one exact point.
+fn formation_slot(index: usize, count: usize, radius: f32) -> (f32, f32) {
+    if count <= 1 || index == 0 {
+        return (0.0, 0.0);
+    }
+    let spacing = (radius * 2.4 + 0.12).max(0.22);
+    // Golden-angle spiral around the click point.
+    const GOLDEN: f32 = 2.399_963;
+    let r = spacing * (index as f32).sqrt();
+    let ang = index as f32 * GOLDEN;
+    (ang.cos() * r, ang.sin() * r)
+}
+
+/// Soft arrival: close enough to stop even if the exact point is occupied.
+fn move_arrive_radius(self_r: f32) -> f32 {
+    (self_r * 3.5 + 0.25).clamp(0.35, 1.15)
+}
+
 /// Client `BUILDING_MODELS[].target` — max visual dimension after fit.
 fn building_visual_size(kind: &str) -> f32 {
     match kind {
@@ -848,10 +866,24 @@ impl MatchSim {
         let map = self.map_size as f32;
         let tx = x.clamp(0.5, map - 0.5);
         let ty = y.clamp(0.5, map - 0.5);
+        let count = ids
+            .iter()
+            .filter(|id| {
+                self.entities.get(id).is_some_and(|e| {
+                    e.owner == user_id && e.unit && e.build_remaining_ms == 0
+                })
+            })
+            .count()
+            .max(1);
+        let mut slot = 0usize;
         for id in ids {
             if let Some(entity) = self.entities.get_mut(id) {
                 if entity.owner == user_id && entity.unit && entity.build_remaining_ms == 0 {
-                    entity.move_to = Some((tx, ty));
+                    let (ox, oy) = formation_slot(slot, count, unit_radius(&entity.kind));
+                    slot += 1;
+                    let gx = (tx + ox).clamp(0.5, map - 0.5);
+                    let gy = (ty + oy).clamp(0.5, map - 0.5);
+                    entity.move_to = Some((gx, gy));
                     entity.target = None;
                     entity.stuck_frames = 0;
                     entity.detour = None;
@@ -1075,10 +1107,15 @@ impl MatchSim {
                     let ignore = entity.target;
                     let jammed = entity.stuck_frames >= 6;
                     let solid_units = !jammed;
+                    let arrive_r = move_arrive_radius(self_r);
 
-                    // True goal arrival (never "arrive" at a detour as the final destination).
-                    if entity.target.is_none() && (toward_goal <= step || toward_goal < 0.15) {
-                        if !self.collides_at(entity.id, gx, gy, self_r, None, true) {
+                    // Soft arrival for move orders: don't orbit a crowded click point.
+                    let near_goal = toward_goal <= arrive_r
+                        || (toward_goal <= arrive_r * 2.2 && entity.stuck_frames >= 8);
+                    if entity.target.is_none() && near_goal {
+                        if toward_goal <= step
+                            && !self.collides_at(entity.id, gx, gy, self_r, None, true)
+                        {
                             entity.x = gx;
                             entity.y = gy;
                         }
@@ -1181,22 +1218,31 @@ impl MatchSim {
                             entity.stuck_frames = entity.stuck_frames.saturating_add(2);
                         }
 
-                        // Brief detour only when jammed — TTL forces us back to the true goal.
+                        // Brief detour only when jammed far from the goal.
+                        // Near a crowded move point: stop instead of orbiting forever.
                         if entity.stuck_frames >= 8 {
-                            let (waypoint, ang) = self.pick_escape_waypoint(
-                                entity.id,
-                                entity.x,
-                                entity.y,
-                                gx,
-                                gy,
-                                self_r,
-                                entity.last_escape_ang,
-                            );
-                            entity.detour = Some(waypoint);
-                            entity.detour_ttl = 18; // ~0.9s at 20 Hz, then re-check goal
-                            entity.last_escape_ang = ang;
-                            entity.stuck_frames = 3;
-                            entity.dirty = true;
+                            if entity.target.is_none() && toward_goal <= arrive_r * 2.5 {
+                                entity.move_to = None;
+                                entity.detour = None;
+                                entity.detour_ttl = 0;
+                                entity.stuck_frames = 0;
+                                entity.dirty = true;
+                            } else {
+                                let (waypoint, ang) = self.pick_escape_waypoint(
+                                    entity.id,
+                                    entity.x,
+                                    entity.y,
+                                    gx,
+                                    gy,
+                                    self_r,
+                                    entity.last_escape_ang,
+                                );
+                                entity.detour = Some(waypoint);
+                                entity.detour_ttl = 18; // ~0.9s at 20 Hz, then re-check goal
+                                entity.last_escape_ang = ang;
+                                entity.stuck_frames = 3;
+                                entity.dirty = true;
+                            }
                         }
                     }
                 } else {
