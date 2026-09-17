@@ -718,7 +718,7 @@ const Sfx = {
     if (this.soldierShootBuf) return Promise.resolve(this.soldierShootBuf);
     if (this.soldierShootWait) return this.soldierShootWait;
     if (!this.ctx) return Promise.resolve(null);
-    this.soldierShootWait = fetch("/assets/sounds/soldier-shoot.wav")
+    this.soldierShootWait = fetch("/assets/sounds/soldier-shoot.mp3")
       .then((res) => {
         if (!res.ok) throw new Error("soldier-shoot");
         return res.arrayBuffer();
