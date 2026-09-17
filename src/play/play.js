@@ -230,8 +230,12 @@ function escapeHtml(value) {
 }
 
 function clearWorldMeshes() {
-  if (!state.meshes.size) return;
-  for (const mesh of state.meshes.values()) {
+  if (!state.meshes.size) {
+    for (const id of [...(Sfx.engines?.keys?.() || [])]) Sfx.stopEngine(id);
+    return;
+  }
+  for (const [id, mesh] of state.meshes.entries()) {
+    Sfx.stopEngine(id);
     if (scene) scene.remove(mesh);
     mesh.traverse?.((obj) => {
       if (obj.material) {
@@ -259,6 +263,7 @@ function enterMatch(snapshot) {
 
 async function setupMatchScene(snapshot) {
   updateResources(snapshot.resources);
+  updateArmyCounts();
   renderBuildList(snapshot.buildable || []);
   renderUnitList(snapshot.trainable || []);
   await ensureBuildingModel();
@@ -321,6 +326,26 @@ function updateResources(res) {
   $("#res-power").textContent = `${res.power_used}/${res.power}`;
 }
 
+function updateArmyCounts() {
+  const you = state.match?.you;
+  const infEl = $("#army-inf");
+  const tankEl = $("#army-tank");
+  const totalEl = $("#army-total");
+  if (!infEl || !tankEl) return;
+  let inf = 0;
+  let tanks = 0;
+  if (you) {
+    for (const entity of state.entities.values()) {
+      if (!entity.unit || entity.owner !== you) continue;
+      if (String(entity.kind || "").includes("tank")) tanks += 1;
+      else inf += 1;
+    }
+  }
+  infEl.textContent = inf;
+  tankEl.textContent = tanks;
+  if (totalEl) totalEl.textContent = inf + tanks;
+}
+
 function renderBuildList(items) {
   state.buildable = items || [];
   $("#build-list").innerHTML = state.buildable
@@ -363,6 +388,7 @@ function applyDelta(msg) {
       state.meshes.delete(id);
     }
     Sfx.stopBuild(id);
+    Sfx.stopEngine(id);
   }
   for (const b of removedBuildings) {
     Sfx.buildingCollapse(b.x, b.y);
@@ -382,6 +408,7 @@ function applyDelta(msg) {
     syncBuildingSfx(prev, entity);
   }
   playShots(msg.shots || []);
+  updateArmyCounts();
   $("#match-caption").textContent =
     `Tick ${msg.tick} · ${state.entities.size} entities · vision fog`;
 }
@@ -406,11 +433,12 @@ const Sfx = {
   ctx: null,
   master: null,
   builds: new Map(),
+  engines: new Map(),
   lastShotAt: 0,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
   ranges: {
     rifle: { ref: 5, max: 22 },
-    tank: { ref: 7, max: 40 },
+    tank: { ref: 14, max: 72 },
     missile: { ref: 6, max: 30 },
     build: { ref: 4, max: 18 },
     collapse: { ref: 6, max: 36 },
@@ -557,17 +585,90 @@ const Sfx = {
   tankCannon(x, y) {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.tank);
-    if (vol <= 0.004) return;
-    this.noiseBurst(0.28, 0.28, 180, "lowpass", vol);
-    this.noiseBurst(0.12, 0.22, 900, "bandpass", vol);
-    this.tone(95, 0.35, "sine", 0.22, 35, vol);
-    this.tone(55, 0.45, "triangle", 0.14, 28, vol);
-    this.tone(420, 0.08, "sawtooth", 0.06, 120, vol);
-    setTimeout(() => {
-      if (!this.ensure()) return;
-      const echo = this.volumeAt(x, y, this.ranges.tank) * 0.55;
-      this.noiseBurst(0.18, 0.1, 140, "lowpass", echo);
-    }, 90);
+    if (vol <= 0.003) return;
+    const t0 = this.ctx.currentTime;
+    const boom = Math.min(1, Math.pow(Math.max(vol, 0.02), 0.52) * 1.2);
+
+    // Sub pressure + HE crack (not a toy beep).
+    this.noiseBurst(0.42, 0.48, 90, "lowpass", boom, 0.45);
+    this.noiseBurst(0.18, 0.36, 320, "lowpass", boom, 0.7);
+    this.noiseBurst(0.1, 0.28, 1100, "bandpass", boom * 0.9, 1.1);
+    this.tone(48, 0.55, "sine", 0.32, 22, boom);
+    this.tone(78, 0.38, "triangle", 0.2, 28, boom);
+    this.tone(160, 0.12, "sawtooth", 0.08, 55, boom * 0.7);
+
+    // Delayed shock roll
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer(0.35);
+    const filt = this.ctx.createBiquadFilter();
+    filt.type = "lowpass";
+    filt.frequency.value = 160;
+    const g = this.ctx.createGain();
+    const peak = 0.16 * boom;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.setValueAtTime(0.0001, t0 + 0.08);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.1);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.48);
+    src.connect(filt);
+    filt.connect(g);
+    g.connect(this.master);
+    src.start(t0 + 0.08);
+    src.stop(t0 + 0.52);
+  },
+
+  setEngine(id, x, y, throttle) {
+    if (!this.ensure() || !id) return;
+    let node = this.engines.get(id);
+    if (!node) {
+      const t0 = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const osc2 = this.ctx.createOscillator();
+      const lfo = this.ctx.createOscillator();
+      const lfoG = this.ctx.createGain();
+      const filt = this.ctx.createBiquadFilter();
+      const g = this.ctx.createGain();
+      osc.type = "sawtooth";
+      osc.frequency.value = 42;
+      osc2.type = "triangle";
+      osc2.frequency.value = 84;
+      lfo.type = "sine";
+      lfo.frequency.value = 22;
+      lfoG.gain.value = 8;
+      filt.type = "lowpass";
+      filt.frequency.value = 280;
+      g.gain.setValueAtTime(0.0001, t0);
+      lfo.connect(lfoG);
+      lfoG.connect(osc.frequency);
+      osc.connect(filt);
+      osc2.connect(filt);
+      filt.connect(g);
+      g.connect(this.master);
+      osc.start();
+      osc2.start();
+      lfo.start();
+      node = { osc, osc2, lfo, g, filt, x, y, throttle: 0 };
+      this.engines.set(id, node);
+    }
+    node.x = x;
+    node.y = y;
+    node.throttle = Math.max(0, Math.min(1, throttle));
+  },
+
+  stopEngine(id) {
+    const node = this.engines.get(id);
+    if (!node) return;
+    try {
+      const t0 = this.ctx.currentTime;
+      node.g.gain.cancelScheduledValues(t0);
+      node.g.gain.setValueAtTime(Math.max(0.0001, node.g.gain.value), t0);
+      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.15);
+      node.osc.stop(t0 + 0.2);
+      node.osc2.stop(t0 + 0.2);
+      node.lfo.stop(t0 + 0.2);
+    } catch {
+      // ignore
+    }
+    this.engines.delete(id);
   },
 
   missile(x, y) {
@@ -637,9 +738,9 @@ const Sfx = {
     this.builds.delete(id);
   },
 
-  /** Keep looping build hum loud/quiet as the camera pans. */
+  /** Keep looping build hum / tank engines loud/quiet as the camera pans. */
   updateSpatial() {
-    if (!this.builds.size || !this.ctx) return;
+    if (!this.ctx) return;
     const t0 = this.ctx.currentTime;
     for (const node of this.builds.values()) {
       const vol = this.volumeAt(node.x, node.y, this.ranges.build);
@@ -647,6 +748,19 @@ const Sfx = {
       try {
         node.g.gain.cancelScheduledValues(t0);
         node.g.gain.setTargetAtTime(target, t0, 0.08);
+      } catch {
+        // ignore
+      }
+    }
+    for (const node of this.engines.values()) {
+      const vol = this.volumeAt(node.x, node.y, this.ranges.tank);
+      const th = node.throttle || 0;
+      const target = Math.max(0.0001, vol * (0.028 + th * 0.11));
+      try {
+        node.g.gain.setTargetAtTime(target, t0, 0.12);
+        node.osc.frequency.setTargetAtTime(36 + th * 32, t0, 0.15);
+        node.osc2.frequency.setTargetAtTime(72 + th * 48, t0, 0.15);
+        node.filt.frequency.setTargetAtTime(220 + th * 180, t0, 0.15);
       } catch {
         // ignore
       }
@@ -685,7 +799,12 @@ const Sfx = {
 function playShots(shots) {
   for (const shot of shots || []) {
     spawnShotFx(shot);
-    Sfx.shot(shot.kind, shot.x0, shot.y0);
+    const fromMesh = state.meshes.get(shot.from);
+    const kind =
+      shot.kind ||
+      (fromMesh?.userData?.isTank ? "tank" : fromMesh?.userData?.kind) ||
+      "";
+    Sfx.shot(kind, shot.x0, shot.y0);
   }
 }
 
@@ -2375,7 +2494,7 @@ function createTankMesh(teamColor) {
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.tintParts = [];
-  g.userData.tankRigVersion = 4;
+  g.userData.tankRigVersion = 5;
 
   const hull = 0x4a5538;
   const hullDark = 0x353c2c;
@@ -2405,7 +2524,7 @@ function createTankMesh(teamColor) {
     add(g, new THREE.BoxGeometry(0.042, 0.028, 0.52), matStd(rubber), x, 0.01, 0);
     // Road wheels
     for (let i = -2; i <= 2; i++) {
-      add(
+      const w = add(
         g,
         new THREE.CylinderGeometry(0.026, 0.026, 0.042, 10),
         matStd(metal, { metalness: 0.55, roughness: 0.42 }),
@@ -2416,6 +2535,7 @@ function createTankMesh(teamColor) {
         0,
         Math.PI / 2,
       );
+      w.userData.roadWheel = true;
       add(
         g,
         new THREE.CylinderGeometry(0.012, 0.012, 0.044, 6),
@@ -2429,7 +2549,7 @@ function createTankMesh(teamColor) {
       );
     }
     // Drive sprocket (rear) + idler (front)
-    add(
+    const sprocket = add(
       g,
       new THREE.CylinderGeometry(0.032, 0.032, 0.04, 10),
       matStd(metal, { metalness: 0.6 }),
@@ -2440,7 +2560,8 @@ function createTankMesh(teamColor) {
       0,
       Math.PI / 2,
     );
-    add(
+    sprocket.userData.roadWheel = true;
+    const idler = add(
       g,
       new THREE.CylinderGeometry(0.028, 0.028, 0.038, 10),
       matStd(metal, { metalness: 0.55 }),
@@ -2451,6 +2572,7 @@ function createTankMesh(teamColor) {
       0,
       Math.PI / 2,
     );
+    idler.userData.roadWheel = true;
     // Side skirts / schürzen
     add(g, new THREE.BoxGeometry(0.018, 0.055, 0.5), matStd(hullDark), x * 1.22, 0.078, 0);
     add(g, new THREE.BoxGeometry(0.014, 0.02, 0.12), matStd(hull), x * 1.24, 0.095, 0.12);
@@ -2570,8 +2692,8 @@ function createTankMesh(teamColor) {
   g.add(turret);
   g.userData.unitHeight = 0.16;
   g.userData.isTank = true;
-  g.userData.hullTurnRate = 1.7;
-  g.userData.turretTurnRate = 1.15;
+  g.userData.hullTurnRate = 1.05;
+  g.userData.turretTurnRate = 0.95;
   g.userData.barrelRecoil = 0;
   // Half visual size vs prior rig (matches unitDims / server radius).
   g.scale.setScalar(0.5);
@@ -2653,9 +2775,10 @@ function upsertMesh(entity) {
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
-          (mesh.userData.tankRigVersion || 0) < 4)) ||
+          (mesh.userData.tankRigVersion || 0) < 5)) ||
       (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
     if (needsWalkRig) {
+      Sfx.stopEngine(entity.id);
       scene.remove(mesh);
       disposeMeshTree(mesh);
       state.meshes.delete(entity.id);
@@ -2683,6 +2806,7 @@ function upsertMesh(entity) {
     mesh.userData.id = entity.id;
     mesh.userData.building = !!entity.building;
     mesh.userData.unit = !!entity.unit;
+    mesh.userData.kind = entity.kind;
     scene.add(mesh);
     state.meshes.set(entity.id, mesh);
 
@@ -2715,6 +2839,10 @@ function upsertMesh(entity) {
     if (mesh.userData.knock) {
       mesh.userData.knock.originX = entity.x;
       mesh.userData.knock.originZ = entity.y;
+    } else if (mesh.userData.isTank) {
+      mesh.userData.destX = entity.x;
+      mesh.userData.destZ = entity.y;
+      if (prevX == null) mesh.position.set(entity.x, 0, entity.y);
     } else {
       mesh.position.set(entity.x, 0, entity.y);
     }
@@ -2725,19 +2853,18 @@ function upsertMesh(entity) {
     if (prevX != null && prevZ != null) {
       const dx = entity.x - prevX;
       const dz = entity.y - prevZ;
-      // Real travel ≈ 0.014–0.02 / tick; separation jitter is usually << 0.01.
       const dist = Math.hypot(dx, dz);
       if (dist > 0.01 && !mesh.userData.knock) {
         mesh.userData.moving = true;
         mesh.userData.faceYaw = Math.atan2(dx, dz);
         mesh.userData.moveSeenAt = performance.now();
         mesh.userData.lastMoveDist = dist;
-      } else if (!mesh.userData.knock) {
+      } else if (!mesh.userData.knock && !mesh.userData.isTank) {
         mesh.userData.moving = false;
         mesh.userData.moveSeenAt = 0;
         mesh.userData.lastMoveDist = 0;
       }
-    } else {
+    } else if (!mesh.userData.isTank) {
       mesh.userData.moving = false;
     }
     mesh.userData.lastX = entity.x;
@@ -2830,6 +2957,43 @@ function shortestAngle(from, to) {
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
   return diff;
+}
+
+function updateTankDrive(mesh, dt) {
+  if (!mesh?.userData?.isTank || mesh.userData.knock) return;
+  const destX = mesh.userData.destX;
+  const destZ = mesh.userData.destZ;
+  if (destX == null || destZ == null) {
+    Sfx.setEngine(mesh.userData.id, mesh.position.x, mesh.position.z, 0.18);
+    return;
+  }
+  const dx = destX - mesh.position.x;
+  const dz = destZ - mesh.position.z;
+  const dist = Math.hypot(dx, dz);
+  let throttle = 0.2;
+  if (dist > 0.006) {
+    mesh.userData.faceYaw = Math.atan2(dx, dz);
+    const err = Math.abs(shortestAngle(mesh.rotation.y, mesh.userData.faceYaw));
+    // Turn in place first — don't slide sideways like infantry.
+    const align = Math.max(0, 1 - err / 0.85);
+    const speed = 0.58 * dt * (0.18 + 0.82 * align);
+    const step = Math.min(dist, speed);
+    mesh.position.x += (dx / dist) * step;
+    mesh.position.z += (dz / dist) * step;
+    mesh.userData.moving = align > 0.2;
+    throttle = 0.35 + align * 0.65;
+    if (mesh.userData.moving) {
+      const spin = step * 28;
+      mesh.traverse((obj) => {
+        if (obj.userData?.roadWheel) obj.rotation.x += spin;
+      });
+    }
+  } else {
+    mesh.position.x = destX;
+    mesh.position.z = destZ;
+    mesh.userData.moving = false;
+  }
+  Sfx.setEngine(mesh.userData.id, mesh.position.x, mesh.position.z, throttle);
 }
 
 function smoothUnitFacing(mesh, dt) {
@@ -3412,6 +3576,7 @@ function animate() {
       updateKnockPhysics(mesh, dt);
     } else {
       smoothUnitFacing(mesh, dt);
+      updateTankDrive(mesh, dt);
       updateInfantryWalk(mesh, dt, now);
     }
   }

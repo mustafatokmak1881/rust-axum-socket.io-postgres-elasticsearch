@@ -126,6 +126,8 @@ pub struct Entity {
     pub damage: f32,
     pub range: f32,
     pub attack_cooldown_ms: u32,
+    /// Rounds left in the current rifle magazine (0 = unused / not a rifle).
+    pub mag_ammo: u8,
     pub dirty: bool,
     /// Frames with little/no progress toward the goal.
     pub stuck_frames: u16,
@@ -249,8 +251,8 @@ pub fn trainables() -> &'static [UnitDef] {
             // Combat jog ~5–6 km/h → well below tank cross-country pace.
             speed: 0.20,
             range: 4.5,
-            // Semi-auto under fire; most rounds miss.
-            attack_ms: 520,
+            // Semi-auto under fire — not a spray; mag dump then a real reload.
+            attack_ms: 850,
         },
         UnitDef {
             unit: "missile_defender",
@@ -307,6 +309,13 @@ fn attack_cooldown_for(kind: &str) -> u32 {
         .find(|u| u.unit == kind)
         .map(|u| u.attack_ms)
         .unwrap_or(1_000)
+}
+
+const RIFLE_MAG: u8 = 30;
+const RIFLE_RELOAD_MS: u32 = 5_000;
+
+fn is_rifle_infantry(kind: &str) -> bool {
+    !kind.contains("tank") && !kind.contains("missile")
 }
 
 /// Infantry fights last ~3× longer: heavy weapons don't delete a soldier in one connect.
@@ -587,6 +596,7 @@ impl MatchSim {
                     damage: 0.0,
                     range: 0.0,
                     attack_cooldown_ms: 0,
+                    mag_ammo: 0,
                     dirty: true,
                     stuck_frames: 0,
                     detour: None,
@@ -723,6 +733,7 @@ impl MatchSim {
                 damage: 0.0,
                 range: 0.0,
                 attack_cooldown_ms: 0,
+                mag_ammo: 0,
                 dirty: true,
                 stuck_frames: 0,
                 detour: None,
@@ -922,6 +933,7 @@ impl MatchSim {
                 damage: 0.0,
                 range: 0.0,
                 attack_cooldown_ms: 0,
+                mag_ammo: 0,
                 dirty: true,
                 stuck_frames: 0,
                 detour: None,
@@ -1136,6 +1148,11 @@ impl MatchSim {
                                 damage: def.damage,
                                 range: def.range,
                                 attack_cooldown_ms: 0,
+                                mag_ammo: if is_rifle_infantry(def.unit) {
+                                    RIFLE_MAG
+                                } else {
+                                    0
+                                },
                                 dirty: true,
                                 stuck_frames: 0,
                                 detour: None,
@@ -1417,7 +1434,21 @@ impl MatchSim {
                     if cover.blocked {
                         // No shot through walls / hulls. Keep chasing, don't burn cooldown.
                     } else if dist <= entity.range && entity.attack_cooldown_ms == 0 {
-                        entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
+                        if is_rifle_infantry(&entity.kind) {
+                            if entity.mag_ammo == 0 {
+                                entity.mag_ammo = RIFLE_MAG;
+                            }
+                            entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
+                            if entity.mag_ammo == 0 {
+                                // Empty mag — 5s reload, then a fresh 30-round clip.
+                                entity.attack_cooldown_ms = RIFLE_RELOAD_MS;
+                                entity.mag_ammo = RIFLE_MAG;
+                            } else {
+                                entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
+                            }
+                        } else {
+                            entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
+                        }
                         entity.dirty = true;
                         let dmg = hit_damage(&entity.kind, target, entity.damage);
                         let tx = target.x;

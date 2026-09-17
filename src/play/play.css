@@ -180,6 +180,26 @@ input {
 
 #match-screen { background: #1a2a14; }
 
+.army-hud {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 6;
+  display: flex;
+  gap: 12px;
+  padding: 6px 12px;
+  background: linear-gradient(180deg, #1a2814ee, #10160ecc);
+  border: 1px solid #6a8a3a;
+  pointer-events: none;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.army-stat { color: #8a9a78; }
+.army-stat b { color: #fff4ce; margin-left: 5px; font-size: 16px; }
+.army-stat.total { color: var(--warn); }
+.army-stat.total b { color: var(--warn); }
+
 #viewport {
   position: absolute;
   inset: 0;
