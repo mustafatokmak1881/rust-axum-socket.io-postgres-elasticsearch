@@ -480,6 +480,8 @@ const Sfx = {
   tankMoveWait: null,
   tankShootBuf: null,
   tankShootWait: null,
+  soldierShootBuf: null,
+  soldierShootWait: null,
   lastRifleAt: 0,
   rifleRest: 0.5,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
@@ -532,6 +534,7 @@ const Sfx = {
     if (this.ctx.state === "suspended") void this.ctx.resume();
     void this.loadTankMove();
     void this.loadTankShoot();
+    void this.loadSoldierShoot();
     return true;
   },
 
@@ -628,59 +631,26 @@ const Sfx = {
     src.stop(t0 + dur + 0.02);
   },
 
-  /**
-   * AK-47 style report: deep body crack + mid muzzle snap + bolt clack.
-   * (No toy square-wave chirps.)
-   */
   rifle(x, y) {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.rifle);
     if (vol <= 0.004) return;
     const now = performance.now();
-    // ~AK cyclic rate spacing when many fire; still allows multi-unit volleys.
-    if (now - this.lastRifleAt < 48) return;
+    if (now - this.lastRifleAt < 42) return;
     this.lastRifleAt = now;
-
-    const t0 = this.ctx.currentTime;
-    const jitter = Math.random();
-    const bus = this.dest("rifle");
-    const loud = vol * 3.2;
-
-    // 1) Low-end powder thump (body of the report)
-    this.noiseBurst(0.09, 0.34, 140 + jitter * 40, "lowpass", loud, 0.55, bus);
-    this.tone(78 + jitter * 18, 0.07, "sine", 0.2, 42, loud * 0.95, bus);
-    this.tone(52 + jitter * 10, 0.1, "triangle", 0.12, 28, loud * 0.85, bus);
-
-    // 2) Mid crack — the recognizable “AK bark”
-    this.noiseBurst(0.055, 0.28, 900 + jitter * 200, "bandpass", loud, 1.1, bus);
-    this.noiseBurst(0.035, 0.18, 1600 + jitter * 300, "bandpass", loud, 1.4, bus);
-
-    // 3) Sharp transient snap (not a beep — short filtered noise)
-    this.noiseBurst(0.018, 0.22, 2800 + jitter * 400, "highpass", loud * 0.9, 0.8, bus);
-
-    // 4) Mechanical bolt / carrier clack
-    this.tone(190 + jitter * 40, 0.025, "triangle", 0.045, 90, loud * 0.7, bus);
-    this.noiseBurst(0.022, 0.08, 420, "bandpass", loud * 0.75, 2.2, bus);
-
-    // 5) Short metallic ring tail (receiver / muzzle)
-    const ring = this.ctx.createOscillator();
-    const ringG = this.ctx.createGain();
-    const ringF = this.ctx.createBiquadFilter();
-    ring.type = "triangle";
-    ring.frequency.setValueAtTime(620 + jitter * 80, t0);
-    ring.frequency.exponentialRampToValueAtTime(280, t0 + 0.08);
-    ringF.type = "bandpass";
-    ringF.frequency.value = 700;
-    ringF.Q.value = 3.5;
-    const ringPeak = 0.035 * loud;
-    ringG.gain.setValueAtTime(0.0001, t0);
-    ringG.gain.exponentialRampToValueAtTime(Math.max(0.0001, ringPeak), t0 + 0.004);
-    ringG.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
-    ring.connect(ringF);
-    ringF.connect(ringG);
-    ringG.connect(bus);
-    ring.start(t0);
-    ring.stop(t0 + 0.1);
+    const play = (buf) => {
+      if (!buf || !this.ctx) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = 0.96 + Math.random() * 0.08;
+      const g = this.ctx.createGain();
+      g.gain.value = Math.min(1.1, 0.85 * Math.pow(vol, 0.5) * 1.35);
+      src.connect(g);
+      g.connect(this.dest("rifle"));
+      src.start();
+    };
+    if (this.soldierShootBuf) play(this.soldierShootBuf);
+    else void this.loadSoldierShoot().then(play);
   },
 
   tankCannon(x, y) {
@@ -742,6 +712,27 @@ const Sfx = {
         return null;
       });
     return this.tankShootWait;
+  },
+
+  loadSoldierShoot() {
+    if (this.soldierShootBuf) return Promise.resolve(this.soldierShootBuf);
+    if (this.soldierShootWait) return this.soldierShootWait;
+    if (!this.ctx) return Promise.resolve(null);
+    this.soldierShootWait = fetch("/assets/sounds/soldier-shoot.wav")
+      .then((res) => {
+        if (!res.ok) throw new Error("soldier-shoot");
+        return res.arrayBuffer();
+      })
+      .then((raw) => this.ctx.decodeAudioData(raw))
+      .then((buf) => {
+        this.soldierShootBuf = buf;
+        return buf;
+      })
+      .catch(() => {
+        this.soldierShootWait = null;
+        return null;
+      });
+    return this.soldierShootWait;
   },
 
   startEngineLoop(node) {
