@@ -483,7 +483,7 @@ const Sfx = {
   soldierShootBuf: null,
   soldierShootWait: null,
   lastRifleAt: 0,
-  rifleRest: 0.5,
+  rifleRest: 1.12,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
   ranges: {
     rifle: { ref: 3.5, max: 16, exp: 2.6 },
@@ -521,12 +521,12 @@ const Sfx = {
       this.buses.tank = this.ctx.createGain();
       this.buses.fx = this.ctx.createGain();
       this.buses.rifle.gain.value = this.rifleRest;
-      this.buses.tank.gain.value = 1.55;
-      this.buses.fx.gain.value = 0.9;
-      // Small-arms share a compressor; tank boom skips it so it stays on top.
-      this.buses.rifle.connect(this.compressor);
+      this.buses.tank.gain.value = 1.9;
+      this.buses.fx.gain.value = 0.62;
+      // Real-world mix: tank cannon (dry) > rifles (dry) > FX (compressed) > engine.
       this.buses.fx.connect(this.compressor);
       this.compressor.connect(this.master);
+      this.buses.rifle.connect(this.master);
       this.buses.tank.connect(this.master);
       this.master.connect(this.limiter);
       this.limiter.connect(this.ctx.destination);
@@ -543,7 +543,7 @@ const Sfx = {
   },
 
   /** Cannon blast buries small-arms the way a real 120 mm does. */
-  duckRifles(seconds = 1.35) {
+  duckRifles(seconds = 0.85) {
     const bus = this.buses.rifle;
     if (!bus || !this.ctx) return;
     const t0 = this.ctx.currentTime;
@@ -551,9 +551,9 @@ const Sfx = {
     const rest = this.rifleRest;
     try {
       g.cancelScheduledValues(t0);
-      g.setValueAtTime(Math.max(0.03, g.value), t0);
-      g.linearRampToValueAtTime(0.03, t0 + 0.012);
-      g.setValueAtTime(0.03, t0 + seconds * 0.45);
+      g.setValueAtTime(Math.max(0.22, g.value), t0);
+      g.linearRampToValueAtTime(0.22, t0 + 0.01);
+      g.setValueAtTime(0.22, t0 + seconds * 0.28);
       g.linearRampToValueAtTime(rest, t0 + seconds);
     } catch {
       // ignore
@@ -597,14 +597,14 @@ const Sfx = {
     return Math.pow(1 - t, spec.exp || 2.4);
   },
 
-  /** Gain used for one-shot samples — do not flatten with pow<1. */
-  sampleGain(vol, peak) {
-    return Math.max(0.0001, peak * vol * vol);
+  /** Gain used for samples. Lower curve = more presence at mid-distance. */
+  sampleGain(vol, peak, curve = 2) {
+    return Math.max(0.0001, peak * Math.pow(vol, curve));
   },
 
-  startSpatialSource(src, x, y, vol, dest, peak) {
+  startSpatialSource(src, x, y, vol, dest, peak, curve = 2) {
     const g = this.ctx.createGain();
-    g.gain.value = this.sampleGain(vol, peak);
+    g.gain.value = this.sampleGain(vol, peak, curve);
     const pan = this.ctx.createStereoPanner();
     pan.pan.value = this.panAt(x);
     src.connect(g);
@@ -669,14 +669,14 @@ const Sfx = {
     if (vol <= 0.008) return;
     const now = performance.now();
     // Distant pops must not steal the slot from a shot under the camera.
-    if (vol < 0.35 && now - this.lastRifleAt < 42) return;
-    if (vol >= 0.35 || now - this.lastRifleAt >= 42) this.lastRifleAt = now;
+    if (vol < 0.35 && now - this.lastRifleAt < 18) return;
+    if (vol >= 0.35 || now - this.lastRifleAt >= 18) this.lastRifleAt = now;
     const play = (buf) => {
       if (!buf || !this.ctx) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
       src.playbackRate.value = 0.96 + Math.random() * 0.08;
-      this.startSpatialSource(src, x, y, vol, this.dest("rifle"), 1.05);
+      this.startSpatialSource(src, x, y, vol, this.dest("rifle"), 2.2, 1.22);
     };
     if (this.soldierShootBuf) play(this.soldierShootBuf);
     else void this.loadSoldierShoot().then(play);
@@ -691,7 +691,7 @@ const Sfx = {
       if (!buf || !this.ctx) return;
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
-      this.startSpatialSource(src, x, y, vol, this.dest("tank"), 1.25);
+      this.startSpatialSource(src, x, y, vol, this.dest("tank"), 2.45, 1.45);
     };
     if (this.tankShootBuf) play(this.tankShootBuf);
     else void this.loadTankShoot().then(play);
@@ -916,7 +916,7 @@ const Sfx = {
       if (node.stopping) continue;
       const vol = this.volumeAt(node.x, node.y, this.ranges.tank);
       const th = node.throttle || 0;
-      const target = Math.max(0.0001, this.sampleGain(vol, 0.95) * (0.45 + th * 0.55));
+      const target = Math.max(0.0001, this.sampleGain(vol, 0.16, 2.2) * (0.45 + th * 0.55));
       try {
         node.g.gain.setTargetAtTime(target, t0, 0.08);
         if (node.pan) node.pan.pan.setTargetAtTime(this.panAt(node.x), t0, 0.08);
