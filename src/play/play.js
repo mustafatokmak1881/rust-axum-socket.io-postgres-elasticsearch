@@ -477,7 +477,10 @@ const Sfx = {
     osc.stop(t0 + dur + 0.02);
   },
 
-  noiseBurst(dur, gain = 0.12, filterFreq = 2500, filterType = "bandpass", vol = 1) {
+  /**
+   * Filtered noise with optional Q / attack — used for realistic gun layers.
+   */
+  noiseBurst(dur, gain = 0.12, filterFreq = 2500, filterType = "bandpass", vol = 1, q = 0.7) {
     if (!this.ensure() || vol <= 0.004) return;
     const t0 = this.ctx.currentTime;
     const src = this.ctx.createBufferSource();
@@ -485,11 +488,11 @@ const Sfx = {
     const filt = this.ctx.createBiquadFilter();
     filt.type = filterType;
     filt.frequency.value = filterFreq;
-    filt.Q.value = 0.7;
+    filt.Q.value = q;
     const g = this.ctx.createGain();
     const peak = gain * vol;
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.004);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.002);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     src.connect(filt);
     filt.connect(g);
@@ -498,16 +501,57 @@ const Sfx = {
     src.stop(t0 + dur + 0.02);
   },
 
+  /**
+   * AK-47 style report: deep body crack + mid muzzle snap + bolt clack.
+   * (No toy square-wave chirps.)
+   */
   rifle(x, y) {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.rifle);
     if (vol <= 0.004) return;
     const now = performance.now();
-    if (now - this.lastShotAt < 28) return;
+    // ~AK cyclic rate spacing when many fire; still allows multi-unit volleys.
+    if (now - this.lastShotAt < 42) return;
     this.lastShotAt = now;
-    this.noiseBurst(0.045, 0.16, 3200, "highpass", vol);
-    this.tone(1800 + Math.random() * 600, 0.04, "square", 0.05, 400, vol);
-    this.tone(220 + Math.random() * 40, 0.03, "triangle", 0.03, 80, vol);
+
+    const t0 = this.ctx.currentTime;
+    const jitter = Math.random();
+
+    // 1) Low-end powder thump (body of the report)
+    this.noiseBurst(0.09, 0.34, 140 + jitter * 40, "lowpass", vol, 0.55);
+    this.tone(78 + jitter * 18, 0.07, "sine", 0.2, 42, vol * 0.95);
+    this.tone(52 + jitter * 10, 0.1, "triangle", 0.12, 28, vol * 0.85);
+
+    // 2) Mid crack — the recognizable “AK bark”
+    this.noiseBurst(0.055, 0.28, 900 + jitter * 200, "bandpass", vol, 1.1);
+    this.noiseBurst(0.035, 0.18, 1600 + jitter * 300, "bandpass", vol, 1.4);
+
+    // 3) Sharp transient snap (not a beep — short filtered noise)
+    this.noiseBurst(0.018, 0.22, 2800 + jitter * 400, "highpass", vol * 0.9, 0.8);
+
+    // 4) Mechanical bolt / carrier clack
+    this.tone(190 + jitter * 40, 0.025, "triangle", 0.045, 90, vol * 0.7);
+    this.noiseBurst(0.022, 0.08, 420, "bandpass", vol * 0.75, 2.2);
+
+    // 5) Short metallic ring tail (receiver / muzzle)
+    const ring = this.ctx.createOscillator();
+    const ringG = this.ctx.createGain();
+    const ringF = this.ctx.createBiquadFilter();
+    ring.type = "triangle";
+    ring.frequency.setValueAtTime(620 + jitter * 80, t0);
+    ring.frequency.exponentialRampToValueAtTime(280, t0 + 0.08);
+    ringF.type = "bandpass";
+    ringF.frequency.value = 700;
+    ringF.Q.value = 3.5;
+    const ringPeak = 0.035 * vol;
+    ringG.gain.setValueAtTime(0.0001, t0);
+    ringG.gain.exponentialRampToValueAtTime(Math.max(0.0001, ringPeak), t0 + 0.004);
+    ringG.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+    ring.connect(ringF);
+    ringF.connect(ringG);
+    ringG.connect(this.master);
+    ring.start(t0);
+    ring.stop(t0 + 0.1);
   },
 
   tankCannon(x, y) {
@@ -2869,19 +2913,18 @@ function spawnShotFx(shot) {
   if (!scene) return;
   const fromMesh = state.meshes.get(shot.from);
   const toMesh = state.meshes.get(shot.to);
+  const didHit = shot.hit !== false;
 
   faceMeshToward(fromMesh, shot.x1, shot.y1);
 
   const start = fromMesh
     ? worldMuzzlePoint(fromMesh)
     : new THREE.Vector3(shot.x0, 0.12, shot.y0);
-  const end = toMesh
-    ? new THREE.Vector3(
-        toMesh.position.x,
-        (toMesh.userData.unitHeight || (toMesh.userData.building ? 0.6 : 0.12)) * 0.55,
-        toMesh.position.z,
-      )
-    : new THREE.Vector3(shot.x1, 0.12, shot.y1);
+  // Always use server impact point so misses fly wide of the mesh.
+  const endY = didHit
+    ? (toMesh?.userData?.unitHeight || (toMesh?.userData?.building ? 0.6 : 0.12) || 0.12) * 0.55
+    : 0.04;
+  const end = new THREE.Vector3(shot.x1, endY, shot.y1);
 
   const kind = String(shot.kind || fromMesh?.userData?.kind || "");
   const isTank = kind.includes("tank") || !!fromMesh?.userData?.isTank;
@@ -2900,6 +2943,7 @@ function spawnShotFx(shot) {
     dir: dir.clone(),
     dist,
     fromMesh: fromMesh || null,
+    hit: didHit,
     parts: [],
   };
 
@@ -3100,36 +3144,50 @@ function updateCombatFx(now) {
     if (t >= 1) {
       // Impact burst at destination
       if (fx.type === "shell") {
-        spawnTankExplosion(fx.end);
-        applyBlastKnock(fx.end.x, fx.end.z, 1.25);
+        if (fx.hit !== false) {
+          spawnTankExplosion(fx.end);
+          applyBlastKnock(fx.end.x, fx.end.z, 1.25);
+        } else {
+          // Miss: dirt puff only, no HE knock.
+          spawnMissImpact(fx.end, true);
+        }
       } else if (fx.type === "bullet") {
-        const spark = new THREE.Mesh(
-          new THREE.SphereGeometry(0.012, 5, 5),
-          new THREE.MeshBasicMaterial({
-            color: 0xffcc66,
-            transparent: true,
-            opacity: 0.85,
-            depthWrite: false,
-          }),
-        );
-        spark.position.copy(fx.end);
-        scene.add(spark);
-        activeFx.push({
-          type: "impact",
-          born: now,
-          life: 120,
-          parts: [{ mesh: spark, role: "blast" }],
-          start: fx.end.clone(),
-          end: fx.end.clone(),
-          dir: new THREE.Vector3(0, 1, 0),
-          dist: 0,
-        });
+        spawnMissImpact(fx.end, fx.hit === false);
+      } else if (fx.type === "missile" && fx.hit === false) {
+        spawnMissImpact(fx.end, true);
       }
 
       for (const part of fx.parts) disposeFxPart(part);
       activeFx.splice(i, 1);
     }
   }
+}
+
+function spawnMissImpact(at, isMiss) {
+  if (!scene) return;
+  const now = performance.now();
+  const spark = new THREE.Mesh(
+    new THREE.SphereGeometry(isMiss ? 0.018 : 0.012, 5, 5),
+    new THREE.MeshBasicMaterial({
+      color: isMiss ? 0xc2b280 : 0xffcc66,
+      transparent: true,
+      opacity: isMiss ? 0.7 : 0.85,
+      depthWrite: false,
+    }),
+  );
+  spark.position.copy(at);
+  if (isMiss) spark.position.y = Math.max(0.02, at.y);
+  scene.add(spark);
+  activeFx.push({
+    type: "impact",
+    born: now,
+    life: isMiss ? 180 : 120,
+    parts: [{ mesh: spark, role: "blast" }],
+    start: spark.position.clone(),
+    end: spark.position.clone(),
+    dir: new THREE.Vector3(0, 1, 0),
+    dist: 0,
+  });
 }
 
 function spawnTankExplosion(at) {

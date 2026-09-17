@@ -149,6 +149,13 @@ pub struct ShotEvent {
     pub x1: f32,
     pub y1: f32,
     pub kind: String,
+    /// False = tracer / shell flew wide (no damage).
+    #[serde(default = "default_shot_hit")]
+    pub hit: bool,
+}
+
+fn default_shot_hit() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

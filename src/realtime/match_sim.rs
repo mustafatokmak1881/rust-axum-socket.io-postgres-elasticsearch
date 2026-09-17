@@ -182,7 +182,7 @@ pub fn buildables() -> &'static [BuildDef] {
             cost_munitions: 0,
             build_ms: 8_000,
             power: 100,
-            hp: 1200.0,
+            hp: 1800.0,
         },
         BuildDef {
             kind: "barracks",
@@ -192,7 +192,7 @@ pub fn buildables() -> &'static [BuildDef] {
             cost_munitions: 200,
             build_ms: 10_000,
             power: -20,
-            hp: 1500.0,
+            hp: 2200.0,
         },
         BuildDef {
             kind: "war_factory",
@@ -202,7 +202,7 @@ pub fn buildables() -> &'static [BuildDef] {
             cost_munitions: 400,
             build_ms: 14_000,
             power: -30,
-            hp: 2000.0,
+            hp: 2800.0,
         },
         BuildDef {
             kind: "supply",
@@ -212,7 +212,7 @@ pub fn buildables() -> &'static [BuildDef] {
             cost_munitions: 0,
             build_ms: 7_000,
             power: -10,
-            hp: 1000.0,
+            hp: 1500.0,
         },
         BuildDef {
             kind: "turret",
@@ -222,15 +222,14 @@ pub fn buildables() -> &'static [BuildDef] {
             cost_munitions: 500,
             build_ms: 9_000,
             power: -15,
-            hp: 900.0,
+            hp: 1400.0,
         },
     ]
 }
 
 pub fn trainables() -> &'static [UnitDef] {
-    // Scale: HQ visual ~1.4 world units ≈ ~20 m → 1 wu ≈ 14 m.
-    // Speeds are world-units / second (applied each tick as speed * dt).
-    // Balance: infantry cheap & common; tanks rare, slow reload, lethal.
+    // Scale: HQ visual ~2.15 wu ≈ 22–28 m → 1 wu ≈ 12–13 m.
+    // Combat: frequent fire, low hit chance, high damage on connect (realistic lethality).
     &[
         UnitDef {
             unit: "ranger",
@@ -240,12 +239,15 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 0,
             cost_munitions: 40,
             train_ms: 3_500,
-            hp: 90.0,
-            damage: 10.0,
-            // ~5 m/s jog → ≈ 0.35 wu/s
-            speed: 0.35,
-            range: 4.0,
-            attack_ms: 1_000,
+            // Survives several solid hits; dies fast once accuracy connects.
+            hp: 175.0,
+            // One well-placed burst chunk — ~3–4 hits to drop another ranger.
+            damage: 55.0,
+            // Combat jog ~5–6 km/h → well below tank cross-country pace.
+            speed: 0.20,
+            range: 4.5,
+            // Semi-auto under fire; most rounds miss.
+            attack_ms: 520,
         },
         UnitDef {
             unit: "missile_defender",
@@ -255,13 +257,13 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 40,
             cost_munitions: 160,
             train_ms: 8_000,
-            hp: 95.0,
-            // Anti-armor punch — can threaten tanks in numbers
-            damage: 55.0,
-            // heavier infantry ~4 m/s
-            speed: 0.28,
-            range: 7.0,
-            attack_ms: 3_200,
+            hp: 165.0,
+            // Guided punch — lethal to armor when it locks.
+            damage: 280.0,
+            // Laden AT team — slower than rifle infantry.
+            speed: 0.16,
+            range: 7.5,
+            attack_ms: 4_800,
         },
         UnitDef {
             unit: "tank",
@@ -271,13 +273,13 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 900,
             cost_munitions: 700,
             train_ms: 48_000,
-            hp: 1_600.0,
-            // One shell deletes infantry; several needed vs another tank
-            damage: 200.0,
-            // slower combat pace ~6 m/s
-            speed: 0.42,
-            range: 7.0,
-            attack_ms: 4_000,
+            hp: 2_400.0,
+            // Direct hit deletes infantry; several needed vs another tank.
+            damage: 420.0,
+            // Cross-country combat pace ~3× infantry jog.
+            speed: 0.58,
+            range: 7.5,
+            attack_ms: 5_200,
         },
         UnitDef {
             unit: "tank_desert",
@@ -287,11 +289,11 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 900,
             cost_munitions: 700,
             train_ms: 48_000,
-            hp: 1_600.0,
-            damage: 200.0,
-            speed: 0.42,
-            range: 7.0,
-            attack_ms: 4_000,
+            hp: 2_400.0,
+            damage: 420.0,
+            speed: 0.58,
+            range: 7.5,
+            attack_ms: 5_200,
         },
     ]
 }
@@ -302,6 +304,57 @@ fn attack_cooldown_for(kind: &str) -> u32 {
         .find(|u| u.unit == kind)
         .map(|u| u.attack_ms)
         .unwrap_or(1_000)
+}
+
+/// Combat hit probability — hard under fire, easier up close / vs big targets.
+/// Inspired by real engagement hit rates (training ≠ combat).
+fn shot_hit_chance(attacker_kind: &str, target: &Entity, dist: f32, range: f32) -> f32 {
+    let t = (dist / range.max(0.01)).clamp(0.0, 1.0);
+    // Near: ~1.0 · far edge: ~0.18 (dispersion + nerves).
+    let dist_mul = 1.0 - t * t * 0.82;
+
+    let weapon = if attacker_kind.contains("tank") {
+        0.36 // aimed cannon, still miss a lot at range
+    } else if attacker_kind.contains("missile") {
+        0.26 // lock / lead errors
+    } else {
+        0.13 // rifle under fire — historically very low
+    };
+
+    let size_mul = if target.building {
+        2.35
+    } else if target.kind.contains("tank") {
+        1.75
+    } else {
+        1.0 // tiny infantry silhouette
+    };
+
+    (weapon * dist_mul * size_mul).clamp(0.04, 0.68)
+}
+
+/// Scatter impact for a miss so tracers fly wide of the target.
+fn miss_impact(rng: &mut impl Rng, target: &Entity, from_x: f32, from_y: f32) -> (f32, f32) {
+    let dx = target.x - from_x;
+    let dy = target.y - from_y;
+    let dist = (dx * dx + dy * dy).sqrt().max(0.01);
+    let ux = dx / dist;
+    let uy = dy / dist;
+    // Perpendicular scatter + over/under-shoot along the line of fire.
+    let px = -uy;
+    let py = ux;
+    let lateral = if target.building {
+        0.9 + rng.gen_range(0.0..1.0) * 1.6
+    } else if target.kind.contains("tank") {
+        0.45 + rng.gen_range(0.0..1.0) * 0.95
+    } else {
+        0.22 + rng.gen_range(0.0..1.0) * 0.85
+    };
+    let side = if rng.gen_bool(0.5) { 1.0 } else { -1.0 };
+    let along = (rng.gen_range(0.0..1.0) - 0.35) * (if target.building { 1.4 } else { 0.9 });
+    (
+        target.x + px * lateral * side + ux * along,
+        target.y + py * lateral * side + uy * along,
+    )
 }
 
 /// Spread group move orders so units don't all fight for one exact point.
@@ -449,8 +502,8 @@ impl MatchSim {
                     team,
                     x,
                     y,
-                    hp: 5000.0,
-                    max_hp: 5000.0,
+                    hp: 7500.0,
+                    max_hp: 7500.0,
                     building: true,
                     unit: false,
                     flag,
@@ -583,8 +636,8 @@ impl MatchSim {
                 team,
                 x,
                 y,
-                hp: 5000.0,
-                max_hp: 5000.0,
+                hp: 7500.0,
+                max_hp: 7500.0,
                 building: true,
                 unit: false,
                 flag,
@@ -1288,10 +1341,21 @@ impl MatchSim {
                         let kind = entity.kind.clone();
                         let from_id = entity.id;
                         let team = entity.team;
+                        let hit_p = shot_hit_chance(&kind, target, dist, entity.range);
+                        let mut rng = rand::thread_rng();
+                        let hit = rng.gen_range(0.0..1.0) < hit_p;
+                        let (ix, iy) = if hit {
+                            (tx, ty)
+                        } else {
+                            miss_impact(&mut rng, target, fx, fy)
+                        };
+
+                        // Return fire when shot at (muzzle flash), hit or miss.
                         if let Some(t) = self.entities.get_mut(&tid) {
-                            t.hp -= dmg;
-                            t.dirty = true;
-                            // Retaliate only if idle (no move/attack order already in progress).
+                            if hit {
+                                t.hp -= dmg;
+                                t.dirty = true;
+                            }
                             if t.unit
                                 && t.damage > 0.0
                                 && t.move_to.is_none()
@@ -1310,11 +1374,13 @@ impl MatchSim {
                             to: tid,
                             x0: fx,
                             y0: fy,
-                            x1: tx,
-                            y1: ty,
+                            x1: ix,
+                            y1: iy,
                             kind: kind.clone(),
+                            hit,
                         });
-                        if kind.contains("tank") {
+                        // HE splash only when the shell actually lands on target.
+                        if hit && kind.contains("tank") {
                             self.apply_shell_blast(team, tx, ty, tid);
                         }
                     }
