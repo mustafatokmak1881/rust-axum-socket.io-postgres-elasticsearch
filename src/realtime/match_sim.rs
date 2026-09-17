@@ -325,12 +325,12 @@ fn move_arrive_radius(self_r: f32) -> f32 {
 /// Client `BUILDING_MODELS[].target` — max visual dimension after fit.
 fn building_visual_size(kind: &str) -> f32 {
     match kind {
-        "hq" => 1.4,
-        "war_factory" => 1.35,
-        "barracks" => 0.85,
-        "power_plant" | "supply" => 1.1,
-        "turret" => 0.9,
-        _ => 1.0,
+        "hq" => 2.15,
+        "war_factory" => 2.1,
+        "barracks" => 1.35,
+        "power_plant" | "supply" => 1.7,
+        "turret" => 1.4,
+        _ => 1.35,
     }
 }
 
@@ -340,15 +340,15 @@ pub fn building_radius(kind: &str) -> f32 {
     building_visual_size(kind) * 0.42
 }
 
-/// Matches client `unitDims` half-extent on the ground plane.
+/// Matches client unit footprint on the ground plane.
 pub fn unit_radius(kind: &str) -> f32 {
     if kind.contains("tank") {
-        0.14
+        0.2
     } else if kind.contains("missile") {
-        0.05
+        0.02
     } else {
-        // ranger / infantry low-poly footprint
-        0.05
+        // ranger ~1/3 previous size
+        0.017
     }
 }
 

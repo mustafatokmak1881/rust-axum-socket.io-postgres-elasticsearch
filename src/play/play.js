@@ -400,13 +400,22 @@ function syncBuildingSfx(prev, entity) {
   }
 }
 
-/* ---------- Procedural SFX (Web Audio) ---------- */
+/* ---------- Procedural SFX (Web Audio, distance-attenuated) ---------- */
 
 const Sfx = {
   ctx: null,
   master: null,
   builds: new Map(),
   lastShotAt: 0,
+  // World-units: full volume inside ref, silent past max. Camera look-at is listener.
+  ranges: {
+    rifle: { ref: 5, max: 22 },
+    tank: { ref: 7, max: 40 },
+    missile: { ref: 6, max: 30 },
+    build: { ref: 4, max: 18 },
+    collapse: { ref: 6, max: 36 },
+    complete: { ref: 4, max: 22 },
+  },
 
   ensure() {
     if (!this.ctx) {
@@ -421,6 +430,27 @@ const Sfx = {
     return true;
   },
 
+  /** Listener = where the camera is looking on the ground (RTS "ear"). */
+  listenerXZ() {
+    if (controls?.target) return { x: controls.target.x, z: controls.target.z };
+    if (camera) return { x: camera.position.x, z: camera.position.z };
+    return { x: 0, z: 0 };
+  },
+
+  /**
+   * 0 = inaudible, 1 = full. Natural falloff: loud nearby, quiet mid-range, mute far.
+   */
+  volumeAt(worldX, worldY, range) {
+    const { ref, max } = range || this.ranges.rifle;
+    const ear = this.listenerXZ();
+    const d = Math.hypot(worldX - ear.x, worldY - ear.z);
+    if (!(d < max)) return 0;
+    if (d <= ref) return 1;
+    const t = (d - ref) / (max - ref);
+    // Curve steepens with distance (closer to inverse-square feel without harshness).
+    return Math.pow(1 - t, 1.85);
+  },
+
   noiseBuffer(seconds = 0.2) {
     const len = Math.max(1, Math.floor(this.ctx.sampleRate * seconds));
     const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -429,16 +459,17 @@ const Sfx = {
     return buf;
   },
 
-  tone(freq, dur, type = "square", gain = 0.08, freqEnd = null) {
-    if (!this.ensure()) return;
+  tone(freq, dur, type = "square", gain = 0.08, freqEnd = null, vol = 1) {
+    if (!this.ensure() || vol <= 0.004) return;
     const t0 = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
+    const peak = gain * vol;
     osc.type = type;
     osc.frequency.setValueAtTime(freq, t0);
     if (freqEnd != null) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freqEnd), t0 + dur);
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     osc.connect(g);
     g.connect(this.master);
@@ -446,8 +477,8 @@ const Sfx = {
     osc.stop(t0 + dur + 0.02);
   },
 
-  noiseBurst(dur, gain = 0.12, filterFreq = 2500, filterType = "bandpass") {
-    if (!this.ensure()) return;
+  noiseBurst(dur, gain = 0.12, filterFreq = 2500, filterType = "bandpass", vol = 1) {
+    if (!this.ensure() || vol <= 0.004) return;
     const t0 = this.ctx.currentTime;
     const src = this.ctx.createBufferSource();
     src.buffer = this.noiseBuffer(Math.max(dur, 0.05));
@@ -456,8 +487,9 @@ const Sfx = {
     filt.frequency.value = filterFreq;
     filt.Q.value = 0.7;
     const g = this.ctx.createGain();
+    const peak = gain * vol;
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.004);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.004);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     src.connect(filt);
     filt.connect(g);
@@ -466,41 +498,50 @@ const Sfx = {
     src.stop(t0 + dur + 0.02);
   },
 
-  rifle() {
+  rifle(x, y) {
     if (!this.ensure()) return;
-    // Soft rate-limit when many units fire in one tick.
+    const vol = this.volumeAt(x, y, this.ranges.rifle);
+    if (vol <= 0.004) return;
     const now = performance.now();
     if (now - this.lastShotAt < 28) return;
     this.lastShotAt = now;
-    this.noiseBurst(0.045, 0.16, 3200, "highpass");
-    this.tone(1800 + Math.random() * 600, 0.04, "square", 0.05, 400);
-    this.tone(220 + Math.random() * 40, 0.03, "triangle", 0.03, 80);
+    this.noiseBurst(0.045, 0.16, 3200, "highpass", vol);
+    this.tone(1800 + Math.random() * 600, 0.04, "square", 0.05, 400, vol);
+    this.tone(220 + Math.random() * 40, 0.03, "triangle", 0.03, 80, vol);
   },
 
-  tankCannon() {
+  tankCannon(x, y) {
     if (!this.ensure()) return;
-    // Deep boom + crack
-    this.noiseBurst(0.28, 0.28, 180, "lowpass");
-    this.noiseBurst(0.12, 0.22, 900, "bandpass");
-    this.tone(95, 0.35, "sine", 0.22, 35);
-    this.tone(55, 0.45, "triangle", 0.14, 28);
-    this.tone(420, 0.08, "sawtooth", 0.06, 120);
-    // Delayed echo thump
+    const vol = this.volumeAt(x, y, this.ranges.tank);
+    if (vol <= 0.004) return;
+    this.noiseBurst(0.28, 0.28, 180, "lowpass", vol);
+    this.noiseBurst(0.12, 0.22, 900, "bandpass", vol);
+    this.tone(95, 0.35, "sine", 0.22, 35, vol);
+    this.tone(55, 0.45, "triangle", 0.14, 28, vol);
+    this.tone(420, 0.08, "sawtooth", 0.06, 120, vol);
     setTimeout(() => {
       if (!this.ensure()) return;
-      this.noiseBurst(0.18, 0.1, 140, "lowpass");
+      const echo = this.volumeAt(x, y, this.ranges.tank) * 0.55;
+      this.noiseBurst(0.18, 0.1, 140, "lowpass", echo);
     }, 90);
   },
 
-  missile() {
+  missile(x, y) {
     if (!this.ensure()) return;
-    this.noiseBurst(0.2, 0.14, 1100, "bandpass");
-    this.tone(520, 0.25, "sawtooth", 0.07, 180);
+    const vol = this.volumeAt(x, y, this.ranges.missile);
+    if (vol <= 0.004) return;
+    this.noiseBurst(0.2, 0.14, 1100, "bandpass", vol);
+    this.tone(520, 0.25, "sawtooth", 0.07, 180, vol);
   },
 
-  startBuild(id, _x, _y) {
+  startBuild(id, x, y) {
     if (!this.ensure()) return;
-    if (this.builds.has(id)) return;
+    if (this.builds.has(id)) {
+      const existing = this.builds.get(id);
+      existing.x = x;
+      existing.y = y;
+      return;
+    }
     const t0 = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const lfo = this.ctx.createOscillator();
@@ -514,8 +555,9 @@ const Sfx = {
     lfoGain.gain.value = 12;
     filt.type = "lowpass";
     filt.frequency.value = 420;
+    const vol = this.volumeAt(x, y, this.ranges.build);
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(0.035, t0 + 0.3);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.035 * vol), t0 + 0.3);
     lfo.connect(lfoGain);
     lfoGain.connect(osc.frequency);
     osc.connect(filt);
@@ -523,13 +565,15 @@ const Sfx = {
     g.connect(this.master);
     osc.start();
     lfo.start();
-    // Light hammer ticks
     const tick = setInterval(() => {
-      if (!this.builds.has(id)) return;
-      this.noiseBurst(0.03, 0.04, 1800, "bandpass");
-      this.tone(240 + Math.random() * 80, 0.04, "triangle", 0.025, 90);
+      const node = this.builds.get(id);
+      if (!node) return;
+      const v = this.volumeAt(node.x, node.y, this.ranges.build);
+      if (v <= 0.004) return;
+      this.noiseBurst(0.03, 0.04, 1800, "bandpass", v);
+      this.tone(240 + Math.random() * 80, 0.04, "triangle", 0.025, 90, v);
     }, 480 + Math.random() * 220);
-    this.builds.set(id, { osc, lfo, g, tick });
+    this.builds.set(id, { osc, lfo, g, tick, x, y, baseGain: 0.035 });
   },
 
   stopBuild(id) {
@@ -549,35 +593,55 @@ const Sfx = {
     this.builds.delete(id);
   },
 
-  buildingComplete(_x, _y) {
-    if (!this.ensure()) return;
-    this.tone(320, 0.12, "triangle", 0.06, 520);
-    this.tone(480, 0.16, "sine", 0.05, 640);
-    this.noiseBurst(0.08, 0.05, 2000, "highpass");
+  /** Keep looping build hum loud/quiet as the camera pans. */
+  updateSpatial() {
+    if (!this.builds.size || !this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    for (const node of this.builds.values()) {
+      const vol = this.volumeAt(node.x, node.y, this.ranges.build);
+      const target = Math.max(0.0001, (node.baseGain || 0.035) * vol);
+      try {
+        node.g.gain.cancelScheduledValues(t0);
+        node.g.gain.setTargetAtTime(target, t0, 0.08);
+      } catch {
+        // ignore
+      }
+    }
   },
 
-  buildingCollapse(_x, _y) {
+  buildingComplete(x, y) {
     if (!this.ensure()) return;
-    this.noiseBurst(0.55, 0.32, 220, "lowpass");
-    this.noiseBurst(0.35, 0.2, 700, "bandpass");
-    this.tone(140, 0.5, "sawtooth", 0.1, 40);
-    this.tone(70, 0.6, "sine", 0.12, 28);
-    setTimeout(() => this.noiseBurst(0.25, 0.12, 400, "lowpass"), 120);
-    setTimeout(() => this.noiseBurst(0.2, 0.08, 900, "bandpass"), 220);
+    const vol = this.volumeAt(x, y, this.ranges.complete);
+    if (vol <= 0.004) return;
+    this.tone(320, 0.12, "triangle", 0.06, 520, vol);
+    this.tone(480, 0.16, "sine", 0.05, 640, vol);
+    this.noiseBurst(0.08, 0.05, 2000, "highpass", vol);
   },
 
-  shot(kind) {
+  buildingCollapse(x, y) {
+    if (!this.ensure()) return;
+    const vol = this.volumeAt(x, y, this.ranges.collapse);
+    if (vol <= 0.004) return;
+    this.noiseBurst(0.55, 0.32, 220, "lowpass", vol);
+    this.noiseBurst(0.35, 0.2, 700, "bandpass", vol);
+    this.tone(140, 0.5, "sawtooth", 0.1, 40, vol);
+    this.tone(70, 0.6, "sine", 0.12, 28, vol);
+    setTimeout(() => this.noiseBurst(0.25, 0.12, 400, "lowpass", this.volumeAt(x, y, this.ranges.collapse) * 0.7), 120);
+    setTimeout(() => this.noiseBurst(0.2, 0.08, 900, "bandpass", this.volumeAt(x, y, this.ranges.collapse) * 0.5), 220);
+  },
+
+  shot(kind, x, y) {
     const k = String(kind || "");
-    if (k.includes("tank")) this.tankCannon();
-    else if (k.includes("missile")) this.missile();
-    else this.rifle();
+    if (k.includes("tank")) this.tankCannon(x, y);
+    else if (k.includes("missile")) this.missile(x, y);
+    else this.rifle(x, y);
   },
 };
 
 function playShots(shots) {
   for (const shot of shots || []) {
     spawnShotFx(shot);
-    Sfx.shot(shot.kind);
+    Sfx.shot(shot.kind, shot.x0, shot.y0);
   }
 }
 
@@ -611,13 +675,16 @@ const CAMERA_FOV = 32;
 const EDGE_SCROLL_PX = 160;
 
 const BUILDING_MODELS = {
-  hq: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.4 },
-  power_plant: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.1 },
-  supply: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.1 },
-  barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 0.85 },
-  war_factory: { type: "obj", obj: "/assets/models/war-factory.obj", mtl: "/assets/models/war-factory.mtl", target: 1.35 },
-  turret: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 0.9 },
+  hq: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 2.15 },
+  power_plant: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.7 },
+  supply: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.7 },
+  barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 1.35 },
+  war_factory: { type: "obj", obj: "/assets/models/war-factory.obj", mtl: "/assets/models/war-factory.mtl", target: 2.1 },
+  turret: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.4 },
 };
+
+/** Bump when BUILDING_MODELS targets change so cached meshes refit. */
+const BUILDING_FIT_VERSION = 2;
 
 async function prepareStlGeometry(url, targetSize) {
   const loader = new STLLoader();
@@ -726,6 +793,7 @@ function createBuildingMesh(kind, fallbackMat) {
     mesh.userData.building = true;
     mesh.userData.modelKind = kind;
     mesh.userData.isFallback = false;
+    mesh.userData.buildingFitVersion = BUILDING_FIT_VERSION;
     return mesh;
   }
   const geo = geometryForKind(kind);
@@ -734,15 +802,17 @@ function createBuildingMesh(kind, fallbackMat) {
     mesh.userData.building = true;
     mesh.userData.modelKind = kind;
     mesh.userData.isFallback = false;
+    mesh.userData.buildingFitVersion = BUILDING_FIT_VERSION;
     return mesh;
   }
   // Temporary placeholder only — replaced once models finish loading.
-  const h = kind === "hq" ? 2.4 : 1.4;
-  const w = kind === "hq" ? 2.2 : 1.2;
+  const h = kind === "hq" ? 2.6 : 1.6;
+  const w = kind === "hq" ? 2.4 : 1.4;
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), fallbackMat);
   mesh.userData.building = true;
   mesh.userData.modelKind = kind;
   mesh.userData.isFallback = true;
+  mesh.userData.buildingFitVersion = BUILDING_FIT_VERSION;
   return mesh;
 }
 
@@ -787,9 +857,19 @@ function rememberBaseOpacities(root) {
 }
 
 async function ensureBuildingModel() {
-  if (buildingTemplates.hq && buildingGeometries.barracks) {
+  if (
+    buildingTemplates.hq &&
+    buildingGeometries.barracks &&
+    buildingTemplates.hq.userData?.buildingFitVersion === BUILDING_FIT_VERSION
+  ) {
     buildingModelsReady = true;
     return true;
+  }
+  // Force reload when footprint targets change.
+  if (buildingTemplates.hq?.userData?.buildingFitVersion !== BUILDING_FIT_VERSION) {
+    for (const key of Object.keys(buildingTemplates)) delete buildingTemplates[key];
+    for (const key of Object.keys(buildingGeometries)) delete buildingGeometries[key];
+    buildingModelsPromise = null;
   }
   if (buildingModelsPromise) return buildingModelsPromise;
 
@@ -802,7 +882,9 @@ async function ensureBuildingModel() {
         if (!objBaseCache.has(key)) {
           objBaseCache.set(key, await loadObjRoot(spec.obj, spec.mtl));
         }
-        buildingTemplates[kind] = makeObjTemplate(objBaseCache.get(key), spec.target);
+        const tpl = makeObjTemplate(objBaseCache.get(key), spec.target);
+        tpl.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+        buildingTemplates[kind] = tpl;
       } else {
         const key = `${spec.url}|${spec.target}`;
         if (!stlCache.has(key)) {
@@ -1317,13 +1399,13 @@ function ensureGhost(kind) {
 function buildingRadius(kind) {
   // Half-footprint from BUILDING_MODELS target (must match server building_radius).
   const visual = {
-    hq: 1.4,
-    war_factory: 1.35,
-    barracks: 0.85,
-    power_plant: 1.1,
-    supply: 1.1,
-    turret: 0.9,
-  }[kind] ?? 1.0;
+    hq: 2.15,
+    war_factory: 2.1,
+    barracks: 1.35,
+    power_plant: 1.7,
+    supply: 1.7,
+    turret: 1.4,
+  }[kind] ?? 1.35;
   return visual * 0.42;
 }
 
@@ -1532,7 +1614,11 @@ function syncSelectionMarkers() {
     const on = selected.has(id);
     let ring = mesh.userData.selRing;
     if (on && !ring) {
-      const geo = new THREE.RingGeometry(0.08, 0.11, 24);
+      const tank = !!mesh.userData.isTank;
+      const building = !!mesh.userData.building;
+      const inner = building ? 0.55 : tank ? 0.16 : 0.035;
+      const outer = building ? 0.68 : tank ? 0.2 : 0.05;
+      const geo = new THREE.RingGeometry(inner, outer, 20);
       const mat = new THREE.MeshBasicMaterial({
         color: 0x9fef4a,
         transparent: true,
@@ -1762,7 +1848,8 @@ function attachOwnerMarkings(mesh, entity) {
   const name = entity.owner_name || "Player";
   const sprite = makeNameSprite(name, colors);
   if (!entity.building) {
-    sprite.scale.set(1.05, 0.26, 1);
+    const tank = String(entity.kind || "").includes("tank");
+    sprite.scale.set(tank ? 0.55 : 0.28, tank ? 0.14 : 0.07, 1);
   }
   sprite.position.set(0, labelHeightFor(entity), 0);
   sprite.name = "ownerLabel";
@@ -1773,9 +1860,10 @@ function attachOwnerMarkings(mesh, entity) {
 
 function labelHeightFor(entity) {
   if (entity.building) {
-    return entity.kind === "hq" ? 1.55 : 1.15;
+    return entity.kind === "hq" ? 2.05 : 1.5;
   }
-  return (unitDims(entity.kind).h || 0.22) + 0.28;
+  const h = unitDims(entity.kind).h || 0.08;
+  return h + (String(entity.kind || "").includes("tank") ? 0.16 : 0.05);
 }
 
 function activeLoadProgress(entity) {
@@ -1944,12 +2032,20 @@ function updateHpBar(mesh, entity) {
 
   const compact = !entity.building;
   const sprite = makeProgressSprite(ratio, "HP", compact);
+  if (!entity.building) {
+    const tank = String(entity.kind || "").includes("tank");
+    sprite.scale.set(tank ? 0.42 : 0.2, tank ? 0.095 : 0.045, 1);
+  }
   sprite.name = "hpBar";
   const baseH = labelHeightFor(entity);
   const load = activeLoadProgress(entity);
-  const y = load
-    ? Math.max(0.22, baseH - 0.62)
-    : Math.max(0.38, baseH - 0.36);
+  const y = entity.building
+    ? load
+      ? Math.max(0.5, baseH - 0.62)
+      : Math.max(0.55, baseH - 0.36)
+    : load
+      ? baseH - 0.04
+      : baseH - 0.02;
   sprite.position.set(0, y, 0);
   mesh.add(sprite);
   mesh.userData.hpBar = sprite;
@@ -1958,15 +2054,14 @@ function updateHpBar(mesh, entity) {
 
 function unitDims(kind) {
   const k = String(kind || "");
-  // Vehicles a bit larger than infantry, still small vs buildings.
+  // Scale: HQ ~2.15 wu ≈ 22–28 m → infantry ~1.8 m ≈ 0.08 wu tall (≈1/3 prior).
   if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
-    return { w: 0.22, h: 0.14, d: 0.32 };
+    return { w: 0.36, h: 0.24, d: 0.56 };
   }
   if (k.includes("missile")) {
-    return { w: 0.08, h: 0.16, d: 0.08 };
+    return { w: 0.03, h: 0.08, d: 0.03 };
   }
-  // Ranger / infantry — detailed low-poly humanoid height
-  return { w: 0.1, h: 0.24, d: 0.1 };
+  return { w: 0.033, h: 0.08, d: 0.033 };
 }
 
 function matStd(color, opts = {}) {
@@ -1983,7 +2078,7 @@ function createRangerMesh(teamColor) {
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isInfantry = true;
-  g.userData.rigVersion = 3;
+  g.userData.rigVersion = 4;
   g.userData.tintParts = [];
   g.userData.walkPhase = Math.random() * Math.PI * 2;
   g.userData.moving = false;
@@ -2194,7 +2289,7 @@ function createRangerMesh(teamColor) {
   torso.add(rifle);
 
   g.add(torso);
-  g.userData.unitHeight = 0.24;
+  g.userData.unitHeight = 0.08;
   g.userData.walk = {
     leftLeg: g.getObjectByName("leftLeg"),
     rightLeg: g.getObjectByName("rightLeg"),
@@ -2202,6 +2297,8 @@ function createRangerMesh(teamColor) {
     rightArm: torso.getObjectByName("rightArm"),
     torso,
   };
+  // Real-scale infantry vs buildings (~1/3 of previous size).
+  g.scale.setScalar(1 / 3);
   return g;
 }
 
@@ -2232,53 +2329,203 @@ function createTankMesh(teamColor) {
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.tintParts = [];
+  g.userData.tankRigVersion = 3;
 
   const hull = 0x4a5538;
-  const track = 0x222018;
+  const hullDark = 0x353c2c;
+  const hullLight = 0x5a6648;
+  const track = 0x1a1814;
+  const rubber = 0x11100e;
+  const metal = 0x2a2a26;
+  const rust = 0x3a3228;
   const accent = teamColor >>> 0;
 
-  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
+  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
     m.rotation.set(rx, ry, rz);
+    m.castShadow = true;
+    m.receiveShadow = true;
     if (tint) g.userData.tintParts.push(m);
-    g.add(m);
+    parent.add(m);
     return m;
   };
 
-  add(new THREE.BoxGeometry(0.2, 0.07, 0.28), matStd(hull), 0, 0.06, 0);
-  add(new THREE.BoxGeometry(0.04, 0.05, 0.3), matStd(track), -0.12, 0.035, 0);
-  add(new THREE.BoxGeometry(0.04, 0.05, 0.3), matStd(track), 0.12, 0.035, 0);
-  add(new THREE.BoxGeometry(0.18, 0.02, 0.06), matStd(accent, { roughness: 0.5 }), 0, 0.1, -0.08, 0, 0, 0, true);
+  // —— Tracks, wheels, return rollers ——
+  for (const side of [-1, 1]) {
+    const x = side * 0.175;
+    // Track armor / link band
+    add(g, new THREE.BoxGeometry(0.058, 0.078, 0.54), matStd(track), x, 0.042, 0);
+    add(g, new THREE.BoxGeometry(0.042, 0.028, 0.52), matStd(rubber), x, 0.01, 0);
+    // Road wheels
+    for (let i = -2; i <= 2; i++) {
+      add(
+        g,
+        new THREE.CylinderGeometry(0.026, 0.026, 0.042, 10),
+        matStd(metal, { metalness: 0.55, roughness: 0.42 }),
+        x,
+        0.03,
+        i * 0.095,
+        0,
+        0,
+        Math.PI / 2,
+      );
+      add(
+        g,
+        new THREE.CylinderGeometry(0.012, 0.012, 0.044, 6),
+        matStd(0x0e0e0c),
+        x,
+        0.03,
+        i * 0.095,
+        0,
+        0,
+        Math.PI / 2,
+      );
+    }
+    // Drive sprocket (rear) + idler (front)
+    add(
+      g,
+      new THREE.CylinderGeometry(0.032, 0.032, 0.04, 10),
+      matStd(metal, { metalness: 0.6 }),
+      x,
+      0.04,
+      -0.255,
+      0,
+      0,
+      Math.PI / 2,
+    );
+    add(
+      g,
+      new THREE.CylinderGeometry(0.028, 0.028, 0.038, 10),
+      matStd(metal, { metalness: 0.55 }),
+      x,
+      0.038,
+      0.255,
+      0,
+      0,
+      Math.PI / 2,
+    );
+    // Side skirts / schürzen
+    add(g, new THREE.BoxGeometry(0.018, 0.055, 0.5), matStd(hullDark), x * 1.22, 0.078, 0);
+    add(g, new THREE.BoxGeometry(0.014, 0.02, 0.12), matStd(hull), x * 1.24, 0.095, 0.12);
+    add(g, new THREE.BoxGeometry(0.014, 0.02, 0.12), matStd(hull), x * 1.24, 0.095, -0.12);
+  }
 
+  // —— Hull ——
+  add(g, new THREE.BoxGeometry(0.32, 0.085, 0.5), matStd(hull), 0, 0.085, 0);
+  add(g, new THREE.BoxGeometry(0.3, 0.05, 0.38), matStd(hullDark), 0, 0.14, -0.02);
+  // Front glacis plate
+  add(g, new THREE.BoxGeometry(0.28, 0.035, 0.12), matStd(hullLight), 0, 0.118, 0.21, -0.38, 0, 0);
+  add(g, new THREE.BoxGeometry(0.22, 0.02, 0.06), matStd(hullDark), 0, 0.135, 0.18, -0.2, 0, 0);
+  // Rear engine deck
+  add(g, new THREE.BoxGeometry(0.26, 0.03, 0.1), matStd(metal), 0, 0.132, -0.24);
+  add(g, new THREE.BoxGeometry(0.1, 0.012, 0.06), matStd(0x1e1e1a), -0.06, 0.148, -0.24);
+  add(g, new THREE.BoxGeometry(0.1, 0.012, 0.06), matStd(0x1e1e1a), 0.06, 0.148, -0.24);
+  // Exhausts
+  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18), -0.09, 0.148, -0.265, Math.PI / 2, 0, 0);
+  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18), 0.09, 0.148, -0.265, Math.PI / 2, 0, 0);
+  // Team stripe on rear deck
+  add(
+    g,
+    new THREE.BoxGeometry(0.24, 0.014, 0.055),
+    matStd(accent, { roughness: 0.45 }),
+    0,
+    0.152,
+    -0.14,
+    0,
+    0,
+    0,
+    true,
+  );
+  // Driver hatch + vision block
+  add(g, new THREE.BoxGeometry(0.065, 0.022, 0.065), matStd(hullDark), -0.075, 0.158, 0.1);
+  add(g, new THREE.BoxGeometry(0.04, 0.012, 0.02), matStd(0x111110), -0.075, 0.168, 0.125);
+  // Co-driver MG mount bump
+  add(g, new THREE.BoxGeometry(0.05, 0.018, 0.05), matStd(hullDark), 0.08, 0.155, 0.12);
+  // Front headlights
+  add(g, new THREE.BoxGeometry(0.028, 0.022, 0.02), matStd(metal), -0.11, 0.11, 0.26);
+  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.35, roughness: 0.3 }), -0.11, 0.11, 0.272);
+  add(g, new THREE.BoxGeometry(0.028, 0.022, 0.02), matStd(metal), 0.11, 0.11, 0.26);
+  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.35, roughness: 0.3 }), 0.11, 0.11, 0.272);
+  // Fuel / stowage boxes on fenders
+  add(g, new THREE.BoxGeometry(0.04, 0.035, 0.1), matStd(rust), -0.2, 0.12, -0.05);
+  add(g, new THREE.BoxGeometry(0.04, 0.035, 0.1), matStd(rust), 0.2, 0.12, -0.05);
+  // Front mud flaps
+  add(g, new THREE.BoxGeometry(0.05, 0.04, 0.01), matStd(rubber), -0.175, 0.06, 0.28);
+  add(g, new THREE.BoxGeometry(0.05, 0.04, 0.01), matStd(rubber), 0.175, 0.06, 0.28);
+
+  // —— Turret ——
   const turret = new THREE.Group();
   turret.name = "muzzleRoot";
-  const cupola = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.14), matStd(0x3d4730));
-  cupola.position.set(0, 0.12, -0.02);
-  turret.add(cupola);
+  // Main turret body (slightly tapered look via stacked boxes)
+  add(turret, new THREE.BoxGeometry(0.2, 0.095, 0.24), matStd(0x3d4730), 0, 0.21, -0.02);
+  add(turret, new THREE.BoxGeometry(0.17, 0.045, 0.14), matStd(hullDark), 0, 0.268, -0.04);
+  // Angled cheek armor
+  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight), -0.11, 0.215, 0.02, 0, 0, 0.25);
+  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight), 0.11, 0.215, 0.02, 0, 0, -0.25);
+  // Bustle / ammo rack rear
+  add(turret, new THREE.BoxGeometry(0.14, 0.05, 0.08), matStd(0x2f3528), 0, 0.22, -0.16);
+  add(turret, new THREE.BoxGeometry(0.1, 0.03, 0.05), matStd(rust), 0, 0.245, -0.18);
+  // Commander cupola
+  add(turret, new THREE.CylinderGeometry(0.038, 0.044, 0.032, 10), matStd(metal), 0.045, 0.295, -0.02);
+  add(turret, new THREE.BoxGeometry(0.032, 0.014, 0.032), matStd(0x222018), 0.045, 0.312, -0.02);
+  // Cupola MG
+  add(turret, new THREE.CylinderGeometry(0.005, 0.005, 0.07, 5), matStd(0x111110), 0.045, 0.318, 0.04, Math.PI / 2, 0, 0);
+  add(turret, new THREE.BoxGeometry(0.02, 0.012, 0.025), matStd(metal), 0.045, 0.318, 0.01);
+  // Smoke grenade launchers
+  for (let i = 0; i < 3; i++) {
+    add(turret, new THREE.CylinderGeometry(0.008, 0.008, 0.03, 6), matStd(metal), -0.09, 0.24, 0.06 + i * 0.025, 0.6, 0, 0.4);
+    add(turret, new THREE.CylinderGeometry(0.008, 0.008, 0.03, 6), matStd(metal), 0.09, 0.24, 0.06 + i * 0.025, 0.6, 0, -0.4);
+  }
+  // Antenna
+  add(turret, new THREE.CylinderGeometry(0.003, 0.003, 0.22, 4), matStd(0x222220, { metalness: 0.5 }), -0.08, 0.36, -0.12);
+  // Team turret band
+  add(
+    turret,
+    new THREE.BoxGeometry(0.18, 0.012, 0.04),
+    matStd(accent, { roughness: 0.4 }),
+    0,
+    0.255,
+    0.08,
+    0,
+    0,
+    0,
+    true,
+  );
+  // Mantlet
+  add(turret, new THREE.BoxGeometry(0.09, 0.07, 0.06), matStd(metal, { metalness: 0.55 }), 0, 0.215, 0.11);
 
-  // Barrel group recoils along local -Z when the main gun fires.
   const barrelGroup = new THREE.Group();
   barrelGroup.name = "tankBarrel";
-  barrelGroup.position.set(0, 0.125, 0);
+  barrelGroup.position.set(0, 0.215, 0.11);
+  // Thermal sleeve segments
   const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.012, 0.015, 0.22, 6),
-    matStd(0x1a1a16, { metalness: 0.65, roughness: 0.4 }),
+    new THREE.CylinderGeometry(0.017, 0.022, 0.28, 10),
+    matStd(0x141412, { metalness: 0.7, roughness: 0.35 }),
   );
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0, 0.12);
+  barrel.position.set(0, 0, 0.16);
+  barrel.castShadow = true;
   barrelGroup.add(barrel);
+  add(barrelGroup, new THREE.CylinderGeometry(0.019, 0.019, 0.08, 10), matStd(0x1a1a16, { metalness: 0.65 }), 0, 0, 0.34, Math.PI / 2, 0, 0);
+  // Fume extractor
+  add(barrelGroup, new THREE.CylinderGeometry(0.026, 0.026, 0.05, 10), matStd(0x1c1c18, { metalness: 0.6 }), 0, 0, 0.28, Math.PI / 2, 0, 0);
+  // Muzzle brake
+  add(barrelGroup, new THREE.CylinderGeometry(0.02, 0.028, 0.035, 10), matStd(metal, { metalness: 0.7 }), 0, 0, 0.42, Math.PI / 2, 0, 0);
+  add(barrelGroup, new THREE.BoxGeometry(0.04, 0.018, 0.02), matStd(metal), 0, 0, 0.435);
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0, 0, 0.24);
+  tip.position.set(0, 0, 0.46);
   barrelGroup.add(tip);
   turret.add(barrelGroup);
-  g.add(turret);
+  // Coaxial MG
+  add(turret, new THREE.CylinderGeometry(0.006, 0.006, 0.09, 5), matStd(0x111110), 0.045, 0.2, 0.155, Math.PI / 2, 0, 0);
 
-  g.userData.unitHeight = 0.16;
+  g.add(turret);
+  g.userData.unitHeight = 0.32;
   g.userData.isTank = true;
-  g.userData.hullTurnRate = 2.0;
-  g.userData.turretTurnRate = 1.35;
+  g.userData.hullTurnRate = 1.7;
+  g.userData.turretTurnRate = 1.15;
   g.userData.barrelRecoil = 0;
   return g;
 }
@@ -2335,14 +2582,31 @@ function upsertMesh(entity) {
     mesh = null;
   }
 
+  // Refit buildings after scale pass.
+  if (
+    mesh &&
+    entity.building &&
+    !mesh.userData.isFallback &&
+    (mesh.userData.buildingFitVersion || 0) < BUILDING_FIT_VERSION &&
+    buildingHasProperModel(entity.kind)
+  ) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
   // Upgrade old unit boxes / static infantry to walk-capable / tank turret rigs.
   if (mesh && entity.unit) {
     const kind = String(entity.kind || "");
     const isTank = kind.includes("tank");
     const needsWalkRig =
       !mesh.userData.isUnitRig ||
-      (isTank && (!mesh.userData.isTank || !mesh.getObjectByName("tankBarrel"))) ||
-      (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 3));
+      (isTank &&
+        (!mesh.userData.isTank ||
+          !mesh.getObjectByName("tankBarrel") ||
+          (mesh.userData.tankRigVersion || 0) < 3)) ||
+      (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
     if (needsWalkRig) {
       scene.remove(mesh);
       disposeMeshTree(mesh);
@@ -2409,14 +2673,17 @@ function upsertMesh(entity) {
     if (prevX != null && prevZ != null) {
       const dx = entity.x - prevX;
       const dz = entity.y - prevZ;
-      // Ignore tiny network/float jitter — only real steps count as walking.
-      const moved2 = dx * dx + dz * dz;
-      if (moved2 > 2.5e-5 && !mesh.userData.knock) {
+      // Real travel ≈ 0.014–0.02 / tick; separation jitter is usually << 0.01.
+      const dist = Math.hypot(dx, dz);
+      if (dist > 0.01 && !mesh.userData.knock) {
         mesh.userData.moving = true;
         mesh.userData.faceYaw = Math.atan2(dx, dz);
         mesh.userData.moveSeenAt = performance.now();
+        mesh.userData.lastMoveDist = dist;
       } else if (!mesh.userData.knock) {
         mesh.userData.moving = false;
+        mesh.userData.moveSeenAt = 0;
+        mesh.userData.lastMoveDist = 0;
       }
     } else {
       mesh.userData.moving = false;
@@ -2454,7 +2721,8 @@ function upsertMesh(entity) {
       label.material.dispose();
       const sprite = makeNameSprite(entity.owner_name || "Player", colors);
       if (!entity.building) {
-        sprite.scale.set(1.05, 0.26, 1);
+        const tank = String(entity.kind || "").includes("tank");
+        sprite.scale.set(tank ? 0.55 : 0.28, tank ? 0.14 : 0.07, 1);
       }
       sprite.position.set(0, labelHeightFor(entity), 0);
       sprite.name = "ownerLabel";
@@ -2564,13 +2832,17 @@ function updateInfantryWalk(mesh, dt, now) {
   const { leftLeg, rightLeg, leftArm, rightArm, torso } = walk;
   if (!leftLeg || !rightLeg) return;
 
-  // Keep walking briefly between network ticks so the cycle doesn't stutter.
+  // Keep walking briefly between sparse network ticks only after a real step.
+  const lastDist = mesh.userData.lastMoveDist || 0;
   const recentlyMoved =
     mesh.userData.moving === true ||
-    (mesh.userData.moveSeenAt != null && now - mesh.userData.moveSeenAt < 140);
+    (lastDist > 0.01 &&
+      mesh.userData.moveSeenAt != null &&
+      mesh.userData.moveSeenAt > 0 &&
+      now - mesh.userData.moveSeenAt < 70);
 
   if (recentlyMoved) {
-    mesh.userData.walkPhase = (mesh.userData.walkPhase || 0) + dt * 11;
+    mesh.userData.walkPhase = (mesh.userData.walkPhase || 0) + dt * 14;
     const swing = Math.sin(mesh.userData.walkPhase) * 0.55;
     leftLeg.rotation.x = swing;
     rightLeg.rotation.x = -swing;
@@ -2581,15 +2853,14 @@ function updateInfantryWalk(mesh, dt, now) {
       torso.rotation.z = Math.sin(mesh.userData.walkPhase) * 0.04;
     }
   } else {
-    // Ease back to idle stance
-    const ease = Math.min(1, dt * 10);
-    leftLeg.rotation.x *= 1 - ease;
-    rightLeg.rotation.x *= 1 - ease;
-    if (leftArm) leftArm.rotation.x *= 1 - ease;
-    if (rightArm) rightArm.rotation.x *= 1 - ease;
+    // Snap to idle — no lingering march-in-place.
+    leftLeg.rotation.x = 0;
+    rightLeg.rotation.x = 0;
+    if (leftArm) leftArm.rotation.x = 0;
+    if (rightArm) rightArm.rotation.x = 0;
     if (torso) {
-      torso.position.y *= 1 - ease;
-      torso.rotation.z *= 1 - ease;
+      torso.position.y = 0;
+      torso.rotation.z = 0;
     }
   }
 }
@@ -3042,7 +3313,7 @@ function updateTankCrushVisuals() {
         mesh.position.x - tankMesh.position.x,
         mesh.position.z - tankMesh.position.z,
       );
-      if (d < 0.17) applyCrushKnock(mesh, tankMesh);
+      if (d < 0.22) applyCrushKnock(mesh, tankMesh);
     }
   }
 }
@@ -3066,6 +3337,7 @@ function animate() {
     }
   }
   updateCombatFx(now);
+  Sfx.updateSpatial();
   renderer.render(scene, camera);
 }
 
