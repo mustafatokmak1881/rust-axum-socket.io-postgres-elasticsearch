@@ -2187,7 +2187,12 @@ function upsertMesh(entity) {
   } else if (mesh.userData.isUnitRig) {
     const prevX = mesh.userData.lastX;
     const prevZ = mesh.userData.lastZ;
-    mesh.position.set(entity.x, 0, entity.y);
+    if (mesh.userData.knock) {
+      mesh.userData.knock.originX = entity.x;
+      mesh.userData.knock.originZ = entity.y;
+    } else {
+      mesh.position.set(entity.x, 0, entity.y);
+    }
     if (mesh.userData.lastTint !== colors[0]) {
       tintUnitMesh(mesh, colors);
       mesh.userData.lastTint = colors[0];
@@ -2197,11 +2202,11 @@ function upsertMesh(entity) {
       const dz = entity.y - prevZ;
       // Ignore tiny network/float jitter — only real steps count as walking.
       const moved2 = dx * dx + dz * dz;
-      if (moved2 > 2.5e-5) {
+      if (moved2 > 2.5e-5 && !mesh.userData.knock) {
         mesh.userData.moving = true;
         mesh.userData.faceYaw = Math.atan2(dx, dz);
         mesh.userData.moveSeenAt = performance.now();
-      } else {
+      } else if (!mesh.userData.knock) {
         mesh.userData.moving = false;
       }
     } else {
@@ -2591,10 +2596,26 @@ function updateCombatFx(now) {
         part.mesh.geometry.attributes.position.needsUpdate = true;
         part.mesh.material.opacity = 0.95 * (1 - t * 0.5);
       } else if (part.role === "blast") {
-        const fade = Math.max(0, 1 - t * 4);
+        const fade = Math.max(0, 1 - t * (fx.type === "tank_boom" ? 1.6 : 4));
         part.mesh.material.opacity = fade;
-        const grow = fx.type === "shell" ? 1 + t * 6 : 1 + t * 3;
+        const grow = fx.type === "shell" || fx.type === "tank_boom" ? 1 + t * 8 : 1 + t * 3;
         part.mesh.scale.setScalar(grow);
+        if (fx.type === "tank_boom") {
+          part.mesh.position.y = fx.start.y + t * 0.25;
+        }
+      } else if (part.role === "ring") {
+        part.mesh.material.opacity = 0.85 * (1 - t);
+        const s = 1 + t * 9;
+        part.mesh.scale.set(s, s, s);
+      } else if (part.role === "debris") {
+        const drift = part.mesh.userData.drift;
+        if (drift) {
+          part.mesh.position.x = fx.start.x + drift.x * t;
+          part.mesh.position.y = fx.start.y + drift.y * t;
+          part.mesh.position.z = fx.start.z + drift.z * t;
+        }
+        part.mesh.material.opacity = 0.55 * (1 - t);
+        part.mesh.scale.setScalar(1 + t * 4);
       } else if (part.role === "smoke") {
         part.mesh.material.opacity = 0.55 * (1 - t);
         part.mesh.scale.setScalar(1 + t * 5);
@@ -2605,27 +2626,8 @@ function updateCombatFx(now) {
     if (t >= 1) {
       // Impact burst at destination
       if (fx.type === "shell") {
-        const boom = new THREE.Mesh(
-          new THREE.SphereGeometry(0.06, 8, 8),
-          new THREE.MeshBasicMaterial({
-            color: 0xff6622,
-            transparent: true,
-            opacity: 0.95,
-            depthWrite: false,
-          }),
-        );
-        boom.position.copy(fx.end);
-        scene.add(boom);
-        activeFx.push({
-          type: "impact",
-          born: now,
-          life: 280,
-          parts: [{ mesh: boom, role: "blast" }],
-          start: fx.end.clone(),
-          end: fx.end.clone(),
-          dir: new THREE.Vector3(0, 1, 0),
-          dist: 0,
-        });
+        spawnTankExplosion(fx.end);
+        applyBlastKnock(fx.end.x, fx.end.z, 1.25);
       } else if (fx.type === "bullet") {
         const spark = new THREE.Mesh(
           new THREE.SphereGeometry(0.012, 5, 5),
@@ -2656,6 +2658,192 @@ function updateCombatFx(now) {
   }
 }
 
+function spawnTankExplosion(at) {
+  if (!scene) return;
+  const now = performance.now();
+  const parts = [];
+
+  const fireball = new THREE.Mesh(
+    new THREE.SphereGeometry(0.08, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xff7722,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    }),
+  );
+  fireball.position.copy(at);
+  scene.add(fireball);
+  parts.push({ mesh: fireball, role: "blast" });
+
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.04, 8, 8),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff0a8,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    }),
+  );
+  core.position.copy(at);
+  scene.add(core);
+  parts.push({ mesh: core, role: "blast" });
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.08, 0.14, 20),
+    new THREE.MeshBasicMaterial({
+      color: 0xffaa44,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(at.x, 0.04, at.z);
+  scene.add(ring);
+  parts.push({ mesh: ring, role: "ring" });
+
+  for (let i = 0; i < 5; i++) {
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05 + Math.random() * 0.03, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x6a6558,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      }),
+    );
+    const ang = (i / 5) * Math.PI * 2;
+    smoke.position.set(at.x + Math.cos(ang) * 0.05, at.y + 0.05, at.z + Math.sin(ang) * 0.05);
+    smoke.userData.drift = new THREE.Vector3(Math.cos(ang) * 0.35, 0.55, Math.sin(ang) * 0.35);
+    scene.add(smoke);
+    parts.push({ mesh: smoke, role: "debris" });
+  }
+
+  activeFx.push({
+    type: "tank_boom",
+    born: now,
+    life: 520,
+    parts,
+    start: at.clone(),
+    end: at.clone(),
+    dir: new THREE.Vector3(0, 1, 0),
+    dist: 0,
+  });
+}
+
+function applyBlastKnock(x, z, radius) {
+  for (const mesh of state.meshes.values()) {
+    if (!mesh.userData?.isInfantry) continue;
+    const dx = mesh.position.x - x;
+    const dz = mesh.position.z - z;
+    const d = Math.hypot(dx, dz);
+    if (d > radius) continue;
+
+    let nx;
+    let nz;
+    let force;
+    if (d < 0.05) {
+      force = 1;
+      nx = Math.random() - 0.5;
+      nz = Math.random() - 0.5;
+      const len = Math.hypot(nx, nz) || 1;
+      nx /= len;
+      nz /= len;
+    } else {
+      force = 1 - d / radius;
+      nx = dx / d;
+      nz = dz / d;
+    }
+
+    mesh.userData.knock = {
+      age: 0,
+      life: 0.5 + force * 0.55,
+      originX: mesh.position.x,
+      originZ: mesh.position.z,
+      x: 0,
+      y: 0,
+      z: 0,
+      vx: nx * force * 1.35,
+      vy: 0.45 + force * 1.25,
+      vz: nz * force * 1.35,
+      spin: (Math.random() - 0.5) * force * 7,
+    };
+    mesh.userData.moving = false;
+  }
+}
+
+function updateKnockPhysics(mesh, dt) {
+  const k = mesh.userData.knock;
+  if (!k) return;
+  k.age += dt;
+  k.vy -= 7.5 * dt;
+  k.x += k.vx * dt;
+  k.y += k.vy * dt;
+  k.z += k.vz * dt;
+  if (k.y < 0) {
+    k.y = 0;
+    k.vy *= -0.28;
+    k.vx *= 0.55;
+    k.vz *= 0.55;
+    if (Math.abs(k.vy) < 0.15) k.vy = 0;
+  }
+  mesh.position.set(k.originX + k.x, k.y, k.originZ + k.z);
+  mesh.rotation.z = k.spin * Math.min(1, k.age * 2) * (1 - k.age / k.life);
+  mesh.rotation.x = Math.min(0.9, k.y * 1.8) * Math.sign(k.spin || 1);
+
+  if (k.age >= k.life && k.y <= 0.02) {
+    mesh.position.set(k.originX + k.x, 0, k.originZ + k.z);
+    mesh.rotation.x = 0;
+    mesh.rotation.z = 0;
+    mesh.userData.knock = null;
+  }
+}
+
+function applyCrushKnock(mesh, tankMesh) {
+  if (!mesh?.userData?.isInfantry || mesh.userData.knock) return;
+  const dx = mesh.position.x - tankMesh.position.x;
+  const dz = mesh.position.z - tankMesh.position.z;
+  const d = Math.hypot(dx, dz) || 0.01;
+  mesh.userData.knock = {
+    age: 0,
+    life: 0.55,
+    originX: mesh.position.x,
+    originZ: mesh.position.z,
+    x: 0,
+    y: 0,
+    z: 0,
+    vx: (dx / d) * 0.55,
+    vy: 0.55 + Math.random() * 0.35,
+    vz: (dz / d) * 0.55,
+    spin: (Math.random() - 0.5) * 10,
+  };
+  mesh.userData.moving = false;
+}
+
+function updateTankCrushVisuals() {
+  const tanks = [];
+  for (const mesh of state.meshes.values()) {
+    if (mesh.userData?.isTank) tanks.push(mesh);
+  }
+  if (!tanks.length) return;
+  for (const tankMesh of tanks) {
+    const tank = state.entities.get(tankMesh.userData.id);
+    if (!tank) continue;
+    for (const mesh of state.meshes.values()) {
+      if (!mesh.userData?.isInfantry || mesh.userData.knock) continue;
+      const ent = state.entities.get(mesh.userData.id);
+      if (!ent || ent.team === tank.team) continue;
+      const d = Math.hypot(
+        mesh.position.x - tankMesh.position.x,
+        mesh.position.z - tankMesh.position.z,
+      );
+      if (d < 0.17) applyCrushKnock(mesh, tankMesh);
+    }
+  }
+}
+
 function animate() {
   requestAnimationFrame(animate);
   if (!renderer) return;
@@ -2665,9 +2853,14 @@ function animate() {
   applyEdgePan();
   controls?.update();
   refreshLiveVision();
+  updateTankCrushVisuals();
   for (const mesh of state.meshes.values()) {
-    smoothUnitFacing(mesh, dt);
-    updateInfantryWalk(mesh, dt, now);
+    if (mesh.userData.knock) {
+      updateKnockPhysics(mesh, dt);
+    } else {
+      smoothUnitFacing(mesh, dt);
+      updateInfantryWalk(mesh, dt, now);
+    }
   }
   updateCombatFx(now);
   renderer.render(scene, camera);

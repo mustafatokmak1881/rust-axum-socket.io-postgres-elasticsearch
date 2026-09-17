@@ -1108,6 +1108,11 @@ impl MatchSim {
                     let jammed = entity.stuck_frames >= 6;
                     let solid_units = !jammed;
                     let arrive_r = move_arrive_radius(self_r);
+                    let overrun = if entity.kind.contains("tank") {
+                        Some(entity.team)
+                    } else {
+                        None
+                    };
 
                     // Soft arrival for move orders: don't orbit a crowded click point.
                     let near_goal = toward_goal <= arrive_r
@@ -1130,7 +1135,7 @@ impl MatchSim {
 
                         // Every tick: try the ordered destination first.
                         let mut moved = self
-                            .steer_step(
+                            .steer_step_ex(
                                 entity.id,
                                 entity.x,
                                 entity.y,
@@ -1140,6 +1145,7 @@ impl MatchSim {
                                 self_r,
                                 ignore,
                                 solid_units,
+                                overrun,
                             )
                             .map(|p| (p, entity.last_escape_ang));
 
@@ -1153,7 +1159,7 @@ impl MatchSim {
                                     let dux = ddx / ddist;
                                     let duy = ddy / ddist;
                                     moved = self
-                                        .steer_step(
+                                        .steer_step_ex(
                                             entity.id,
                                             entity.x,
                                             entity.y,
@@ -1163,6 +1169,7 @@ impl MatchSim {
                                             self_r,
                                             ignore,
                                             solid_units,
+                                            overrun,
                                         )
                                         .map(|p| (p, entity.last_escape_ang));
                                 }
@@ -1179,7 +1186,7 @@ impl MatchSim {
                             } else {
                                 (gux, guy)
                             };
-                            moved = self.steer_step_escape(
+                            moved = self.steer_step_escape_ex(
                                 entity.id,
                                 entity.x,
                                 entity.y,
@@ -1189,6 +1196,7 @@ impl MatchSim {
                                 self_r,
                                 ignore,
                                 entity.last_escape_ang,
+                                overrun,
                             );
                         }
 
@@ -1279,6 +1287,7 @@ impl MatchSim {
                         let fy = entity.y;
                         let kind = entity.kind.clone();
                         let from_id = entity.id;
+                        let team = entity.team;
                         if let Some(t) = self.entities.get_mut(&tid) {
                             t.hp -= dmg;
                             t.dirty = true;
@@ -1303,8 +1312,11 @@ impl MatchSim {
                             y0: fy,
                             x1: tx,
                             y1: ty,
-                            kind,
+                            kind: kind.clone(),
                         });
+                        if kind.contains("tank") {
+                            self.apply_shell_blast(team, tx, ty, tid);
+                        }
                     }
                 } else {
                     entity.target = None;
@@ -1315,6 +1327,7 @@ impl MatchSim {
         }
 
         self.separate_units(dt_ms);
+        self.crush_infantry_under_tanks();
         self.clamp_entities_to_map();
 
         // Remove dead.
@@ -1336,6 +1349,58 @@ impl MatchSim {
         }
 
         self.check_victory();
+    }
+
+    /// HE blast around a tank shell impact. Primary target already took direct damage.
+    fn apply_shell_blast(&mut self, team: u8, x: f32, y: f32, primary: Uuid) {
+        const RADIUS: f32 = 1.15;
+        let victims: Vec<(Uuid, f32, bool)> = self
+            .entities
+            .values()
+            .filter(|e| e.team != team && e.hp > 0.0 && (e.unit || e.building))
+            .filter_map(|e| {
+                let dx = e.x - x;
+                let dy = e.y - y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > RADIUS {
+                    return None;
+                }
+                Some((e.id, dist, e.unit && !e.kind.contains("tank")))
+            })
+            .collect();
+
+        for (id, dist, is_infantry) in victims {
+            if id == primary {
+                continue; // direct hit already applied
+            }
+            let falloff = (1.0 - dist / RADIUS).clamp(0.0, 1.0);
+            let dmg = if is_infantry {
+                // Center = lethal; outer ring = wound.
+                170.0 * falloff.powf(0.75)
+            } else if self
+                .entities
+                .get(&id)
+                .is_some_and(|e| e.kind.contains("tank"))
+            {
+                40.0 * falloff
+            } else {
+                // Buildings take modest splash
+                55.0 * falloff
+            };
+            if dmg < 1.0 {
+                continue;
+            }
+            if let Some(e) = self.entities.get_mut(&id) {
+                e.hp -= dmg;
+                e.dirty = true;
+                if is_infantry && dmg >= 35.0 {
+                    e.move_to = None;
+                    e.detour = None;
+                    e.detour_ttl = 0;
+                    e.stuck_frames = 0;
+                }
+            }
+        }
     }
 
     /// Nearest living enemy unit or building inside `range` of (x, y).
@@ -1386,6 +1451,20 @@ impl MatchSim {
         ignore: Option<Uuid>,
         solid_units: bool,
     ) -> bool {
+        self.collides_at_ex(self_id, x, y, self_r, ignore, solid_units, None)
+    }
+
+    /// `overrun_team`: tank of this team ignores enemy infantry (runs them over).
+    fn collides_at_ex(
+        &self,
+        self_id: Uuid,
+        x: f32,
+        y: f32,
+        self_r: f32,
+        ignore: Option<Uuid>,
+        solid_units: bool,
+        overrun_team: Option<u8>,
+    ) -> bool {
         for other in self.entities.values() {
             if other.id == self_id || Some(other.id) == ignore {
                 continue;
@@ -1393,8 +1472,16 @@ impl MatchSim {
             if !other.building && !other.unit {
                 continue;
             }
-            if other.unit && !solid_units {
-                continue;
+            if other.unit {
+                if let Some(team) = overrun_team {
+                    // Tanks drive through enemy infantry; still blocked by enemy tanks.
+                    if other.team != team && !other.kind.contains("tank") {
+                        continue;
+                    }
+                }
+                if !solid_units {
+                    continue;
+                }
             }
             // Under-construction buildings still block.
             let other_r = entity_radius(other);
@@ -1408,7 +1495,7 @@ impl MatchSim {
         false
     }
 
-    fn steer_step(
+    fn steer_step_ex(
         &self,
         self_id: Uuid,
         x: f32,
@@ -1419,6 +1506,7 @@ impl MatchSim {
         self_r: f32,
         ignore: Option<Uuid>,
         solid_units: bool,
+        overrun_team: Option<u8>,
     ) -> Option<(f32, f32)> {
         // Try forward, then fan left/right to walk around obstacles.
         const ANGLES: &[f32] = &[
@@ -1430,15 +1518,15 @@ impl MatchSim {
             let dy = ux * s + uy * c;
             let nx = x + dx * step;
             let ny = y + dy * step;
-            if !self.collides_at(self_id, nx, ny, self_r, ignore, solid_units) {
+            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, solid_units, overrun_team)
+            {
                 return Some((nx, ny));
             }
         }
         None
     }
 
-    /// When jammed: biased random headings, prefer anything that isn't the last failed angle.
-    fn steer_step_escape(
+    fn steer_step_escape_ex(
         &self,
         self_id: Uuid,
         x: f32,
@@ -1449,10 +1537,22 @@ impl MatchSim {
         self_r: f32,
         ignore: Option<Uuid>,
         last_escape_ang: f32,
+        overrun_team: Option<u8>,
     ) -> Option<((f32, f32), f32)> {
         let mut rng = rand::thread_rng();
         // Soft on units so crowds don't freeze everyone.
-        if let Some(p) = self.steer_step(self_id, x, y, ux, uy, step, self_r, ignore, false) {
+        if let Some(p) = self.steer_step_ex(
+            self_id,
+            x,
+            y,
+            ux,
+            uy,
+            step,
+            self_r,
+            ignore,
+            false,
+            overrun_team,
+        ) {
             return Some((p, last_escape_ang));
         }
 
@@ -1466,23 +1566,31 @@ impl MatchSim {
             }
             let nx = x + ang.cos() * step;
             let ny = y + ang.sin() * step;
-            if !self.collides_at(self_id, nx, ny, self_r, ignore, false) {
+            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team) {
                 return Some(((nx, ny), ang));
             }
             // Also try a longer probe step for escaping pockets.
             let nx2 = x + ang.cos() * step * 1.6;
             let ny2 = y + ang.sin() * step * 1.6;
-            if !self.collides_at(self_id, nx2, ny2, self_r, ignore, false) {
+            if !self.collides_at_ex(self_id, nx2, ny2, self_r, ignore, false, overrun_team) {
                 return Some(((nx2, ny2), ang));
             }
         }
 
+        // Last resort: tiny lateral slides.
+        for side in [-1.0f32, 1.0] {
+            let nx = x - uy * side * step * 0.85;
+            let ny = y + ux * side * step * 0.85;
+            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team) {
+                return Some(((nx, ny), last_escape_ang + side));
+            }
+        }
         // Last resort: any free micro-step, even repeating angles.
         for k in 0..12 {
             let ang = (k as f32) * (std::f32::consts::TAU / 12.0) + rng.gen_range(0.0..0.3);
             let nx = x + ang.cos() * step;
             let ny = y + ang.sin() * step;
-            if !self.collides_at(self_id, nx, ny, self_r, ignore, false) {
+            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team) {
                 return Some(((nx, ny), ang));
             }
         }
@@ -1564,6 +1672,43 @@ impl MatchSim {
         )
     }
 
+    /// Tanks flatten enemy infantry they drive over.
+    fn crush_infantry_under_tanks(&mut self) {
+        let tanks: Vec<(Uuid, u8, f32, f32, f32)> = self
+            .entities
+            .values()
+            .filter(|e| e.unit && e.hp > 0.0 && e.kind.contains("tank"))
+            .map(|e| (e.id, e.team, e.x, e.y, unit_radius(&e.kind)))
+            .collect();
+
+        let mut crushed: Vec<Uuid> = Vec::new();
+        for &(_tid, team, tx, ty, tr) in &tanks {
+            for other in self.entities.values() {
+                if !other.unit || other.hp <= 0.0 || other.team == team || other.kind.contains("tank")
+                {
+                    continue;
+                }
+                let dx = other.x - tx;
+                let dy = other.y - ty;
+                // Must be under the hull footprint, not just nearby.
+                let crush_r = tr * 0.92 + unit_radius(&other.kind) * 0.25;
+                if dx * dx + dy * dy <= crush_r * crush_r {
+                    crushed.push(other.id);
+                }
+            }
+        }
+        crushed.sort_unstable();
+        crushed.dedup();
+        for id in crushed {
+            if let Some(e) = self.entities.get_mut(&id) {
+                e.hp = 0.0;
+                e.dirty = true;
+                e.move_to = None;
+                e.target = None;
+            }
+        }
+    }
+
     fn separate_units(&mut self, dt_ms: u32) {
         // Soft separation is expensive O(n²); every other tick is enough visually.
         if self.tick % 2 == 1 {
@@ -1591,6 +1736,15 @@ impl MatchSim {
                 let Some(b) = self.entities.get(&b_id) else {
                     continue;
                 };
+                // Don't push tanks off the infantry they are crushing.
+                let a_tank = a.kind.contains("tank");
+                let b_tank = b.kind.contains("tank");
+                if a_tank && !b_tank && a.team != b.team {
+                    continue;
+                }
+                if b_tank && !a_tank && a.team != b.team {
+                    continue;
+                }
                 let br = unit_radius(&b.kind);
                 let dx = a.x - b.x;
                 let dy = a.y - b.y;
