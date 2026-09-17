@@ -478,6 +478,8 @@ const Sfx = {
   engines: new Map(),
   tankMoveBuf: null,
   tankMoveWait: null,
+  tankShootBuf: null,
+  tankShootWait: null,
   lastRifleAt: 0,
   rifleRest: 0.5,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
@@ -529,6 +531,7 @@ const Sfx = {
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
     void this.loadTankMove();
+    void this.loadTankShoot();
     return true;
   },
 
@@ -684,47 +687,19 @@ const Sfx = {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.tank);
     if (vol <= 0.002) return;
-    const t0 = this.ctx.currentTime;
-    const bus = this.dest("tank");
-    // 120 mm class: chest-thump bass carries; small-arms stay underneath.
-    const boom = Math.min(1.7, Math.pow(Math.max(vol, 0.015), 0.32) * 1.85) * 5.2;
-    this.duckRifles(1.4);
-
-    // 1) Infrasonic pressure (felt more than heard)
-    this.tone(19, 1.15, "sine", 0.72, 11, boom, bus);
-    this.tone(28, 1.05, "sine", 0.62, 14, boom, bus);
-    this.tone(41, 0.95, "sine", 0.5, 16, boom, bus);
-
-    // 2) Muzzle blast + HE crack
-    this.noiseBurst(0.85, 0.95, 55, "lowpass", boom, 0.35, bus);
-    this.noiseBurst(0.45, 0.72, 160, "lowpass", boom, 0.5, bus);
-    this.noiseBurst(0.18, 0.58, 520, "bandpass", boom, 0.9, bus);
-    this.noiseBurst(0.07, 0.4, 1400, "highpass", boom * 0.7, 0.65, bus);
-    this.tone(62, 0.55, "triangle", 0.38, 22, boom, bus);
-    this.tone(110, 0.22, "sawtooth", 0.16, 36, boom * 0.8, bus);
-
-    // 3) Shock roll + distant slap
-    const roll = (delay, dur, freq, gain) => {
+    this.duckRifles(1.1);
+    const play = (buf) => {
+      if (!buf || !this.ctx) return;
       const src = this.ctx.createBufferSource();
-      src.buffer = this.noiseBuffer(dur);
-      const filt = this.ctx.createBiquadFilter();
-      filt.type = "lowpass";
-      filt.frequency.value = freq;
+      src.buffer = buf;
       const g = this.ctx.createGain();
-      const peak = gain * boom;
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.setValueAtTime(0.0001, t0 + delay);
-      g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + delay + 0.04);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + dur);
-      src.connect(filt);
-      filt.connect(g);
-      g.connect(bus);
-      src.start(t0 + delay);
-      src.stop(t0 + delay + dur + 0.02);
+      g.gain.value = Math.min(1.35, 0.9 * Math.pow(vol, 0.4) * 1.55);
+      src.connect(g);
+      g.connect(this.dest("tank"));
+      src.start();
     };
-    roll(0.05, 0.9, 110, 0.55);
-    roll(0.22, 0.7, 80, 0.32);
-    roll(0.48, 0.55, 60, 0.18);
+    if (this.tankShootBuf) play(this.tankShootBuf);
+    else void this.loadTankShoot().then(play);
   },
 
   loadTankMove() {
@@ -746,6 +721,27 @@ const Sfx = {
         return null;
       });
     return this.tankMoveWait;
+  },
+
+  loadTankShoot() {
+    if (this.tankShootBuf) return Promise.resolve(this.tankShootBuf);
+    if (this.tankShootWait) return this.tankShootWait;
+    if (!this.ctx) return Promise.resolve(null);
+    this.tankShootWait = fetch("/assets/sounds/tank-shoot.wav")
+      .then((res) => {
+        if (!res.ok) throw new Error("tank-shoot");
+        return res.arrayBuffer();
+      })
+      .then((raw) => this.ctx.decodeAudioData(raw))
+      .then((buf) => {
+        this.tankShootBuf = buf;
+        return buf;
+      })
+      .catch(() => {
+        this.tankShootWait = null;
+        return null;
+      });
+    return this.tankShootWait;
   },
 
   startEngineLoop(node) {
