@@ -2127,6 +2127,7 @@ function createRangerMesh(teamColor) {
   g.userData.tintParts = [];
   g.userData.walkPhase = Math.random() * Math.PI * 2;
   g.userData.moving = false;
+  g.rotation.order = "YXZ";
 
   const camo = 0x4f6340;
   const camoDark = 0x3a4a30;
@@ -2691,6 +2692,10 @@ function upsertMesh(entity) {
     }
   }
 
+  if (mesh.userData.isInfantry) {
+    mesh.userData.wantProne = !!entity.prone;
+  }
+
   const syncKey = [
     entity.x.toFixed(2),
     entity.y.toFixed(2),
@@ -2879,6 +2884,19 @@ function updateInfantryWalk(mesh, dt, now) {
   const { leftLeg, rightLeg, leftArm, rightArm, torso } = walk;
   if (!leftLeg || !rightLeg) return;
 
+  // Drop / stand — lerp so it doesn't pop.
+  const want = mesh.userData.wantProne ? 1 : 0;
+  let blend = mesh.userData.proneBlend || 0;
+  const dropRate = want > blend ? 7 : 5;
+  blend += (want - blend) * Math.min(1, dt * dropRate);
+  if (Math.abs(blend - want) < 0.01) blend = want;
+  mesh.userData.proneBlend = blend;
+  mesh.rotation.order = "YXZ";
+  mesh.rotation.x = blend * 1.28;
+  if (!mesh.userData.knock) {
+    mesh.position.y = blend * 0.022;
+  }
+
   // Keep walking briefly between sparse network ticks only after a real step.
   const lastDist = mesh.userData.lastMoveDist || 0;
   const recentlyMoved =
@@ -2889,22 +2907,22 @@ function updateInfantryWalk(mesh, dt, now) {
       now - mesh.userData.moveSeenAt < 70);
 
   if (recentlyMoved) {
-    mesh.userData.walkPhase = (mesh.userData.walkPhase || 0) + dt * 14;
-    const swing = Math.sin(mesh.userData.walkPhase) * 0.55;
+    const crawl = 0.22 + (1 - blend) * 0.78;
+    mesh.userData.walkPhase = (mesh.userData.walkPhase || 0) + dt * (8 + 6 * crawl);
+    const swing = Math.sin(mesh.userData.walkPhase) * 0.55 * crawl;
     leftLeg.rotation.x = swing;
     rightLeg.rotation.x = -swing;
     if (leftArm) leftArm.rotation.x = -swing * 0.45;
     if (rightArm) rightArm.rotation.x = swing * 0.35;
     if (torso) {
-      torso.position.y = Math.abs(Math.sin(mesh.userData.walkPhase * 2)) * 0.008;
-      torso.rotation.z = Math.sin(mesh.userData.walkPhase) * 0.04;
+      torso.position.y = Math.abs(Math.sin(mesh.userData.walkPhase * 2)) * 0.008 * crawl;
+      torso.rotation.z = Math.sin(mesh.userData.walkPhase) * 0.04 * crawl;
     }
   } else {
-    // Snap to idle — no lingering march-in-place.
     leftLeg.rotation.x = 0;
     rightLeg.rotation.x = 0;
-    if (leftArm) leftArm.rotation.x = 0;
-    if (rightArm) rightArm.rotation.x = 0;
+    if (leftArm) leftArm.rotation.x = blend * 0.55;
+    if (rightArm) rightArm.rotation.x = blend * -0.15;
     if (torso) {
       torso.position.y = 0;
       torso.rotation.z = 0;

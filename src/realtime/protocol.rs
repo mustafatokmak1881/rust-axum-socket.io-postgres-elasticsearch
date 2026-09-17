@@ -186,6 +186,9 @@ pub struct EntityView {
     /// 0..1 while this building is training a unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub train_progress: Option<f32>,
+    /// Infantry lying down in combat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prone: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

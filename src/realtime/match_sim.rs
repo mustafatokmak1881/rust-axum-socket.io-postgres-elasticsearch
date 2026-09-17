@@ -135,6 +135,10 @@ pub struct Entity {
     pub detour_ttl: u16,
     /// Last escape heading (radians) — avoid picking the same jam twice.
     pub last_escape_ang: f32,
+    /// Infantry drops in a firefight (smaller silhouette).
+    pub prone: bool,
+    /// Stay down until this tick so they don't pop up between shots.
+    pub prone_until_tick: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -239,10 +243,9 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 0,
             cost_munitions: 40,
             train_ms: 3_500,
-            // Survives several solid hits; dies fast once accuracy connects.
-            hp: 175.0,
-            // One well-placed burst chunk — ~3–4 hits to drop another ranger.
-            damage: 55.0,
+            // 3× longer infantry fights: hits still hurt, one round never drops a man.
+            hp: 525.0,
+            damage: 50.0,
             // Combat jog ~5–6 km/h → well below tank cross-country pace.
             speed: 0.20,
             range: 4.5,
@@ -257,8 +260,8 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 40,
             cost_munitions: 160,
             train_ms: 8_000,
-            hp: 165.0,
-            // Guided punch — lethal to armor when it locks.
+            hp: 495.0,
+            // Guided punch vs armor; infantry is wounded over several hits (see hit_damage).
             damage: 280.0,
             // Laden AT team — slower than rifle infantry.
             speed: 0.16,
@@ -273,9 +276,9 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 900,
             cost_munitions: 700,
             train_ms: 48_000,
-            hp: 2_400.0,
-            // Direct hit deletes infantry; several needed vs another tank.
-            damage: 420.0,
+            hp: 7_200.0,
+            // 3× TTK vs armor; infantry takes several shells via hit_damage().
+            damage: 400.0,
             // Cross-country combat pace ~3× infantry jog.
             speed: 0.58,
             range: 7.5,
@@ -289,8 +292,8 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_fuel: 900,
             cost_munitions: 700,
             train_ms: 48_000,
-            hp: 2_400.0,
-            damage: 420.0,
+            hp: 7_200.0,
+            damage: 400.0,
             speed: 0.58,
             range: 7.5,
             attack_ms: 5_200,
@@ -306,30 +309,99 @@ fn attack_cooldown_for(kind: &str) -> u32 {
         .unwrap_or(1_000)
 }
 
-/// Combat hit probability — hard under fire, easier up close / vs big targets.
-/// Inspired by real engagement hit rates (training ≠ combat).
-fn shot_hit_chance(attacker_kind: &str, target: &Entity, dist: f32, range: f32) -> f32 {
-    let t = (dist / range.max(0.01)).clamp(0.0, 1.0);
-    // Near: ~1.0 · far edge: ~0.18 (dispersion + nerves).
-    let dist_mul = 1.0 - t * t * 0.82;
-
-    let weapon = if attacker_kind.contains("tank") {
-        0.36 // aimed cannon, still miss a lot at range
-    } else if attacker_kind.contains("missile") {
-        0.26 // lock / lead errors
+/// Infantry fights last ~3× longer: heavy weapons don't delete a soldier in one connect.
+fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
+    let infantry = target.unit && !target.kind.contains("tank");
+    if infantry && (attacker_kind.contains("tank") || attacker_kind.contains("missile")) {
+        (base * 0.28).max(48.0)
     } else {
-        0.13 // rifle under fire — historically very low
+        base
+    }
+}
+
+/// How much of the target is actually visible from this firing line.
+#[derive(Clone, Copy)]
+struct ShotCover {
+    /// Solid wall / hull fully between shooter and target — no shot.
+    blocked: bool,
+    /// 1 = open field; ~0.2 = peeking a corner. Multiplies hit chance.
+    exposure: f32,
+}
+
+/// Combat hit probability — much easier up close, hard at the edge of range.
+/// Inverse-square falloff like real aiming: a few metres away is a different fight
+/// than shooting across the weapon's max distance.
+fn shot_hit_chance(
+    attacker_kind: &str,
+    target: &Entity,
+    dist: f32,
+    range: f32,
+    exposure: f32,
+) -> f32 {
+    let range = range.max(0.05);
+    // Distance where hit chance has dropped to ~50% of point-blank.
+    let d0 = if attacker_kind.contains("tank") {
+        range * 0.42
+    } else if attacker_kind.contains("missile") {
+        range * 0.32
+    } else {
+        range * 0.22
+    };
+    let dist_mul = 1.0 / (1.0 + (dist / d0).powi(2));
+
+    // Point-blank connect rate (before size / cover / prone).
+    let weapon_near = if attacker_kind.contains("tank") {
+        0.84
+    } else if attacker_kind.contains("missile") {
+        0.72
+    } else {
+        0.70
     };
 
     let size_mul = if target.building {
-        2.35
+        1.55
     } else if target.kind.contains("tank") {
-        1.75
+        1.40
     } else {
-        1.0 // tiny infantry silhouette
+        1.0
     };
 
-    (weapon * dist_mul * size_mul).clamp(0.04, 0.68)
+    let vis = exposure.clamp(0.12, 1.35);
+    let prone_mul = if target.prone && target.unit && !target.kind.contains("tank") {
+        0.38
+    } else {
+        1.0
+    };
+    (weapon_near * dist_mul * size_mul * vis * prone_mul).clamp(0.012, 0.90)
+}
+
+/// Closest-point distance from circle center to segment A→B, plus t along the segment.
+fn segment_point_gap(ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32) -> (f32, f32) {
+    let abx = bx - ax;
+    let aby = by - ay;
+    let ab2 = abx * abx + aby * aby;
+    if ab2 < 1e-8 {
+        let dx = cx - ax;
+        let dy = cy - ay;
+        return ((dx * dx + dy * dy).sqrt(), 0.0);
+    }
+    let t = ((cx - ax) * abx + (cy - ay) * aby) / ab2;
+    let tc = t.clamp(0.0, 1.0);
+    let px = ax + tc * abx;
+    let py = ay + tc * aby;
+    let dx = cx - px;
+    let dy = cy - py;
+    ((dx * dx + dy * dy).sqrt(), tc)
+}
+
+fn occluder_radius(entity: &Entity) -> Option<f32> {
+    if entity.building {
+        Some(building_radius(&entity.kind) * 0.92)
+    } else if entity.unit && entity.kind.contains("tank") {
+        Some(unit_radius(&entity.kind) * 1.15)
+    } else {
+        None
+    }
 }
 
 /// Scatter impact for a miss so tracers fly wide of the target.
@@ -520,6 +592,8 @@ impl MatchSim {
                     detour: None,
                     detour_ttl: 0,
                     last_escape_ang: 0.0,
+                    prone: false,
+                    prone_until_tick: 0,
                 },
             );
             sim.reveal_vision_for(user_id);
@@ -654,6 +728,8 @@ impl MatchSim {
                 detour: None,
                 detour_ttl: 0,
                 last_escape_ang: 0.0,
+                prone: false,
+                prone_until_tick: 0,
             },
         );
         self.reveal_vision_for(user_id);
@@ -851,6 +927,8 @@ impl MatchSim {
                 detour: None,
                 detour_ttl: 0,
                 last_escape_ang: 0.0,
+                prone: false,
+                prone_until_tick: 0,
             },
         );
 
@@ -1063,6 +1141,8 @@ impl MatchSim {
                                 detour: None,
                                 detour_ttl: 0,
                                 last_escape_ang: 0.0,
+                                prone: false,
+                                prone_until_tick: 0,
                             };
                             self.entities.insert(uid, spawn);
                         }
@@ -1095,13 +1175,13 @@ impl MatchSim {
                 if obeying_move {
                     // On the march: always pick nearest in-range threat (don't stick to someone behind).
                     entity.target =
-                        self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range);
+                        self.find_enemy_in_range(entity.id, entity.team, entity.x, entity.y, entity.range);
                     if entity.target.is_some() {
                         entity.dirty = true;
                     }
                 } else if entity.target.is_none() {
                     if let Some(tid) =
-                        self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range)
+                        self.find_enemy_in_range(entity.id, entity.team, entity.x, entity.y, entity.range)
                     {
                         entity.target = Some(tid);
                         entity.dirty = true;
@@ -1117,7 +1197,8 @@ impl MatchSim {
                     let tdy = t.y - entity.y;
                     let tdist = (tdx * tdx + tdy * tdy).sqrt();
                     let stop_at = (entity.range - 0.35).max(self_r + entity_radius(t) * 0.35);
-                    if !obeying_move && tdist <= stop_at {
+                    let cover = self.shot_cover(entity.id, entity.x, entity.y, t);
+                    if !obeying_move && tdist <= stop_at && !cover.blocked {
                         hold_for_attack = true;
                         goal = None;
                         entity.detour = None;
@@ -1125,6 +1206,7 @@ impl MatchSim {
                         entity.stuck_frames = 0;
                     } else if !obeying_move {
                         // Chase attack target only when not under a move order.
+                        // Fully blocked by a building → walk around for a firing angle.
                         goal = Some((t.x, t.y));
                     }
                     // While move_to is set: keep walking to the click point and fire if in range.
@@ -1331,10 +1413,13 @@ impl MatchSim {
                     let dx = target.x - entity.x;
                     let dy = target.y - entity.y;
                     let dist = (dx * dx + dy * dy).sqrt();
-                    if dist <= entity.range && entity.attack_cooldown_ms == 0 {
+                    let cover = self.shot_cover(entity.id, entity.x, entity.y, target);
+                    if cover.blocked {
+                        // No shot through walls / hulls. Keep chasing, don't burn cooldown.
+                    } else if dist <= entity.range && entity.attack_cooldown_ms == 0 {
                         entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
                         entity.dirty = true;
-                        let dmg = entity.damage;
+                        let dmg = hit_damage(&entity.kind, target, entity.damage);
                         let tx = target.x;
                         let ty = target.y;
                         let fx = entity.x;
@@ -1342,7 +1427,7 @@ impl MatchSim {
                         let kind = entity.kind.clone();
                         let from_id = entity.id;
                         let team = entity.team;
-                        let hit_p = shot_hit_chance(&kind, target, dist, entity.range);
+                        let hit_p = shot_hit_chance(&kind, target, dist, entity.range, cover.exposure);
                         let mut rng = rand::thread_rng();
                         let hit = rng.gen_range(0.0..1.0) < hit_p;
                         let (ix, iy) = if hit {
@@ -1356,6 +1441,9 @@ impl MatchSim {
                             if hit {
                                 t.hp -= dmg;
                                 t.dirty = true;
+                            }
+                            if t.unit && !t.kind.contains("tank") {
+                                t.prone_until_tick = t.prone_until_tick.max(self.tick + 30);
                             }
                             if t.unit
                                 && t.damage > 0.0
@@ -1382,11 +1470,37 @@ impl MatchSim {
                         });
                         // HE splash only when the shell actually lands on target.
                         if hit && kind.contains("tank") {
-                            self.apply_shell_blast(team, tx, ty, tid);
+                            self.apply_shell_blast(team, fx, fy, tx, ty, tid);
                         }
                     }
                 } else {
                     entity.target = None;
+                }
+            }
+
+            // Infantry hits the dirt while shooting / being shot at; stand up after the fight.
+            if entity.unit && !entity.kind.contains("tank") {
+                let mut fighting = false;
+                if let Some(tid) = entity.target {
+                    if let Some(t) = self.entities.get(&tid) {
+                        let dx = t.x - entity.x;
+                        let dy = t.y - entity.y;
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist <= entity.range {
+                            let cover = self.shot_cover(entity.id, entity.x, entity.y, t);
+                            if !cover.blocked {
+                                fighting = true;
+                            }
+                        }
+                    }
+                }
+                if fighting {
+                    entity.prone_until_tick = entity.prone_until_tick.max(self.tick + 28);
+                }
+                let want = self.tick < entity.prone_until_tick;
+                if entity.prone != want {
+                    entity.prone = want;
+                    entity.dirty = true;
                 }
             }
 
@@ -1419,7 +1533,16 @@ impl MatchSim {
     }
 
     /// HE blast around a tank shell impact. Primary target already took direct damage.
-    fn apply_shell_blast(&mut self, team: u8, x: f32, y: f32, primary: Uuid) {
+    /// Infantry behind the struck hull / a wall relative to the incoming shot are shielded.
+    fn apply_shell_blast(
+        &mut self,
+        team: u8,
+        from_x: f32,
+        from_y: f32,
+        x: f32,
+        y: f32,
+        primary: Uuid,
+    ) {
         const RADIUS: f32 = 1.15;
         let victims: Vec<(Uuid, f32, bool)> = self
             .entities
@@ -1436,20 +1559,33 @@ impl MatchSim {
             })
             .collect();
 
+        let inx = x - from_x;
+        let iny = y - from_y;
+        let in_len = (inx * inx + iny * iny).sqrt().max(0.001);
+        let iux = inx / in_len;
+        let iuy = iny / in_len;
+
         for (id, dist, is_infantry) in victims {
             if id == primary {
                 continue; // direct hit already applied
             }
+            let Some(victim) = self.entities.get(&id) else {
+                continue;
+            };
+            // Hull / wall between blast and victim: no through-shot splash.
+            if self.blast_blocked(primary, x, y, iux, iuy, victim) {
+                continue;
+            }
             let falloff = (1.0 - dist / RADIUS).clamp(0.0, 1.0);
             let dmg = if is_infantry {
                 // Center = lethal; outer ring = wound.
-                170.0 * falloff.powf(0.75)
+                70.0 * falloff.powf(0.75)
             } else if self
                 .entities
                 .get(&id)
                 .is_some_and(|e| e.kind.contains("tank"))
             {
-                40.0 * falloff
+                45.0 * falloff
             } else {
                 // Buildings take modest splash
                 55.0 * falloff
@@ -1470,9 +1606,162 @@ impl MatchSim {
         }
     }
 
+    /// True if this splash victim is behind the struck tank or a solid wall.
+    fn blast_blocked(
+        &self,
+        primary: Uuid,
+        impact_x: f32,
+        impact_y: f32,
+        iux: f32,
+        iuy: f32,
+        victim: &Entity,
+    ) -> bool {
+        let vx = victim.x - impact_x;
+        let vy = victim.y - impact_y;
+        let vlen = (vx * vx + vy * vy).sqrt().max(0.001);
+        // Behind the impact relative to incoming fire (same heading as the shell).
+        let behind = (vx / vlen) * iux + (vy / vlen) * iuy > 0.25;
+        if behind {
+            if let Some(p) = self.entities.get(&primary) {
+                if p.kind.contains("tank") || p.building {
+                    // Aligns with the hull: the tank/building is a shield.
+                    let lateral = (vx * -iuy + vy * iux).abs();
+                    let shield = occluder_radius(p).unwrap_or(0.2);
+                    if lateral < shield + 0.18 {
+                        return true;
+                    }
+                }
+            }
+        }
+        // Another building between impact and victim.
+        for other in self.entities.values() {
+            if other.id == primary || other.id == victim.id || other.hp <= 0.0 {
+                continue;
+            }
+            let Some(r) = occluder_radius(other) else {
+                continue;
+            };
+            if !other.building {
+                continue;
+            }
+            let (gap, t) = segment_point_gap(
+                impact_x,
+                impact_y,
+                victim.x,
+                victim.y,
+                other.x,
+                other.y,
+            );
+            if t > 0.08 && t < 0.92 && gap < r {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Line of fire from (ax,ay) to `target`. Buildings/tanks block; hugging a corner is a peek.
+    fn shot_cover(&self, from_id: Uuid, ax: f32, ay: f32, target: &Entity) -> ShotCover {
+        let tx = target.x;
+        let ty = target.y;
+        let dx = tx - ax;
+        let dy = ty - ay;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist < 0.02 {
+            return ShotCover {
+                blocked: false,
+                exposure: 1.0,
+            };
+        }
+        let ux = dx / dist;
+        let uy = dy / dist;
+
+        let mut blocked = false;
+        let mut exposure = 1.0;
+        let mut used_cover = false;
+
+        for other in self.entities.values() {
+            if other.id == from_id || other.id == target.id || other.hp <= 0.0 {
+                continue;
+            }
+            let Some(r) = occluder_radius(other) else {
+                continue;
+            };
+
+            let ocx = other.x - ax;
+            let ocy = other.y - ay;
+            // Cover behind the shooter does not sit on the firing line.
+            if ocx * ux + ocy * uy < -0.05 {
+                continue;
+            }
+
+            let (gap, t) = segment_point_gap(ax, ay, tx, ty, other.x, other.y);
+
+            // Shooter peeking around this same wall — don't eat their own muzzle.
+            let shooter_hug = {
+                let sdx = other.x - ax;
+                let sdy = other.y - ay;
+                (sdx * sdx + sdy * sdy).sqrt() < r + 0.55
+            };
+            if t < 0.14 && shooter_hug {
+                continue;
+            }
+
+            let tdx = other.x - tx;
+            let tdy = other.y - ty;
+            let hug = (tdx * tdx + tdy * tdy).sqrt();
+            let hugging_target = !target.building && hug < r + 0.5;
+
+            if t > 0.06 && t < 0.97 && gap < r {
+                if hugging_target && gap > r * 0.62 {
+                    // Ray clips the edge — peeking a corner, not fully behind.
+                    exposure *= 0.22;
+                    used_cover = true;
+                } else {
+                    blocked = true;
+                    break;
+                }
+            } else if hugging_target {
+                // Cover sits in front of the target even if the ray just misses the hull.
+                let to_cover_x = other.x - tx;
+                let to_cover_y = other.y - ty;
+                let clen = (to_cover_x * to_cover_x + to_cover_y * to_cover_y).sqrt().max(0.001);
+                // From the target, is this cover toward the shooter?
+                let toward_shooter = (-ux) * (to_cover_x / clen) + (-uy) * (to_cover_y / clen);
+                if toward_shooter > 0.2 && gap < r + 0.28 {
+                    let peek = ((gap - r).max(0.0) / 0.28).clamp(0.0, 1.0);
+                    // peek=0 almost behind; peek=1 just using nearby cover.
+                    exposure *= 0.18 + peek * 0.42;
+                    used_cover = true;
+                }
+            }
+        }
+
+        if blocked {
+            return ShotCover {
+                blocked: true,
+                exposure: 0.0,
+            };
+        }
+        if !used_cover && !target.building {
+            // Open ground — full silhouette, easier to hit.
+            exposure = 1.28;
+        }
+        ShotCover {
+            blocked: false,
+            exposure,
+        }
+    }
+
     /// Nearest living enemy unit or building inside `range` of (x, y).
-    /// Prefers combat units; falls back to buildings (so forward bases get contested).
-    fn find_enemy_in_range(&self, team: u8, x: f32, y: f32, range: f32) -> Option<Uuid> {
+    /// Prefers combat units that actually have a firing angle; skips targets fully behind walls.
+    fn find_enemy_in_range(
+        &self,
+        from_id: Uuid,
+        team: u8,
+        x: f32,
+        y: f32,
+        range: f32,
+    ) -> Option<Uuid> {
         let mut best_unit: Option<(Uuid, f32)> = None;
         let mut best_building: Option<(Uuid, f32)> = None;
         for other in self.entities.values() {
@@ -1486,13 +1775,26 @@ impl MatchSim {
                 if other.damage <= 0.0 {
                     continue;
                 }
-                if dist <= range && best_unit.map(|(_, d)| dist < d).unwrap_or(true) {
-                    best_unit = Some((other.id, dist));
+                if dist > range {
+                    continue;
+                }
+                let cover = self.shot_cover(from_id, x, y, other);
+                if cover.blocked {
+                    continue;
+                }
+                // Prefer nearer + more exposed (don't lock a peeker when an open target exists).
+                let score = dist / (0.28 + cover.exposure);
+                if best_unit.map(|(_, s)| score < s).unwrap_or(true) {
+                    best_unit = Some((other.id, score));
                 }
             } else if other.building {
                 // Reach the building footprint, not only its center.
                 let edge = (dist - building_radius(&other.kind) * 0.55).max(0.0);
                 if edge <= range && best_building.map(|(_, d)| dist < d).unwrap_or(true) {
+                    let cover = self.shot_cover(from_id, x, y, other);
+                    if cover.blocked {
+                        continue;
+                    }
                     best_building = Some((other.id, dist));
                 }
             }
@@ -2032,6 +2334,7 @@ impl MatchSim {
             flag: entity.flag.clone(),
             progress,
             train_progress,
+            prone: entity.prone,
         }
     }
 }
