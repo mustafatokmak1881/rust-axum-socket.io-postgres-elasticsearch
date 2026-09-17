@@ -144,7 +144,7 @@ function onServer(msg) {
       break;
     }
     case "delta":
-      applyDelta(msg);
+      queueDelta(msg);
       break;
     case "match_end":
       state.matchEnded = true;
@@ -379,6 +379,35 @@ function renderUnitList(items) {
       </button>`,
     )
     .join("");
+}
+
+function queueDelta(msg) {
+  if (!queueDelta.pending) {
+    queueDelta.pending = msg;
+  } else {
+    mergeDelta(queueDelta.pending, msg);
+  }
+  if (queueDelta.raf) return;
+  queueDelta.raf = requestAnimationFrame(() => {
+    queueDelta.raf = 0;
+    const next = queueDelta.pending;
+    queueDelta.pending = null;
+    if (next) applyDelta(next);
+  });
+}
+
+function mergeDelta(into, extra) {
+  into.tick = extra.tick;
+  if (extra.resources) into.resources = extra.resources;
+  if (extra.focus_hint) into.focus_hint = extra.focus_hint;
+  const latest = new Map();
+  for (const entity of into.entities || []) latest.set(entity.id, entity);
+  for (const entity of extra.entities || []) latest.set(entity.id, entity);
+  into.entities = [...latest.values()];
+  const removed = new Set(into.removed || []);
+  for (const id of extra.removed || []) removed.add(id);
+  into.removed = [...removed];
+  into.shots = [...(into.shots || []), ...(extra.shots || [])];
 }
 
 function applyDelta(msg) {
@@ -2219,30 +2248,68 @@ function onBoxSelectUp(event) {
   finishBoxSelect(event);
 }
 
+function enemyUnderPointer(event, groundPoint) {
+  const youTeam = state.match?.team;
+  if (raycaster && camera && state.meshes.size) {
+    const canvas = $("#viewport");
+    const rect = canvas.getBoundingClientRect();
+    pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const roots = [];
+    for (const mesh of state.meshes.values()) {
+      const ent = state.entities.get(mesh.userData.id);
+      if (!ent || ent.team === youTeam) continue;
+      if (ent.hp != null && ent.hp <= 0) continue;
+      roots.push(mesh);
+    }
+    const hits = raycaster.intersectObjects(roots, true);
+    for (const hit of hits) {
+      let obj = hit.object;
+      while (obj) {
+        const id = obj.userData?.id;
+        if (id && state.entities.has(id)) {
+          const ent = state.entities.get(id);
+          if (ent && ent.team !== youTeam) return ent;
+        }
+        obj = obj.parent;
+      }
+    }
+  }
+  if (!groundPoint) return null;
+  let enemy = null;
+  let best = Infinity;
+  for (const entity of state.entities.values()) {
+    if (entity.team === youTeam) continue;
+    if (entity.hp != null && entity.hp <= 0) continue;
+    const reach = entity.building
+      ? 0.55
+      : String(entity.kind || "").includes("tank")
+        ? 0.28
+        : 0.12;
+    const d = Math.hypot(entity.x - groundPoint.x, entity.y - groundPoint.z);
+    if (d <= reach && d < best) {
+      enemy = entity;
+      best = d;
+    }
+  }
+  return enemy;
+}
+
 function onPointerDown(event) {
   void enterGameFullscreen();
 
   if (event.button === 2) {
     event.preventDefault();
+    boxSelect.active = false;
+    setSelectBoxEl(0, 0, 0, 0, false);
     const point = worldFromEvent(event);
-    if (!point) return;
-    // Attack enemy under cursor, else move
-    let enemy = null;
-    let bestDist = 1.6;
-    for (const entity of state.entities.values()) {
-      if (entity.team === state.match?.team) continue;
-      const dx = entity.x - point.x;
-      const dy = entity.y - point.z;
-      const d = Math.hypot(dx, dy);
-      if (d < bestDist) {
-        enemy = entity;
-        bestDist = d;
-      }
-    }
-    if (enemy && state.selectedUnits.length) {
+    if (!point || !state.selectedUnits.length) return;
+    const enemy = enemyUnderPointer(event, point);
+    if (enemy) {
       send({ t: "attack", ids: state.selectedUnits, target_id: enemy.id });
       toast(`Attacking ${enemy.kind} (${state.selectedUnits.length})`);
-    } else if (state.selectedUnits.length) {
+    } else {
       send({ t: "move_units", ids: state.selectedUnits, x: point.x, y: point.z });
       toast(`Moving ${state.selectedUnits.length}`);
     }
@@ -3258,6 +3325,12 @@ function applyUnitMotion(mesh, entity) {
     return;
   }
   const now = performance.now();
+  const kind = String(entity.kind || mesh.userData.kind || "");
+  mesh.userData.moveSpeed = kind.includes("tank")
+    ? 0.58
+    : kind.includes("missile")
+      ? 0.16
+      : 0.2;
   const prevX = mesh.userData.lastX;
   const prevZ = mesh.userData.lastZ;
   const prevAt = mesh.userData.snapAt;
@@ -3266,13 +3339,19 @@ function applyUnitMotion(mesh, entity) {
     mesh.userData.velX = 0;
     mesh.userData.velZ = 0;
   } else if (prevAt) {
-    const dtNet = Math.max(0.05, Math.min(0.28, (now - prevAt) / 1000));
+    const dtNet = Math.max(0.05, (now - prevAt) / 1000);
     const dx = entity.x - prevX;
     const dz = entity.y - prevZ;
     const dist = Math.hypot(dx, dz);
     if (dist > 0.004) {
-      const nvx = dx / dtNet;
-      const nvz = dz / dtNet;
+      let nvx = dx / dtNet;
+      let nvz = dz / dtNet;
+      const sp = Math.hypot(nvx, nvz);
+      const maxS = mesh.userData.moveSpeed * 1.35;
+      if (sp > maxS) {
+        nvx = (nvx / sp) * maxS;
+        nvz = (nvz / sp) * maxS;
+      }
       mesh.userData.velX = (mesh.userData.velX || 0) * 0.4 + nvx * 0.6;
       mesh.userData.velZ = (mesh.userData.velZ || 0) * 0.4 + nvz * 0.6;
       mesh.userData.moving = true;
@@ -3303,15 +3382,20 @@ function predictedPos(mesh) {
   ];
 }
 
-function slideToward(mesh, dt, rate) {
+function slideToward(mesh, dt) {
   if (mesh.userData.destX == null || mesh.userData.destZ == null) return 0;
   const [px, pz] = predictedPos(mesh);
   const dx = px - mesh.position.x;
   const dz = pz - mesh.position.z;
-  const follow = 1 - Math.exp(-rate * dt);
-  mesh.position.x += dx * follow;
-  mesh.position.z += dz * follow;
-  return Math.hypot(dx, dz);
+  const dist = Math.hypot(dx, dz);
+  if (dist < 1e-5) return 0;
+  const cruise = mesh.userData.moveSpeed || 0.22;
+  const catchup = dist / 0.4;
+  const speed = Math.min(cruise * 2.1, Math.max(cruise, catchup));
+  const step = Math.min(dist, speed * dt);
+  mesh.position.x += (dx / dist) * step;
+  mesh.position.z += (dz / dist) * step;
+  return dist;
 }
 
 function updateTankDrive(mesh, dt) {
@@ -3322,7 +3406,7 @@ function updateTankDrive(mesh, dt) {
   }
   const beforeX = mesh.position.x;
   const beforeZ = mesh.position.z;
-  slideToward(mesh, dt, 11);
+  slideToward(mesh, dt);
   const step = Math.hypot(mesh.position.x - beforeX, mesh.position.z - beforeZ);
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
   if (speed > 0.04) {
@@ -3380,7 +3464,7 @@ function smoothUnitFacing(mesh, dt) {
 function updateInfantryDrive(mesh, dt) {
   if (!mesh?.userData?.isInfantry || mesh.userData.knock) return;
   if (mesh.userData.destX == null || mesh.userData.destZ == null) return;
-  slideToward(mesh, dt, 16);
+  slideToward(mesh, dt);
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
   if (speed > 0.03) {
     mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);

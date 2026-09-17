@@ -412,6 +412,9 @@ impl MatchHub {
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_millis(1000 / match_sim::TICK_HZ as u64));
+            // Do not catch up missed ticks in a burst — that dumps a second of
+            // movement in one frame so the whole army "releases" at once.
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 interval.tick().await;
                 let mut outgoing: Vec<(Uuid, ServerMsg)> = Vec::new();

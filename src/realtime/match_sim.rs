@@ -465,7 +465,7 @@ fn formation_slot(index: usize, count: usize, radius: f32) -> (f32, f32) {
 
 /// Soft arrival: close enough to stop even if the exact point is occupied.
 fn move_arrive_radius(self_r: f32) -> f32 {
-    (self_r * 3.5 + 0.25).clamp(0.35, 1.15)
+    (self_r * 2.2 + 0.04).clamp(0.06, 0.18)
 }
 
 /// Client `BUILDING_MODELS[].target` — max visual dimension after fit.
@@ -509,8 +509,9 @@ fn entity_radius(entity: &Entity) -> f32 {
 }
 
 /// Tiny gap so meshes don't Z-fight when brushing past.
+/// Must stay small vs infantry radius (~0.017) or a 50-man blob cannot take a step.
 fn collision_pad() -> f32 {
-    0.04
+    0.006
 }
 
 pub struct MatchSim {
@@ -1277,6 +1278,8 @@ impl MatchSim {
             let self_r = unit_radius(&entity.kind);
             // Move orders control pathing only — units may still shoot while marching.
             let obeying_move = entity.move_to.is_some();
+            // Squads walk through friendlies toward the click; buildings / enemies still block.
+            let pass_allies = obeying_move.then_some(entity.team);
 
             // Acquire / refresh targets in weapon range (including while moving).
             if entity.damage > 0.0 && entity.range > 0.0 && self.tick % 2 == 0 {
@@ -1354,6 +1357,7 @@ impl MatchSim {
                     let step = entity.speed * (dt_ms as f32 / 1000.0);
                     let ignore = entity.target;
                     let jammed = entity.stuck_frames >= 6;
+                    // Allies are skipped via `pass_allies`. Only freeze on enemy/building jams.
                     let solid_units = !jammed;
                     let arrive_r = move_arrive_radius(self_r);
                     let overrun = if entity.kind.contains("tank") {
@@ -1362,10 +1366,10 @@ impl MatchSim {
                         None
                     };
 
-                    // Soft arrival for move orders: don't orbit a crowded click point.
-                    let near_goal = toward_goal <= arrive_r
-                        || (toward_goal <= arrive_r * 2.2 && entity.stuck_frames >= 8);
-                    if entity.target.is_none() && near_goal {
+                    // Only stop when we are actually on the click — never because
+                    // the squad was packed or an enemy was nearby.
+                    let near_goal = toward_goal <= arrive_r;
+                    if near_goal {
                         if toward_goal <= step
                             && !self.collides_at(entity.id, gx, gy, self_r, None, true)
                         {
@@ -1394,6 +1398,7 @@ impl MatchSim {
                                 ignore,
                                 solid_units,
                                 overrun,
+                                pass_allies,
                             )
                             .map(|p| (p, entity.last_escape_ang));
 
@@ -1418,6 +1423,7 @@ impl MatchSim {
                                             ignore,
                                             solid_units,
                                             overrun,
+                                            pass_allies,
                                         )
                                         .map(|p| (p, entity.last_escape_ang));
                                 }
@@ -1445,6 +1451,7 @@ impl MatchSim {
                                 ignore,
                                 entity.last_escape_ang,
                                 overrun,
+                                pass_allies,
                             );
                         }
 
@@ -1474,10 +1481,10 @@ impl MatchSim {
                             entity.stuck_frames = entity.stuck_frames.saturating_add(2);
                         }
 
-                        // Brief detour only when jammed far from the goal.
-                        // Near a crowded move point: stop instead of orbiting forever.
+                        // Only abandon a move when we are actually on the click — never
+                        // because the squad was briefly packed.
                         if entity.stuck_frames >= 8 {
-                            if entity.target.is_none() && toward_goal <= arrive_r * 2.5 {
+                            if entity.target.is_none() && toward_goal <= arrive_r {
                                 entity.move_to = None;
                                 entity.detour = None;
                                 entity.detour_ttl = 0;
@@ -1722,12 +1729,6 @@ impl MatchSim {
             if let Some(e) = self.entities.get_mut(&id) {
                 e.hp -= dmg;
                 e.dirty = true;
-                if is_infantry && dmg >= 35.0 {
-                    e.move_to = None;
-                    e.detour = None;
-                    e.detour_ttl = 0;
-                    e.stuck_frames = 0;
-                }
             }
         }
     }
@@ -1978,10 +1979,11 @@ impl MatchSim {
         ignore: Option<Uuid>,
         solid_units: bool,
     ) -> bool {
-        self.collides_at_ex(self_id, x, y, self_r, ignore, solid_units, None)
+        self.collides_at_ex(self_id, x, y, self_r, ignore, solid_units, None, None)
     }
 
     /// `overrun_team`: tank of this team ignores enemy infantry (runs them over).
+    /// `pass_allies`: skip same-team units (marching squads must not block themselves).
     fn collides_at_ex(
         &self,
         self_id: Uuid,
@@ -1991,6 +1993,7 @@ impl MatchSim {
         ignore: Option<Uuid>,
         solid_units: bool,
         overrun_team: Option<u8>,
+        pass_allies: Option<u8>,
     ) -> bool {
         let mut hit = false;
         self.grid.for_each_nearby(
@@ -2008,6 +2011,9 @@ impl MatchSim {
                     return false;
                 }
                 if other.unit {
+                    if pass_allies == Some(other.team) {
+                        return false;
+                    }
                     if let Some(team) = overrun_team {
                         // Tanks drive through enemy infantry; still blocked by enemy tanks.
                         if other.team != team && !other.kind.contains("tank") {
@@ -2045,6 +2051,7 @@ impl MatchSim {
         ignore: Option<Uuid>,
         solid_units: bool,
         overrun_team: Option<u8>,
+        pass_allies: Option<u8>,
     ) -> Option<(f32, f32)> {
         // Try forward, then fan left/right to walk around obstacles.
         const ANGLES: &[f32] = &[
@@ -2056,8 +2063,16 @@ impl MatchSim {
             let dy = ux * s + uy * c;
             let nx = x + dx * step;
             let ny = y + dy * step;
-            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, solid_units, overrun_team)
-            {
+            if !self.collides_at_ex(
+                self_id,
+                nx,
+                ny,
+                self_r,
+                ignore,
+                solid_units,
+                overrun_team,
+                pass_allies,
+            ) {
                 return Some((nx, ny));
             }
         }
@@ -2076,6 +2091,7 @@ impl MatchSim {
         ignore: Option<Uuid>,
         last_escape_ang: f32,
         overrun_team: Option<u8>,
+        pass_allies: Option<u8>,
     ) -> Option<((f32, f32), f32)> {
         let mut rng = rand::thread_rng();
         // Soft on units so crowds don't freeze everyone.
@@ -2090,6 +2106,7 @@ impl MatchSim {
             ignore,
             false,
             overrun_team,
+            pass_allies,
         ) {
             return Some((p, last_escape_ang));
         }
@@ -2104,13 +2121,23 @@ impl MatchSim {
             }
             let nx = x + ang.cos() * step;
             let ny = y + ang.sin() * step;
-            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team) {
+            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team, pass_allies)
+            {
                 return Some(((nx, ny), ang));
             }
             // Also try a longer probe step for escaping pockets.
             let nx2 = x + ang.cos() * step * 1.6;
             let ny2 = y + ang.sin() * step * 1.6;
-            if !self.collides_at_ex(self_id, nx2, ny2, self_r, ignore, false, overrun_team) {
+            if !self.collides_at_ex(
+                self_id,
+                nx2,
+                ny2,
+                self_r,
+                ignore,
+                false,
+                overrun_team,
+                pass_allies,
+            ) {
                 return Some(((nx2, ny2), ang));
             }
         }
@@ -2119,7 +2146,8 @@ impl MatchSim {
         for side in [-1.0f32, 1.0] {
             let nx = x - uy * side * step * 0.85;
             let ny = y + ux * side * step * 0.85;
-            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team) {
+            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team, pass_allies)
+            {
                 return Some(((nx, ny), last_escape_ang + side));
             }
         }
@@ -2128,7 +2156,8 @@ impl MatchSim {
             let ang = (k as f32) * (std::f32::consts::TAU / 12.0) + rng.gen_range(0.0..0.3);
             let nx = x + ang.cos() * step;
             let ny = y + ang.sin() * step;
-            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team) {
+            if !self.collides_at_ex(self_id, nx, ny, self_r, ignore, false, overrun_team, pass_allies)
+            {
                 return Some(((nx, ny), ang));
             }
         }
@@ -2330,6 +2359,10 @@ impl MatchSim {
             let Some(entity) = self.entities.get(&id) else {
                 continue;
             };
+            // Don't yank a marching unit back into the blob after it took a step.
+            if entity.move_to.is_some() {
+                continue;
+            }
             let r = unit_radius(&entity.kind);
             let nx = entity.x + px * strength.clamp(0.0, 1.2);
             let ny = entity.y + py * strength.clamp(0.0, 1.2);
@@ -2446,7 +2479,10 @@ impl MatchSim {
         Vec<u16>,
         Vec<ShotEvent>,
     ) {
-        let explored_new = self.reveal_vision_for(user_id);
+        if self.tick % 4 == 0 {
+            let _ = self.reveal_vision_for(user_id);
+        }
+        let explored_new = Vec::new();
 
         let Some(player) = self.players.get_mut(&user_id) else {
             return (vec![], vec![], None, explored_new, vec![]);
@@ -2463,6 +2499,7 @@ impl MatchSim {
             };
             let entered_vision = !previously_known.contains(id);
             if entity.dirty
+                || entity.move_to.is_some()
                 || entity.build_remaining_ms > 0
                 || !entity.train_queue.is_empty()
                 || entered_vision
