@@ -293,7 +293,7 @@ function findOwnHome(snapshot) {
   return { x: snapshot.map_size / 2, z: snapshot.map_size / 2 };
 }
 
-function panCameraTo(lookX, lookZ) {
+function panCameraTo(lookX, lookZ, quiet) {
   if (!controls || !camera) return;
   const dist = controls.getDistance?.() || CAMERA_DIST;
   const margin = 4;
@@ -307,6 +307,7 @@ function panCameraTo(lookX, lookZ) {
   );
   controls.update();
   lastFocusSent = { x: lookX, z: lookZ };
+  if (quiet) return;
   send({ t: "set_focus", x: lookX, y: lookZ });
 }
 
@@ -933,12 +934,18 @@ const Radar = {
     this.canvas = $("#radar-canvas");
     if (!this.canvas) return;
     this.ctx = this.canvas.getContext("2d", { alpha: false });
+    if (!this.timer) {
+      this.timer = setInterval(() => {
+        if (!state.match || $("#match-screen")?.hidden) return;
+        this.draw(performance.now());
+      }, 130);
+    }
     if (this.bound) return;
     this.bound = true;
     const go = (event) => {
       const w = this.eventToWorld(event);
       if (!w) return;
-      panCameraTo(w.x, w.y);
+      panCameraTo(w.x, w.y, true);
     };
     this.canvas.addEventListener("pointerdown", (event) => {
       event.preventDefault();
@@ -952,6 +959,10 @@ const Radar = {
     });
     const stop = () => {
       this.dragging = false;
+      if (controls) {
+        lastFocusSent = { x: controls.target.x, z: controls.target.z };
+        send({ t: "set_focus", x: controls.target.x, y: controls.target.z });
+      }
     };
     this.canvas.addEventListener("pointerup", stop);
     this.canvas.addEventListener("pointercancel", stop);
@@ -990,61 +1001,22 @@ const Radar = {
   },
 
   drawFog(ctx, w, h) {
-    const s = mapSize | 0;
-    if (!s || !fogExploredData) {
-      ctx.fillStyle = "#070907";
-      ctx.fillRect(0, 0, w, h);
-      return;
-    }
-    const res = 96;
-    if (!this.fogScratch) {
-      this.fogScratch = document.createElement("canvas");
-      this.fogScratch.width = res;
-      this.fogScratch.height = res;
-      this.fogImage = this.fogScratch.getContext("2d").createImageData(res, res);
-    }
-    const now = performance.now();
-    if (now - this.fogAt > 200) {
-      this.fogAt = now;
-      const d = this.fogImage.data;
-      const exp = fogExploredData;
-      const vis = fogVisionData;
-      for (let y = 0; y < res; y++) {
-        const my = Math.min(s - 1, ((y * s) / res) | 0);
-        const row = my * s;
-        for (let x = 0; x < res; x++) {
-          const mx = Math.min(s - 1, ((x * s) / res) | 0);
-          const i = row + mx;
-          const o = (y * res + x) * 4;
-          if (!exp[i]) {
-            d[o] = 6;
-            d[o + 1] = 8;
-            d[o + 2] = 6;
-          } else if (!vis || !vis[i]) {
-            d[o] = 20;
-            d[o + 1] = 30;
-            d[o + 2] = 16;
-          } else {
-            d[o] = 46;
-            d[o + 1] = 68;
-            d[o + 2] = 30;
-          }
-          d[o + 3] = 255;
-        }
-      }
-      this.fogScratch.getContext("2d").putImageData(this.fogImage, 0, 0);
-    }
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.fogScratch, 0, 0, w, h);
+    ctx.fillStyle = "#0b120b";
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "#1c2818";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(w * 0.5, 0);
+    ctx.lineTo(w * 0.5, h);
+    ctx.moveTo(0, h * 0.5);
+    ctx.lineTo(w, h * 0.5);
+    ctx.stroke();
   },
 
   draw(now) {
     const ctx = this.ctx;
     const canvas = this.canvas;
-    if (!ctx || !canvas || !state.match) return;
-    // 2D canvas is CPU; 60 Hz + full-map fog was hitching the WebGL frame.
-    if (!this.dragging && now - this.lastDraw < 70) return;
-    this.lastDraw = now;
+    if (!ctx || !canvas || !state.match || !mapSize) return;
 
     const w = canvas.width;
     const h = canvas.height;
@@ -1052,46 +1024,43 @@ const Radar = {
 
     const you = state.match.you;
     const myTeam = state.match.team;
-    const ownInf = [];
-    const allyInf = [];
-    const foeInf = [];
-    const extras = [];
+    let ownN = 0;
+    let foeN = 0;
+    ctx.fillStyle = "#9fef4a";
+    for (const entity of state.entities.values()) {
+      if (entity.hp != null && entity.hp <= 0) continue;
+      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank")) {
+        continue;
+      }
+      if (entity.owner !== you) continue;
+      ownN += 1;
+      if (ownN % 2) continue;
+      ctx.fillRect((entity.x / mapSize) * w - 0.75, (entity.y / mapSize) * h - 0.75, 2, 2);
+    }
+    ctx.fillStyle = "#ff5a3a";
+    for (const entity of state.entities.values()) {
+      if (entity.hp != null && entity.hp <= 0) continue;
+      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank")) {
+        continue;
+      }
+      if (entity.owner === you || entity.team === myTeam) continue;
+      foeN += 1;
+      if (foeN % 3) continue;
+      ctx.fillRect((entity.x / mapSize) * w - 0.75, (entity.y / mapSize) * h - 0.75, 2, 2);
+    }
+
     for (const entity of state.entities.values()) {
       if (entity.hp != null && entity.hp <= 0) continue;
       const kind = entity.kind || "";
       const heavy = entity.building || kind.includes("tank") || kind === "hq";
-      if (heavy) {
-        extras.push(entity);
-        continue;
-      }
-      if (entity.owner === you) ownInf.push(entity);
-      else if (entity.team === myTeam) allyInf.push(entity);
-      else foeInf.push(entity);
-    }
-
-    const dots = (list, color) => {
-      ctx.fillStyle = color;
-      for (const entity of list) {
-        const px = (entity.x / mapSize) * w;
-        const py = (entity.y / mapSize) * h;
-        ctx.fillRect(px - 0.75, py - 0.75, 2, 2);
-      }
-    };
-    dots(ownInf, "#9fef4a");
-    dots(allyInf, "#5ad0ff");
-    dots(foeInf, "#ff5a3a");
-
-    for (const entity of extras) {
+      if (!heavy) continue;
       const px = (entity.x / mapSize) * w;
       const py = (entity.y / mapSize) * h;
       const mine = entity.owner === you;
       const ally = !mine && entity.team === myTeam;
       ctx.fillStyle = mine ? "#9fef4a" : ally ? "#5ad0ff" : "#ff5a3a";
-      if (entity.kind === "hq") {
+      if (kind === "hq") {
         ctx.fillRect(px - 2.5, py - 2.5, 5, 5);
-        ctx.strokeStyle = mine ? "#fff4ce" : "#ffc8b0";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px - 3, py - 3, 6, 6);
       } else if (entity.building) {
         ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
       } else {
@@ -1099,31 +1068,14 @@ const Radar = {
       }
     }
 
-    const selected = state.selectedUnits;
-    if (selected?.length) {
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 1;
-      for (const id of selected) {
-        const entity = state.entities.get(id);
-        if (!entity) continue;
-        const px = (entity.x / mapSize) * w;
-        const py = (entity.y / mapSize) * h;
-        ctx.strokeRect(px - 3, py - 3, 6, 6);
-      }
-    }
-
     this.pings = this.pings.filter((p) => now - p.born < p.life);
+    ctx.strokeStyle = "rgba(255, 210, 80, 0.75)";
+    ctx.lineWidth = 1.5;
     for (const ping of this.pings) {
+      if (!ping.tank) continue;
       const t = (now - ping.born) / ping.life;
-      const px = (ping.x / mapSize) * w;
-      const py = (ping.y / mapSize) * h;
-      const r = (ping.tank ? 4 : 2.5) + t * (ping.tank ? 7 : 4);
       ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
-      ctx.strokeStyle = ping.tank
-        ? `rgba(255, 210, 80, ${1 - t})`
-        : `rgba(255, 240, 160, ${0.8 - t})`;
-      ctx.lineWidth = ping.tank ? 1.5 : 1;
+      ctx.arc((ping.x / mapSize) * w, (ping.y / mapSize) * h, 4 + t * 7, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -1133,13 +1085,14 @@ const Radar = {
       const dist = controls.getDistance?.() || CAMERA_DIST;
       const halfW = Math.max(6, dist * 0.7 * (camera?.aspect || 1.6));
       const halfH = Math.max(5, dist * 0.5);
-      const x0 = ((cx - halfW) / mapSize) * w;
-      const y0 = ((cz - halfH) / mapSize) * h;
-      const x1 = ((cx + halfW) / mapSize) * w;
-      const y1 = ((cz + halfH) / mapSize) * h;
       ctx.strokeStyle = "rgba(255, 244, 180, 0.9)";
       ctx.lineWidth = 1;
-      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.strokeRect(
+        ((cx - halfW) / mapSize) * w,
+        ((cz - halfH) / mapSize) * h,
+        (halfW * 2 / mapSize) * w,
+        (halfH * 2 / mapSize) * h,
+      );
     }
   },
 };
@@ -1549,7 +1502,7 @@ let lastVisionAt = 0;
 function refreshLiveVision() {
   if (!fogVisionData || !fogExploredData || !fogDataTexture) return;
   const now = performance.now();
-  if (now - lastVisionAt < 100) return;
+  if (now - lastVisionAt < 250) return;
   lastVisionAt = now;
 
   fogVisionData.fill(0);
@@ -1835,7 +1788,10 @@ function initThree(size, terrainTexture, home) {
     window.addEventListener("pointermove", onEdgePointerMove);
     onEdgePointerMove._bound = true;
   }
-  animate();
+  if (!animate.running) {
+    animate.running = true;
+    animate();
+  }
 }
 
 function onEdgePointerMove(event) {
@@ -3920,7 +3876,11 @@ function applyCrushKnock(mesh, tankMesh) {
   mesh.userData.moving = false;
 }
 
-function updateTankCrushVisuals() {
+let lastCrushAt = 0;
+
+function updateTankCrushVisuals(now) {
+  if (now - lastCrushAt < 130) return;
+  lastCrushAt = now;
   const tanks = [];
   for (const mesh of state.meshes.values()) {
     if (mesh.userData?.isTank) tanks.push(mesh);
@@ -3951,7 +3911,7 @@ function animate() {
   applyEdgePan();
   controls?.update();
   refreshLiveVision();
-  updateTankCrushVisuals();
+  updateTankCrushVisuals(now);
   for (const mesh of state.meshes.values()) {
     if (mesh.userData.knock) {
       updateKnockPhysics(mesh, dt);
@@ -3963,7 +3923,6 @@ function animate() {
     }
   }
   updateCombatFx(now);
-  Radar.draw(now);
   Sfx.updateSpatial();
   renderer.render(scene, camera);
 }
