@@ -349,7 +349,11 @@ function renderUnitList(items) {
 function applyDelta(msg) {
   updateResources(msg.resources);
   applyExploredNew(msg.explored_new);
+
+  const removedBuildings = [];
   for (const id of msg.removed || []) {
+    const prev = state.entities.get(id);
+    if (prev?.building) removedBuildings.push(prev);
     state.entities.delete(id);
     const mesh = state.meshes.get(id);
     if (mesh && scene) {
@@ -358,7 +362,12 @@ function applyDelta(msg) {
     } else {
       state.meshes.delete(id);
     }
+    Sfx.stopBuild(id);
   }
+  for (const b of removedBuildings) {
+    Sfx.buildingCollapse(b.x, b.y);
+  }
+
   if (msg.removed?.length) {
     const dead = new Set(msg.removed);
     const before = state.selectedUnits.length;
@@ -367,12 +376,209 @@ function applyDelta(msg) {
     if (dead.has(state.selectedBuilding)) state.selectedBuilding = null;
   }
   for (const entity of msg.entities || []) {
+    const prev = state.entities.get(entity.id);
     state.entities.set(entity.id, entity);
     if (scene) upsertMesh(entity);
+    syncBuildingSfx(prev, entity);
   }
   playShots(msg.shots || []);
   $("#match-caption").textContent =
     `Tick ${msg.tick} · ${state.entities.size} entities · vision fog`;
+}
+
+function syncBuildingSfx(prev, entity) {
+  if (!entity?.building) return;
+  const was = prev?.progress != null && prev.progress < 1;
+  const now = entity.progress != null && entity.progress < 1;
+  if (now) {
+    Sfx.startBuild(entity.id, entity.x, entity.y);
+  } else if (was && !now) {
+    Sfx.stopBuild(entity.id);
+    Sfx.buildingComplete(entity.x, entity.y);
+  } else if (!now) {
+    Sfx.stopBuild(entity.id);
+  }
+}
+
+/* ---------- Procedural SFX (Web Audio) ---------- */
+
+const Sfx = {
+  ctx: null,
+  master: null,
+  builds: new Map(),
+  lastShotAt: 0,
+
+  ensure() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.42;
+      this.master.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    return true;
+  },
+
+  noiseBuffer(seconds = 0.2) {
+    const len = Math.max(1, Math.floor(this.ctx.sampleRate * seconds));
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    return buf;
+  },
+
+  tone(freq, dur, type = "square", gain = 0.08, freqEnd = null) {
+    if (!this.ensure()) return;
+    const t0 = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (freqEnd != null) osc.frequency.exponentialRampToValueAtTime(Math.max(40, freqEnd), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g);
+    g.connect(this.master);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  },
+
+  noiseBurst(dur, gain = 0.12, filterFreq = 2500, filterType = "bandpass") {
+    if (!this.ensure()) return;
+    const t0 = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer(Math.max(dur, 0.05));
+    const filt = this.ctx.createBiquadFilter();
+    filt.type = filterType;
+    filt.frequency.value = filterFreq;
+    filt.Q.value = 0.7;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(filt);
+    filt.connect(g);
+    g.connect(this.master);
+    src.start(t0);
+    src.stop(t0 + dur + 0.02);
+  },
+
+  rifle() {
+    if (!this.ensure()) return;
+    // Soft rate-limit when many units fire in one tick.
+    const now = performance.now();
+    if (now - this.lastShotAt < 28) return;
+    this.lastShotAt = now;
+    this.noiseBurst(0.045, 0.16, 3200, "highpass");
+    this.tone(1800 + Math.random() * 600, 0.04, "square", 0.05, 400);
+    this.tone(220 + Math.random() * 40, 0.03, "triangle", 0.03, 80);
+  },
+
+  tankCannon() {
+    if (!this.ensure()) return;
+    // Deep boom + crack
+    this.noiseBurst(0.28, 0.28, 180, "lowpass");
+    this.noiseBurst(0.12, 0.22, 900, "bandpass");
+    this.tone(95, 0.35, "sine", 0.22, 35);
+    this.tone(55, 0.45, "triangle", 0.14, 28);
+    this.tone(420, 0.08, "sawtooth", 0.06, 120);
+    // Delayed echo thump
+    setTimeout(() => {
+      if (!this.ensure()) return;
+      this.noiseBurst(0.18, 0.1, 140, "lowpass");
+    }, 90);
+  },
+
+  missile() {
+    if (!this.ensure()) return;
+    this.noiseBurst(0.2, 0.14, 1100, "bandpass");
+    this.tone(520, 0.25, "sawtooth", 0.07, 180);
+  },
+
+  startBuild(id, _x, _y) {
+    if (!this.ensure()) return;
+    if (this.builds.has(id)) return;
+    const t0 = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const lfo = this.ctx.createOscillator();
+    const lfoGain = this.ctx.createGain();
+    const g = this.ctx.createGain();
+    const filt = this.ctx.createBiquadFilter();
+    osc.type = "sawtooth";
+    osc.frequency.value = 78;
+    lfo.type = "sine";
+    lfo.frequency.value = 3.2;
+    lfoGain.gain.value = 12;
+    filt.type = "lowpass";
+    filt.frequency.value = 420;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.035, t0 + 0.3);
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+    osc.connect(filt);
+    filt.connect(g);
+    g.connect(this.master);
+    osc.start();
+    lfo.start();
+    // Light hammer ticks
+    const tick = setInterval(() => {
+      if (!this.builds.has(id)) return;
+      this.noiseBurst(0.03, 0.04, 1800, "bandpass");
+      this.tone(240 + Math.random() * 80, 0.04, "triangle", 0.025, 90);
+    }, 480 + Math.random() * 220);
+    this.builds.set(id, { osc, lfo, g, tick });
+  },
+
+  stopBuild(id) {
+    const node = this.builds.get(id);
+    if (!node) return;
+    clearInterval(node.tick);
+    try {
+      const t0 = this.ctx.currentTime;
+      node.g.gain.cancelScheduledValues(t0);
+      node.g.gain.setValueAtTime(Math.max(0.0001, node.g.gain.value), t0);
+      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
+      node.osc.stop(t0 + 0.25);
+      node.lfo.stop(t0 + 0.25);
+    } catch {
+      // ignore
+    }
+    this.builds.delete(id);
+  },
+
+  buildingComplete(_x, _y) {
+    if (!this.ensure()) return;
+    this.tone(320, 0.12, "triangle", 0.06, 520);
+    this.tone(480, 0.16, "sine", 0.05, 640);
+    this.noiseBurst(0.08, 0.05, 2000, "highpass");
+  },
+
+  buildingCollapse(_x, _y) {
+    if (!this.ensure()) return;
+    this.noiseBurst(0.55, 0.32, 220, "lowpass");
+    this.noiseBurst(0.35, 0.2, 700, "bandpass");
+    this.tone(140, 0.5, "sawtooth", 0.1, 40);
+    this.tone(70, 0.6, "sine", 0.12, 28);
+    setTimeout(() => this.noiseBurst(0.25, 0.12, 400, "lowpass"), 120);
+    setTimeout(() => this.noiseBurst(0.2, 0.08, 900, "bandpass"), 220);
+  },
+
+  shot(kind) {
+    const k = String(kind || "");
+    if (k.includes("tank")) this.tankCannon();
+    else if (k.includes("missile")) this.missile();
+    else this.rifle();
+  },
+};
+
+function playShots(shots) {
+  for (const shot of shots || []) {
+    spawnShotFx(shot);
+    Sfx.shot(shot.kind);
+  }
 }
 
 /* ---------- Three.js ---------- */
@@ -1018,7 +1224,10 @@ function initThree(size, terrainTexture, home) {
   state.meshes.clear();
 
   window.addEventListener("resize", onResize);
-  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointerdown", (e) => {
+    Sfx.ensure();
+    onPointerDown(e);
+  });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   if (!onEdgePointerMove._bound) {
     window.addEventListener("pointermove", onEdgePointerMove);
@@ -2529,12 +2738,6 @@ function spawnShotFx(shot) {
   }
 
   activeFx.push(fx);
-}
-
-function playShots(shots) {
-  for (const shot of shots || []) {
-    spawnShotFx(shot);
-  }
 }
 
 function disposeFxPart(part) {
