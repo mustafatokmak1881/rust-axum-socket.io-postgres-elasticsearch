@@ -348,7 +348,7 @@ impl MatchHub {
             if rt.sim.ended || !rt.open {
                 return Err("Match is closed".into());
             }
-            if rt.sim.player_count() as u8 >= rt.max_players {
+            if rt.sim.human_count() as u8 >= rt.max_players {
                 return Err("Match is full".into());
             }
 
@@ -475,6 +475,13 @@ impl MatchHub {
                     };
 
                     for uid in players {
+                        let is_bot = {
+                            let rt = runtime.read().await;
+                            rt.sim.players.get(&uid).is_some_and(|p| p.is_bot())
+                        };
+                        if is_bot {
+                            continue;
+                        }
                         let won = {
                             let rt = runtime.read().await;
                             rt.sim

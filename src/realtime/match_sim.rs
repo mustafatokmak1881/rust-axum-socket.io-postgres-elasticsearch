@@ -5,6 +5,7 @@ use rand::Rng;
 use uuid::Uuid;
 
 use super::aoi;
+use super::bots::{self, BotMind};
 use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
     BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ShotEvent, TrainableInfo,
@@ -31,11 +32,21 @@ pub struct PlayerState {
     pub aoi_known: HashSet<Uuid>,
     /// Permanent explored shroud (Generals-style).
     pub explored: aoi::ExploredMap,
+    /// Computer commander — `None` for human players.
+    pub bot: Option<BotMind>,
 }
 
 impl PlayerState {
     pub fn label(&self) -> String {
-        format!("{} ({})", self.name, self.faction)
+        if self.bot.is_some() {
+            format!("{} [BOT]", self.name)
+        } else {
+            format!("{} ({})", self.name, self.faction)
+        }
+    }
+
+    pub fn is_bot(&self) -> bool {
+        self.bot.is_some()
     }
 
     pub fn is(&self, id: Uuid) -> bool {
@@ -510,7 +521,7 @@ pub struct MatchSim {
     pub players: HashMap<Uuid, PlayerState>,
     pub entities: HashMap<Uuid, Entity>,
     /// Spatial hash of `entities` — rebuilt/kept in sync for neighbor queries.
-    grid: SpatialGrid,
+    pub(crate) grid: SpatialGrid,
     pub removed: Vec<Uuid>,
     /// Shots fired since last client broadcast (cleared in clear_frame_flags).
     pub shots: Vec<ShotEvent>,
@@ -555,63 +566,86 @@ impl MatchSim {
         };
 
         for (user_id, name, faction, team, flag) in roster.into_iter() {
-            let (x, y) = sim.allocate_spawn_xy();
-            let slot = sim.players.len();
-            let colors = color_scheme_for_slot(slot);
-
-            sim.players.insert(
+            sim.spawn_commander(
                 user_id,
-                PlayerState {
-                    user_id,
-                    name,
-                    faction,
-                    team,
-                    flag: flag.clone(),
-                    colors,
-                    resources: Resources::starter(),
-                    focus: [x, y],
-                    alive: true,
-                    connected: true,
-                    aoi_known: HashSet::new(),
-                    explored: aoi::ExploredMap::new(map_size),
-                },
-            );
-
-            let hq_id = Uuid::new_v4();
-            sim.put_entity(Entity {
-                id: hq_id,
-                kind: "hq".into(),
-                owner: user_id,
+                name,
+                faction,
                 team,
-                x,
-                y,
-                hp: 7500.0,
-                max_hp: 7500.0,
-                building: true,
-                unit: false,
                 flag,
-                build_remaining_ms: 0,
-                train_queue: VecDeque::new(),
-                target: None,
-                move_to: None,
-                speed: 0.0,
-                damage: 0.0,
-                range: 0.0,
-                attack_cooldown_ms: 0,
-                mag_ammo: 0,
-                dirty: true,
-                stuck_frames: 0,
-                detour: None,
-                detour_ttl: 0,
-                last_escape_ang: 0.0,
-                prone: false,
-                prone_until_tick: 0,
-            });
-            sim.spawn_starting_force(user_id, team, x, y);
-            sim.reveal_vision_for(user_id);
+                true,
+                None,
+            );
         }
 
+        bots::seed_opening_bots(&mut sim);
         sim
+    }
+
+    pub(crate) fn spawn_commander(
+        &mut self,
+        user_id: Uuid,
+        name: String,
+        faction: String,
+        team: u8,
+        flag: Option<String>,
+        connected: bool,
+        bot: Option<BotMind>,
+    ) {
+        let (x, y) = self.allocate_spawn_xy();
+        let slot = self.players.len();
+        let colors = color_scheme_for_slot(slot);
+
+        self.players.insert(
+            user_id,
+            PlayerState {
+                user_id,
+                name,
+                faction,
+                team,
+                flag: flag.clone(),
+                colors,
+                resources: Resources::starter(),
+                focus: [x, y],
+                alive: true,
+                connected,
+                aoi_known: HashSet::new(),
+                explored: aoi::ExploredMap::new(self.map_size),
+                bot,
+            },
+        );
+
+        let hq_id = Uuid::new_v4();
+        self.put_entity(Entity {
+            id: hq_id,
+            kind: "hq".into(),
+            owner: user_id,
+            team,
+            x,
+            y,
+            hp: 7500.0,
+            max_hp: 7500.0,
+            building: true,
+            unit: false,
+            flag,
+            build_remaining_ms: 0,
+            train_queue: VecDeque::new(),
+            target: None,
+            move_to: None,
+            speed: 0.0,
+            damage: 0.0,
+            range: 0.0,
+            attack_cooldown_ms: 0,
+            mag_ammo: 0,
+            dirty: true,
+            stuck_frames: 0,
+            detour: None,
+            detour_ttl: 0,
+            last_escape_ang: 0.0,
+            prone: false,
+            prone_until_tick: 0,
+        });
+        self.spawn_starting_force(user_id, team, x, y);
+        self.reveal_vision_for(user_id);
     }
 
     /// Place new HQs in a tight cluster near existing players (not spread across the map).
@@ -702,65 +736,16 @@ impl MatchSim {
             (index % 2) as u8
         };
 
-        let (x, y) = self.allocate_spawn_xy();
-        let colors = color_scheme_for_slot(index);
-
-        self.players.insert(
-            user_id,
-            PlayerState {
-                user_id,
-                name,
-                faction,
-                team,
-                flag: flag.clone(),
-                colors,
-                resources: Resources::starter(),
-                focus: [x, y],
-                alive: true,
-                connected: true,
-                aoi_known: HashSet::new(),
-                explored: aoi::ExploredMap::new(self.map_size),
-            },
-        );
-
-        let hq_id = Uuid::new_v4();
-        self.put_entity(Entity {
-            id: hq_id,
-            kind: "hq".into(),
-            owner: user_id,
-            team,
-            x,
-            y,
-            hp: 7500.0,
-            max_hp: 7500.0,
-            building: true,
-            unit: false,
-            flag,
-            build_remaining_ms: 0,
-            train_queue: VecDeque::new(),
-            target: None,
-            move_to: None,
-            speed: 0.0,
-            damage: 0.0,
-            range: 0.0,
-            attack_cooldown_ms: 0,
-            mag_ammo: 0,
-            dirty: true,
-            stuck_frames: 0,
-            detour: None,
-            detour_ttl: 0,
-            last_escape_ang: 0.0,
-            prone: false,
-            prone_until_tick: 0,
-        });
-        self.spawn_starting_force(user_id, team, x, y);
-        self.reveal_vision_for(user_id);
-
+        self.spawn_commander(user_id, name, faction, team, flag, true, None);
         Ok(())
     }
 
     pub fn player_count(&self) -> usize {
         self.players.len()
+    }
+
+    pub fn human_count(&self) -> usize {
+        self.players.values().filter(|p| !p.is_bot()).count()
     }
 
     /// Opening army: 50 rangers + 1 tank at the commander's HQ.
@@ -1666,6 +1651,7 @@ impl MatchSim {
             }
         }
 
+        bots::tick_bots(self);
         self.check_victory();
     }
 
@@ -2534,7 +2520,14 @@ impl MatchSim {
         let (owner_name, colors) = self
             .players
             .get(&entity.owner)
-            .map(|p| (p.name.clone(), p.colors))
+            .map(|p| {
+                let name = if p.is_bot() {
+                    format!("{} [BOT]", p.name)
+                } else {
+                    p.name.clone()
+                };
+                (name, p.colors)
+            })
             .unwrap_or_else(|| ("Unknown".into(), [0x888888, 0x555555, 0x333333]));
 
         let progress = if entity.build_remaining_ms > 0 {
