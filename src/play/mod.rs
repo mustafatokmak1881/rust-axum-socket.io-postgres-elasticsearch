@@ -25,6 +25,7 @@ pub fn router() -> Router<SharedState> {
         .route("/assets/sounds/tank-move.mp3", get(tank_move_mp3))
         .route("/assets/sounds/tank-shoot.wav", get(tank_shoot_wav))
         .route("/assets/sounds/soldier-shoot.mp3", get(soldier_shoot_mp3))
+        .route("/assets/sounds/building.mp3", get(building_mp3))
 }
 
 async fn favicon() -> Response {
@@ -139,6 +140,16 @@ async fn soldier_shoot_mp3() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_bytes!("../web/usa/sounds/soldier-shoot.mp3").as_slice(),
+    )
+}
+
+async fn building_mp3() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/sounds/building.mp3").as_slice(),
     )
 }
 

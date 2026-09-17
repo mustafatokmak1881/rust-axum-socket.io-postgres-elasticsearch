@@ -482,6 +482,8 @@ const Sfx = {
   tankShootWait: null,
   soldierShootBuf: null,
   soldierShootWait: null,
+  buildingBuf: null,
+  buildingWait: null,
   lastRifleAt: 0,
   rifleRest: 1.12,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
@@ -535,6 +537,7 @@ const Sfx = {
     void this.loadTankMove();
     void this.loadTankShoot();
     void this.loadSoldierShoot();
+    void this.loadBuilding();
     return true;
   },
 
@@ -760,6 +763,27 @@ const Sfx = {
     return this.soldierShootWait;
   },
 
+  loadBuilding() {
+    if (this.buildingBuf) return Promise.resolve(this.buildingBuf);
+    if (this.buildingWait) return this.buildingWait;
+    if (!this.ctx) return Promise.resolve(null);
+    this.buildingWait = fetch("/assets/sounds/building.mp3")
+      .then((res) => {
+        if (!res.ok) throw new Error("building");
+        return res.arrayBuffer();
+      })
+      .then((raw) => this.ctx.decodeAudioData(raw))
+      .then((buf) => {
+        this.buildingBuf = buf;
+        return buf;
+      })
+      .catch(() => {
+        this.buildingWait = null;
+        return null;
+      });
+    return this.buildingWait;
+  },
+
   startEngineLoop(node) {
     if (!this.tankMoveBuf || !this.ctx || node.src) return;
     const src = this.ctx.createBufferSource();
@@ -839,59 +863,71 @@ const Sfx = {
     this.tone(520, 0.25, "sawtooth", 0.07, 180, loud, bus);
   },
 
-  startBuild(id, x, y) {
-    if (!this.ensure()) return;
-    if (this.builds.has(id)) {
-      const existing = this.builds.get(id);
-      existing.x = x;
-      existing.y = y;
+  startBuildLoop(node) {
+    if (!this.buildingBuf || !this.ctx || node.src) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.buildingBuf;
+    src.loop = true;
+    src.connect(node.g);
+    try {
+      src.start();
+    } catch {
       return;
     }
-    const t0 = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const lfo = this.ctx.createOscillator();
-    const lfoGain = this.ctx.createGain();
-    const g = this.ctx.createGain();
-    const filt = this.ctx.createBiquadFilter();
-    osc.type = "sawtooth";
-    osc.frequency.value = 78;
-    lfo.type = "sine";
-    lfo.frequency.value = 3.2;
-    lfoGain.gain.value = 12;
-    filt.type = "lowpass";
-    filt.frequency.value = 420;
-    const vol = this.volumeAt(x, y, this.ranges.build);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.32 * vol), t0 + 0.3);
-    lfo.connect(lfoGain);
-    lfoGain.connect(osc.frequency);
-    osc.connect(filt);
-    filt.connect(g);
-    g.connect(this.dest("fx"));
-    osc.start();
-    lfo.start();
-    const tick = setInterval(() => {
+    node.src = src;
+  },
+
+  startBuild(id, x, y) {
+    if (!this.ensure() || !id) return;
+    void this.loadBuilding().then((buf) => {
+      if (!buf) return;
       const node = this.builds.get(id);
-      if (!node) return;
-      const v = this.volumeAt(node.x, node.y, this.ranges.build);
-      if (v <= 0.004) return;
-      this.noiseBurst(0.03, 0.04, 1800, "bandpass", v * 3, 0.7, this.dest("fx"));
-      this.tone(240 + Math.random() * 80, 0.04, "triangle", 0.025, 90, v * 3, this.dest("fx"));
-    }, 480 + Math.random() * 220);
-    this.builds.set(id, { osc, lfo, g, tick, x, y, baseGain: 0.32 });
+      if (node && !node.stopping) this.startBuildLoop(node);
+    });
+    let node = this.builds.get(id);
+    if (node?.stopping) {
+      this.builds.delete(id);
+      node = null;
+    }
+    if (node) {
+      node.x = x;
+      node.y = y;
+      return;
+    }
+    const g = this.ctx.createGain();
+    g.gain.value = 0.0001;
+    const pan = this.ctx.createStereoPanner();
+    pan.pan.value = this.panAt(x);
+    g.connect(pan);
+    pan.connect(this.dest("fx"));
+    const vol = this.volumeAt(x, y, this.ranges.build);
+    const t0 = this.ctx.currentTime;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(
+      Math.max(0.0001, this.sampleGain(vol, 0.036, 1.9)),
+      t0 + 0.4,
+    );
+    node = { src: null, g, pan, x, y, stopping: false, baseGain: 0.036 };
+    this.builds.set(id, node);
+    if (this.buildingBuf) this.startBuildLoop(node);
   },
 
   stopBuild(id) {
     const node = this.builds.get(id);
-    if (!node) return;
-    clearInterval(node.tick);
+    if (!node || node.stopping) return;
+    node.stopping = true;
     try {
       const t0 = this.ctx.currentTime;
       node.g.gain.cancelScheduledValues(t0);
       node.g.gain.setValueAtTime(Math.max(0.0001, node.g.gain.value), t0);
-      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
-      node.osc.stop(t0 + 0.25);
-      node.lfo.stop(t0 + 0.25);
+      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+      node.src?.stop(t0 + 0.24);
+      node.src = null;
+    } catch {
+      // ignore
+    }
+    try {
+      node.g.disconnect();
     } catch {
       // ignore
     }
@@ -903,11 +939,12 @@ const Sfx = {
     if (!this.ctx) return;
     const t0 = this.ctx.currentTime;
     for (const node of this.builds.values()) {
+      if (node.stopping) continue;
       const vol = this.volumeAt(node.x, node.y, this.ranges.build);
-      const target = Math.max(0.0001, (node.baseGain || 0.11) * vol);
+      const target = Math.max(0.0001, this.sampleGain(vol, node.baseGain || 0.036, 1.9));
       try {
-        node.g.gain.cancelScheduledValues(t0);
-        node.g.gain.setTargetAtTime(target, t0, 0.08);
+        node.g.gain.setTargetAtTime(target, t0, 0.12);
+        if (node.pan) node.pan.pan.setTargetAtTime(this.panAt(node.x), t0, 0.12);
       } catch {
         // ignore
       }
