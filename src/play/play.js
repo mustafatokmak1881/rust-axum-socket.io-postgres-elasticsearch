@@ -518,6 +518,7 @@ function applyDelta(msg) {
     if (prev?.building) removedBuildings.push(prev);
     state.entities.delete(id);
     const mesh = state.meshes.get(id);
+    const kind = String(prev?.kind || mesh?.userData?.kind || "");
     const nearHe =
       mesh?.userData?.isInfantry &&
       tankHits.some((s) => Math.hypot(mesh.position.x - s.x1, mesh.position.z - s.y1) <= 1.35);
@@ -525,6 +526,12 @@ function applyDelta(msg) {
       mesh.userData.corpse = true;
       mesh.userData.corpseAt = performance.now();
       mesh.userData.moving = false;
+      continue;
+    }
+    if (mesh && (mesh.userData.isTank || kind.includes("tank") || kind.includes("mlrs"))) {
+      beginTankWreck(mesh, prev?.x ?? mesh.position.x, prev?.y ?? mesh.position.z);
+      Sfx.stopBuild(id);
+      Sfx.stopEngine(id);
       continue;
     }
     reapUnitMesh(mesh);
@@ -582,6 +589,10 @@ const Sfx = {
   tankMoveWait: null,
   tankShootBuf: null,
   tankShootWait: null,
+  tankDestroyedBuf: null,
+  tankDestroyedWait: null,
+  mlrsRocketBuf: null,
+  mlrsRocketWait: null,
   soldierShootBuf: null,
   soldierShootWait: null,
   buildingBuf: null,
@@ -596,6 +607,8 @@ const Sfx = {
     build: { ref: 3.5, max: 14, exp: 2.5 },
     collapse: { ref: 5, max: 22, exp: 2.2 },
     complete: { ref: 3.5, max: 14, exp: 2.5 },
+    wreck: { ref: 7, max: 28, exp: 2.0 },
+    mlrs: { ref: 6, max: 30, exp: 2.2 },
   },
 
   ensure() {
@@ -638,6 +651,8 @@ const Sfx = {
     if (this.ctx.state === "suspended") void this.ctx.resume();
     void this.loadTankMove();
     void this.loadTankShoot();
+    void this.loadTankDestroyed();
+    void this.loadMlrsRocket();
     void this.loadSoldierShoot();
     void this.loadBuilding();
     return true;
@@ -842,6 +857,79 @@ const Sfx = {
         return null;
       });
     return this.tankShootWait;
+  },
+
+  loadTankDestroyed() {
+    if (this.tankDestroyedBuf) return Promise.resolve(this.tankDestroyedBuf);
+    if (this.tankDestroyedWait) return this.tankDestroyedWait;
+    if (!this.ctx) return Promise.resolve(null);
+    this.tankDestroyedWait = fetch("/assets/sounds/tank-destroyed.mp3")
+      .then((res) => {
+        if (!res.ok) throw new Error("tank-destroyed");
+        return res.arrayBuffer();
+      })
+      .then((raw) => this.ctx.decodeAudioData(raw))
+      .then((buf) => {
+        this.tankDestroyedBuf = buf;
+        return buf;
+      })
+      .catch(() => {
+        this.tankDestroyedWait = null;
+        return null;
+      });
+    return this.tankDestroyedWait;
+  },
+
+  tankDestroyed(x, y) {
+    if (!this.ensure()) return;
+    const vol = this.volumeAt(x, y, this.ranges.wreck);
+    if (vol <= 0.004) return;
+    this.duckRifles(1.1 + vol * 0.8);
+    const play = (buf) => {
+      if (!buf || !this.ctx) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      this.startSpatialSource(src, x, y, vol * 1.15, this.dest("tank"), 2.6, 1.55);
+    };
+    if (this.tankDestroyedBuf) play(this.tankDestroyedBuf);
+    else void this.loadTankDestroyed().then(play);
+  },
+
+  loadMlrsRocket() {
+    if (this.mlrsRocketBuf) return Promise.resolve(this.mlrsRocketBuf);
+    if (this.mlrsRocketWait) return this.mlrsRocketWait;
+    if (!this.ctx) return Promise.resolve(null);
+    this.mlrsRocketWait = fetch("/assets/sounds/mlrs-rocket.mp3")
+      .then((res) => {
+        if (!res.ok) throw new Error("mlrs-rocket");
+        return res.arrayBuffer();
+      })
+      .then((raw) => this.ctx.decodeAudioData(raw))
+      .then((buf) => {
+        this.mlrsRocketBuf = buf;
+        return buf;
+      })
+      .catch(() => {
+        this.mlrsRocketWait = null;
+        return null;
+      });
+    return this.mlrsRocketWait;
+  },
+
+  mlrsRocket(x, y) {
+    if (!this.ensure()) return;
+    const vol = this.volumeAt(x, y, this.ranges.mlrs);
+    if (vol <= 0.005) return;
+    this.duckRifles(0.35 + vol * 0.35);
+    const play = (buf) => {
+      if (!buf || !this.ctx) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = 0.94 + Math.random() * 0.12;
+      this.startSpatialSource(src, x, y, vol, this.dest("tank"), 2.35, 1.35);
+    };
+    if (this.mlrsRocketBuf) play(this.mlrsRocketBuf);
+    else void this.loadMlrsRocket().then(play);
   },
 
   loadSoldierShoot() {
@@ -1094,7 +1182,7 @@ const Sfx = {
   shot(kind, x, y) {
     const k = String(kind || "");
     if (k.includes("tank_mg") || k.includes("_mg")) this.rifle(x, y);
-    else if (k.includes("mlrs")) this.missile(x, y);
+    else if (k.includes("mlrs")) this.mlrsRocket(x, y);
     else if (k.includes("tank")) this.tankCannon(x, y);
     else if (k.includes("mortar")) this.missile(x, y);
     else if (k.includes("missile")) this.missile(x, y);
@@ -5412,10 +5500,162 @@ function spawnTankExplosion(at) {
   });
 }
 
+const TANK_WRECK_MS = 10_000;
+
+/** Kill a tank visually: boom SFX, tip the hull, burn ~10s, then remove. */
+function beginTankWreck(mesh, x, z) {
+  if (!mesh || mesh.userData.wreck) return;
+  const px = x ?? mesh.position.x;
+  const pz = z ?? mesh.position.z;
+  Sfx.tankDestroyed(px, pz);
+  spawnTankExplosion(new THREE.Vector3(px, 0.14, pz));
+  // Secondary cook-off bloom a beat later.
+  setTimeout(() => {
+    if (!mesh.userData?.wreck || !scene) return;
+    spawnTankExplosion(
+      new THREE.Vector3(mesh.position.x + (Math.random() - 0.5) * 0.08, 0.16, mesh.position.z),
+    );
+  }, 280 + Math.random() * 220);
+
+  mesh.userData.wreck = true;
+  mesh.userData.wreckAt = performance.now();
+  mesh.userData.wreckLife = TANK_WRECK_MS;
+  mesh.userData.moving = false;
+  mesh.userData.aimAt = null;
+  mesh.userData.velX = 0;
+  mesh.userData.velZ = 0;
+
+  // Char the hull — clone materials so live tanks stay clean.
+  mesh.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const next = mats.map((m) => {
+      const c = m.clone();
+      if (c.color) c.color.multiplyScalar(0.28);
+      if ("metalness" in c) c.metalness = 0.05;
+      if ("roughness" in c) c.roughness = 0.92;
+      if ("emissive" in c && c.emissive) c.emissive.setHex(0x221100);
+      return c;
+    });
+    obj.material = Array.isArray(obj.material) ? next : next[0];
+  });
+
+  // Tip / settle like a kill-shot.
+  const side = Math.random() < 0.5 ? -1 : 1;
+  mesh.rotation.z += side * (0.18 + Math.random() * 0.22);
+  mesh.rotation.x += 0.06 + Math.random() * 0.1;
+  mesh.position.y = 0.02;
+
+  // Persistent fire + smoke column attached to the wreck.
+  const fireRoot = new THREE.Group();
+  fireRoot.name = "wreckFire";
+  fireRoot.position.set(0, 0.12, -0.02);
+  const flames = [];
+  for (let i = 0; i < 4; i++) {
+    const flame = new THREE.Mesh(
+      new THREE.SphereGeometry(0.04 + i * 0.012, 7, 7),
+      new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xff6622 : 0xffcc44,
+        transparent: true,
+        opacity: 0.9 - i * 0.12,
+        depthWrite: false,
+      }),
+    );
+    flame.position.set((Math.random() - 0.5) * 0.06, 0.04 + i * 0.035, (Math.random() - 0.5) * 0.04);
+    fireRoot.add(flame);
+    flames.push(flame);
+  }
+  const smokes = [];
+  for (let i = 0; i < 5; i++) {
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05 + Math.random() * 0.04, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x3a3830,
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false,
+      }),
+    );
+    smoke.position.set((Math.random() - 0.5) * 0.05, 0.1 + i * 0.06, (Math.random() - 0.5) * 0.05);
+    smoke.userData.baseY = smoke.position.y;
+    smoke.userData.phase = Math.random() * Math.PI * 2;
+    fireRoot.add(smoke);
+    smokes.push(smoke);
+  }
+  mesh.add(fireRoot);
+  mesh.userData.wreckFlames = flames;
+  mesh.userData.wreckSmokes = smokes;
+  mesh.userData.wreckFire = fireRoot;
+
+  // Strip selection / UI chrome.
+  const ring = mesh.getObjectByName("selRing");
+  if (ring) {
+    mesh.remove(ring);
+    ring.geometry?.dispose?.();
+    ring.material?.dispose?.();
+    mesh.userData.selRing = null;
+  }
+  for (const name of ["ownerLabel", "hpBar", "progressBar"]) {
+    const ui = mesh.getObjectByName(name);
+    if (ui) {
+      mesh.remove(ui);
+      ui.material?.map?.dispose?.();
+      ui.material?.dispose?.();
+    }
+  }
+}
+
+function updateTankWreck(mesh, now, dt) {
+  const age = now - (mesh.userData.wreckAt || now);
+  const life = mesh.userData.wreckLife || TANK_WRECK_MS;
+  const t = Math.min(1, age / life);
+  const fade = t > 0.82 ? 1 - (t - 0.82) / 0.18 : 1;
+
+  const flames = mesh.userData.wreckFlames || [];
+  for (let i = 0; i < flames.length; i++) {
+    const f = flames[i];
+    if (!f?.material) continue;
+    const flicker = 0.75 + Math.sin(now * 0.018 + i * 1.7) * 0.25;
+    f.scale.setScalar(flicker * (1.05 - t * 0.35));
+    f.position.y = 0.04 + i * 0.035 + Math.sin(now * 0.012 + i) * 0.012;
+    f.material.opacity = (0.85 - i * 0.1) * fade * (1 - t * 0.35);
+    f.material.color.setHex(flicker > 0.9 ? 0xffee66 : 0xff5522);
+  }
+
+  const smokes = mesh.userData.wreckSmokes || [];
+  for (let i = 0; i < smokes.length; i++) {
+    const s = smokes[i];
+    if (!s?.material) continue;
+    const phase = s.userData.phase || 0;
+    const rise = ((now * 0.00035 + phase) % 1);
+    s.position.y = (s.userData.baseY || 0.1) + rise * 0.45;
+    s.position.x = Math.sin(now * 0.002 + phase) * 0.04;
+    s.scale.setScalar(1 + rise * 1.8);
+    s.material.opacity = 0.5 * (1 - rise) * fade * (0.85 - t * 0.4);
+  }
+
+  // Hull sinks into ash near the end.
+  if (t > 0.75) {
+    mesh.position.y = 0.02 - (t - 0.75) * 0.12;
+    mesh.traverse((obj) => {
+      if (!obj.isMesh || !obj.material) return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) {
+        if (m.transparent == null || m === flames[0]?.material) continue;
+        if ("opacity" in m && obj.parent?.name !== "wreckFire") {
+          // leave fire mats alone; hull fade via overall group not easy — skip
+        }
+      }
+    });
+  }
+  void dt;
+}
+
 function reapUnitMesh(mesh) {
   if (!mesh) return;
   const id = mesh.userData?.id;
   if (scene) scene.remove(mesh);
+  disposeMeshTree(mesh);
   if (id) state.meshes.delete(id);
 }
 
@@ -5548,6 +5788,11 @@ function animate() {
     if (mesh.userData.knock) {
       updateKnockPhysics(mesh, dt);
       if (mesh.userData.corpse && !mesh.userData.knock) reap.push(mesh);
+    } else if (mesh.userData.wreck) {
+      updateTankWreck(mesh, now, dt);
+      if (now - (mesh.userData.wreckAt || 0) > (mesh.userData.wreckLife || TANK_WRECK_MS)) {
+        reap.push(mesh);
+      }
     } else if (mesh.userData.corpse) {
       if (now - (mesh.userData.corpseAt || 0) > 900) reap.push(mesh);
     } else {

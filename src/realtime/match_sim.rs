@@ -326,13 +326,13 @@ pub fn trainables() -> &'static [UnitDef] {
             train_ms: 42_000,
             // Aluminum cab + pod — shrugs fragments, not AP.
             hp: 2_400.0,
-            // Per-ripple HE; splash does the area work (see apply_mlrs_blast).
-            damage: 220.0,
+            // Per-rocket HE; full pod is a 6-shot ripple (see mag_ammo).
+            damage: 160.0,
             // Bradley-derived chassis — slower than a Crusader in combat pace.
             speed: 0.42,
             // Standoff artillery — outranges tanks / bunkers, not map-wide.
             range: 16.0,
-            // Pod reload after a 6-rocket ripple.
+            // Long reload after the 6-rocket ripple empties the pod.
             attack_ms: 9_200,
         },
     ]
@@ -409,7 +409,10 @@ const TANK_MG_COOLDOWN_MS: u32 = 130;
 const MLRS_POD_RATE: f32 = 0.72;
 const MLRS_AIM_ALIGN: f32 = 0.10;
 /// Rockets in one ripple before the long reload.
-const MLRS_SALVO: usize = 6;
+const MLRS_SALVO: u8 = 6;
+/// Gap between rockets in a ripple (~real M270 spacing, shortened for game pace).
+const MLRS_RIPPLE_MS: u32 = 140;
+const MLRS_RELOAD_MS: u32 = 9_200;
 /// Patriot launcher slew (~55°/s) — waits on bearing like a tank turret.
 const PATRIOT_SLEW_RATE: f32 = 0.95;
 const PATRIOT_AIM_ALIGN: f32 = 0.08;
@@ -423,8 +426,8 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     if infantry && attacker_kind.contains("tank") {
         10_000.0
     } else if infantry && attacker_kind.contains("mlrs") {
-        // DPICM / HE saturation — one rocket near a soldier is usually fatal.
-        (base * 1.05).max(200.0)
+        // Single rocket HE — usually drops a soldier in the seat, not the whole grid.
+        (base * 0.85).max(120.0)
     } else if infantry && attacker_kind.contains("mortar") {
         // Mortar HE: usually one solid hit drops a soldier in the blast seat.
         (base * 0.95).max(220.0)
@@ -437,7 +440,7 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         (base * 0.55).max(110.0)
     } else if armored && attacker_kind.contains("mlrs") {
         // Unguided rockets vs AFV — area fire, not a tank killer.
-        (base * 0.38).max(55.0)
+        (base * 0.32).max(40.0)
     } else if armored && attacker_kind.contains("mortar") {
         // Soft HE vs armor — chips, does not delete tanks.
         (base * 0.28).max(70.0)
@@ -1969,6 +1972,17 @@ impl MatchSim {
                             } else {
                                 entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
                             }
+                        } else if entity.kind.contains("mlrs") {
+                            // Ripple fire: one rocket now, brief gap, then next — long reload when pod empty.
+                            if entity.mag_ammo == 0 {
+                                entity.mag_ammo = MLRS_SALVO;
+                            }
+                            entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
+                            if entity.mag_ammo == 0 {
+                                entity.attack_cooldown_ms = MLRS_RELOAD_MS;
+                            } else {
+                                entity.attack_cooldown_ms = MLRS_RIPPLE_MS;
+                            }
                         } else {
                             entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
                         }
@@ -1984,7 +1998,15 @@ impl MatchSim {
                         let hit_p = shot_hit_chance(&kind, target, dist, entity.range, cover.exposure);
                         let mut rng = rand::thread_rng();
                         let hit = rng.gen_range(0.0..1.0) < hit_p;
-                        let (ix, iy) = if hit {
+                        // MLRS: every rocket lands in a tight beaten zone (even "hits" scatter a bit).
+                        let (ix, iy) = if kind.contains("mlrs") {
+                            let j = if hit { 0.32 } else { 0.58 };
+                            let jx = (tx + rng.gen_range(-j..j))
+                                .clamp(0.5, self.map_size as f32 - 0.5);
+                            let jy = (ty + rng.gen_range(-j..j))
+                                .clamp(0.5, self.map_size as f32 - 0.5);
+                            (jx, jy)
+                        } else if hit {
                             (tx, ty)
                         } else {
                             miss_impact(&mut rng, target, fx, fy)
@@ -2012,51 +2034,22 @@ impl MatchSim {
                                 }
                             }
                         }
-                        if kind.contains("mlrs") {
-                            // Ripple of unguided rockets into a beaten zone around the aim point.
-                            for i in 0..MLRS_SALVO {
-                                let (rx, ry) = if i == 0 && hit {
-                                    (ix, iy)
-                                } else {
-                                    let j = 0.42;
-                                    let jx = (tx + rng.gen_range(-j..j))
-                                        .clamp(0.5, self.map_size as f32 - 0.5);
-                                    let jy = (ty + rng.gen_range(-j..j))
-                                        .clamp(0.5, self.map_size as f32 - 0.5);
-                                    (jx, jy)
-                                };
-                                self.shots.push(ShotEvent {
-                                    from: from_id,
-                                    to: tid,
-                                    x0: fx,
-                                    y0: fy,
-                                    x1: rx,
-                                    y1: ry,
-                                    kind: kind.clone(),
-                                    hit: hit && i < 3,
-                                });
-                            }
-                            if hit {
-                                self.apply_mlrs_blast(team, fx, fy, tx, ty, tid);
-                            }
-                        } else {
-                            self.shots.push(ShotEvent {
-                                from: from_id,
-                                to: tid,
-                                x0: fx,
-                                y0: fy,
-                                x1: ix,
-                                y1: iy,
-                                kind: kind.clone(),
-                                hit,
-                            });
-                            // HE splash only when the shell actually lands on target.
-                            if hit && kind.contains("tank") && !kind.contains("mg") {
-                                self.apply_shell_blast(team, fx, fy, tx, ty, tid);
-                            }
-                            if hit && kind.contains("mortar") {
-                                self.apply_mortar_blast(team, fx, fy, tx, ty, tid);
-                            }
+                        self.shots.push(ShotEvent {
+                            from: from_id,
+                            to: tid,
+                            x0: fx,
+                            y0: fy,
+                            x1: ix,
+                            y1: iy,
+                            kind: kind.clone(),
+                            hit,
+                        });
+                        if hit && kind.contains("mlrs") {
+                            self.apply_mlrs_blast(team, fx, fy, ix, iy, tid);
+                        } else if hit && kind.contains("tank") && !kind.contains("mg") {
+                            self.apply_shell_blast(team, fx, fy, tx, ty, tid);
+                        } else if hit && kind.contains("mortar") {
+                            self.apply_mortar_blast(team, fx, fy, tx, ty, tid);
                         }
                     }
                 } else {
@@ -2258,22 +2251,23 @@ impl MatchSim {
             }
             let falloff = (1.0 - dist / RADIUS).clamp(0.0, 1.0);
             let dmg = if is_infantry {
-                10_000.0
+                // Per-rocket splash — lethal near the impact, not a map wipe.
+                180.0 * falloff
             } else if self
                 .entities
                 .get(&id)
                 .is_some_and(|e| e.kind.contains("tank"))
             {
-                38.0 * falloff
+                28.0 * falloff
             } else if self
                 .entities
                 .get(&id)
                 .is_some_and(|e| e.kind.contains("mlrs"))
             {
-                95.0 * falloff
+                70.0 * falloff
             } else {
                 // Buildings soak multiple rockets.
-                110.0 * falloff
+                85.0 * falloff
             };
             if dmg < 1.0 {
                 continue;

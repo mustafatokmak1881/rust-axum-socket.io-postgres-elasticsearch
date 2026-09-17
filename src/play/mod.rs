@@ -24,6 +24,8 @@ pub fn router() -> Router<SharedState> {
         .route("/assets/terrain.jpg", get(terrain_jpg))
         .route("/assets/sounds/tank-move.mp3", get(tank_move_mp3))
         .route("/assets/sounds/tank-shoot.wav", get(tank_shoot_wav))
+        .route("/assets/sounds/tank-destroyed.mp3", get(tank_destroyed_mp3))
+        .route("/assets/sounds/mlrs-rocket.mp3", get(mlrs_rocket_mp3))
         .route("/assets/sounds/soldier-shoot.mp3", get(soldier_shoot_mp3))
         .route("/assets/sounds/building.mp3", get(building_mp3))
 }
@@ -130,6 +132,26 @@ async fn tank_shoot_wav() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_bytes!("../web/usa/sounds/tank-shoot.wav").as_slice(),
+    )
+}
+
+async fn tank_destroyed_mp3() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/sounds/tank-destroyed.mp3").as_slice(),
+    )
+}
+
+async fn mlrs_rocket_mp3() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/sounds/mlrs-rocket.mp3").as_slice(),
     )
 }
 
