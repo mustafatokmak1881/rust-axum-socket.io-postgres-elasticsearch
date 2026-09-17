@@ -1087,21 +1087,25 @@ impl MatchSim {
             };
 
             let self_r = unit_radius(&entity.kind);
-            // Player move orders win: never auto-fight or stop while marching.
+            // Move orders control pathing only — units may still shoot while marching.
             let obeying_move = entity.move_to.is_some();
 
-            // Idle defense only — not while executing a move order.
-            if !obeying_move
-                && entity.target.is_none()
-                && entity.damage > 0.0
-                && entity.range > 0.0
-                && self.tick % 2 == 0
-            {
-                if let Some(tid) =
-                    self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range)
-                {
-                    entity.target = Some(tid);
-                    entity.dirty = true;
+            // Acquire / refresh targets in weapon range (including while moving).
+            if entity.damage > 0.0 && entity.range > 0.0 && self.tick % 2 == 0 {
+                if obeying_move {
+                    // On the march: always pick nearest in-range threat (don't stick to someone behind).
+                    entity.target =
+                        self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range);
+                    if entity.target.is_some() {
+                        entity.dirty = true;
+                    }
+                } else if entity.target.is_none() {
+                    if let Some(tid) =
+                        self.find_enemy_in_range(entity.team, entity.x, entity.y, entity.range)
+                    {
+                        entity.target = Some(tid);
+                        entity.dirty = true;
+                    }
                 }
             }
 
@@ -1123,6 +1127,7 @@ impl MatchSim {
                         // Chase attack target only when not under a move order.
                         goal = Some((t.x, t.y));
                     }
+                    // While move_to is set: keep walking to the click point and fire if in range.
                 } else {
                     entity.target = None;
                 }
@@ -1320,11 +1325,7 @@ impl MatchSim {
                 entity.attack_cooldown_ms = entity.attack_cooldown_ms.saturating_sub(dt_ms);
             }
 
-            // While obeying a move order: do not auto-acquire or linger in fights.
-            if obeying_move {
-                entity.target = None;
-            }
-
+            // Shoot any acquired target in range — including while marching to a move order.
             if let Some(tid) = entity.target {
                 if let Some(target) = self.entities.get(&tid) {
                     let dx = target.x - entity.x;
