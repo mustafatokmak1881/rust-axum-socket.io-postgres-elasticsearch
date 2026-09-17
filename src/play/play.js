@@ -433,18 +433,20 @@ const Sfx = {
   ctx: null,
   master: null,
   compressor: null,
+  limiter: null,
   buses: { rifle: null, tank: null, fx: null },
   builds: new Map(),
   engines: new Map(),
   lastRifleAt: 0,
+  rifleRest: 0.5,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
   ranges: {
-    rifle: { ref: 6, max: 28 },
-    tank: { ref: 24, max: 120 },
-    missile: { ref: 8, max: 42 },
-    build: { ref: 5, max: 22 },
-    collapse: { ref: 8, max: 48 },
-    complete: { ref: 5, max: 26 },
+    rifle: { ref: 6, max: 28, exp: 1.85 },
+    tank: { ref: 18, max: 150, exp: 1.2 },
+    missile: { ref: 8, max: 48, exp: 1.6 },
+    build: { ref: 5, max: 22, exp: 1.85 },
+    collapse: { ref: 8, max: 56, exp: 1.5 },
+    complete: { ref: 5, max: 26, exp: 1.85 },
   },
 
   ensure() {
@@ -453,24 +455,36 @@ const Sfx = {
       if (!AC) return false;
       this.ctx = new AC();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 1;
+      // ~3× previous mix; limiter catches peaks so speakers don't square-wave.
+      this.master.gain.value = 3;
+
       this.compressor = this.ctx.createDynamicsCompressor();
-      this.compressor.threshold.value = -10;
-      this.compressor.knee.value = 6;
-      this.compressor.ratio.value = 8;
-      this.compressor.attack.value = 0.003;
-      this.compressor.release.value = 0.16;
+      this.compressor.threshold.value = -18;
+      this.compressor.knee.value = 10;
+      this.compressor.ratio.value = 3.5;
+      this.compressor.attack.value = 0.005;
+      this.compressor.release.value = 0.2;
+
+      this.limiter = this.ctx.createDynamicsCompressor();
+      this.limiter.threshold.value = -1.8;
+      this.limiter.knee.value = 0.5;
+      this.limiter.ratio.value = 20;
+      this.limiter.attack.value = 0.001;
+      this.limiter.release.value = 0.1;
+
       this.buses.rifle = this.ctx.createGain();
       this.buses.tank = this.ctx.createGain();
       this.buses.fx = this.ctx.createGain();
-      this.buses.rifle.gain.value = 0.9;
-      this.buses.tank.gain.value = 1;
-      this.buses.fx.gain.value = 0.95;
-      this.buses.rifle.connect(this.master);
+      this.buses.rifle.gain.value = this.rifleRest;
+      this.buses.tank.gain.value = 1.55;
+      this.buses.fx.gain.value = 0.9;
+      // Small-arms share a compressor; tank boom skips it so it stays on top.
+      this.buses.rifle.connect(this.compressor);
+      this.buses.fx.connect(this.compressor);
+      this.compressor.connect(this.master);
       this.buses.tank.connect(this.master);
-      this.buses.fx.connect(this.master);
-      this.master.connect(this.compressor);
-      this.compressor.connect(this.ctx.destination);
+      this.master.connect(this.limiter);
+      this.limiter.connect(this.ctx.destination);
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
     return true;
@@ -480,18 +494,19 @@ const Sfx = {
     return this.buses[name] || this.master;
   },
 
-  /** Tank report ducks small-arms so the gun actually reads as louder. */
-  duckRifles(seconds = 0.7) {
+  /** Cannon blast buries small-arms the way a real 120 mm does. */
+  duckRifles(seconds = 1.35) {
     const bus = this.buses.rifle;
     if (!bus || !this.ctx) return;
     const t0 = this.ctx.currentTime;
     const g = bus.gain;
+    const rest = this.rifleRest;
     try {
       g.cancelScheduledValues(t0);
-      g.setValueAtTime(Math.max(0.08, g.value), t0);
-      g.linearRampToValueAtTime(0.1, t0 + 0.018);
-      g.setValueAtTime(0.1, t0 + seconds * 0.4);
-      g.linearRampToValueAtTime(0.9, t0 + seconds);
+      g.setValueAtTime(Math.max(0.03, g.value), t0);
+      g.linearRampToValueAtTime(0.03, t0 + 0.012);
+      g.setValueAtTime(0.03, t0 + seconds * 0.45);
+      g.linearRampToValueAtTime(rest, t0 + seconds);
     } catch {
       // ignore
     }
@@ -508,14 +523,14 @@ const Sfx = {
    * 0 = inaudible, 1 = full. Natural falloff: loud nearby, quiet mid-range, mute far.
    */
   volumeAt(worldX, worldY, range) {
-    const { ref, max } = range || this.ranges.rifle;
+    const spec = range || this.ranges.rifle;
+    const { ref, max } = spec;
     const ear = this.listenerXZ();
     const d = Math.hypot(worldX - ear.x, worldY - ear.z);
     if (!(d < max)) return 0;
     if (d <= ref) return 1;
     const t = (d - ref) / (max - ref);
-    // Curve steepens with distance (closer to inverse-square feel without harshness).
-    return Math.pow(1 - t, 1.85);
+    return Math.pow(1 - t, spec.exp || 1.85);
   },
 
   noiseBuffer(seconds = 0.2) {
@@ -584,7 +599,7 @@ const Sfx = {
     const t0 = this.ctx.currentTime;
     const jitter = Math.random();
     const bus = this.dest("rifle");
-    const loud = vol * 3;
+    const loud = vol * 3.2;
 
     // 1) Low-end powder thump (body of the report)
     this.noiseBurst(0.09, 0.34, 140 + jitter * 40, "lowpass", loud, 0.55, bus);
@@ -629,37 +644,45 @@ const Sfx = {
     if (vol <= 0.002) return;
     const t0 = this.ctx.currentTime;
     const bus = this.dest("tank");
-    // HE pressure wave: much louder than small-arms, heard farther.
-    const boom = Math.min(1.35, Math.pow(Math.max(vol, 0.02), 0.42) * 1.45) * 3.4;
-    this.duckRifles(0.75);
+    // 120 mm class: chest-thump bass carries; small-arms stay underneath.
+    const boom = Math.min(1.7, Math.pow(Math.max(vol, 0.015), 0.32) * 1.85) * 5.2;
+    this.duckRifles(1.4);
 
-    // Sub pressure + HE crack (not a toy beep).
-    this.noiseBurst(0.62, 0.72, 70, "lowpass", boom, 0.4, bus);
-    this.noiseBurst(0.32, 0.55, 220, "lowpass", boom, 0.65, bus);
-    this.noiseBurst(0.16, 0.42, 780, "bandpass", boom * 0.95, 1.0, bus);
-    this.noiseBurst(0.08, 0.28, 1800, "highpass", boom * 0.55, 0.7, bus);
-    this.tone(32, 0.85, "sine", 0.55, 16, boom, bus);
-    this.tone(54, 0.7, "sine", 0.42, 20, boom, bus);
-    this.tone(88, 0.42, "triangle", 0.28, 26, boom, bus);
-    this.tone(170, 0.14, "sawtooth", 0.12, 48, boom * 0.75, bus);
+    // 1) Infrasonic pressure (felt more than heard)
+    this.tone(19, 1.15, "sine", 0.72, 11, boom, bus);
+    this.tone(28, 1.05, "sine", 0.62, 14, boom, bus);
+    this.tone(41, 0.95, "sine", 0.5, 16, boom, bus);
 
-    // Delayed shock roll
-    const src = this.ctx.createBufferSource();
-    src.buffer = this.noiseBuffer(0.55);
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = "lowpass";
-    filt.frequency.value = 140;
-    const g = this.ctx.createGain();
-    const peak = 0.38 * boom;
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.setValueAtTime(0.0001, t0 + 0.06);
-    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.1);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.72);
-    src.connect(filt);
-    filt.connect(g);
-    g.connect(bus);
-    src.start(t0 + 0.06);
-    src.stop(t0 + 0.78);
+    // 2) Muzzle blast + HE crack
+    this.noiseBurst(0.85, 0.95, 55, "lowpass", boom, 0.35, bus);
+    this.noiseBurst(0.45, 0.72, 160, "lowpass", boom, 0.5, bus);
+    this.noiseBurst(0.18, 0.58, 520, "bandpass", boom, 0.9, bus);
+    this.noiseBurst(0.07, 0.4, 1400, "highpass", boom * 0.7, 0.65, bus);
+    this.tone(62, 0.55, "triangle", 0.38, 22, boom, bus);
+    this.tone(110, 0.22, "sawtooth", 0.16, 36, boom * 0.8, bus);
+
+    // 3) Shock roll + distant slap
+    const roll = (delay, dur, freq, gain) => {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer(dur);
+      const filt = this.ctx.createBiquadFilter();
+      filt.type = "lowpass";
+      filt.frequency.value = freq;
+      const g = this.ctx.createGain();
+      const peak = gain * boom;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.setValueAtTime(0.0001, t0 + delay);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + delay + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + dur);
+      src.connect(filt);
+      filt.connect(g);
+      g.connect(bus);
+      src.start(t0 + delay);
+      src.stop(t0 + delay + dur + 0.02);
+    };
+    roll(0.05, 0.9, 110, 0.55);
+    roll(0.22, 0.7, 80, 0.32);
+    roll(0.48, 0.55, 60, 0.18);
   },
 
   setEngine(id, x, y, throttle) {
@@ -750,7 +773,7 @@ const Sfx = {
     filt.frequency.value = 420;
     const vol = this.volumeAt(x, y, this.ranges.build);
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.11 * vol), t0 + 0.3);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.32 * vol), t0 + 0.3);
     lfo.connect(lfoGain);
     lfoGain.connect(osc.frequency);
     osc.connect(filt);
@@ -766,7 +789,7 @@ const Sfx = {
       this.noiseBurst(0.03, 0.04, 1800, "bandpass", v * 3, 0.7, this.dest("fx"));
       this.tone(240 + Math.random() * 80, 0.04, "triangle", 0.025, 90, v * 3, this.dest("fx"));
     }, 480 + Math.random() * 220);
-    this.builds.set(id, { osc, lfo, g, tick, x, y, baseGain: 0.11 });
+    this.builds.set(id, { osc, lfo, g, tick, x, y, baseGain: 0.32 });
   },
 
   stopBuild(id) {
@@ -803,7 +826,7 @@ const Sfx = {
     for (const node of this.engines.values()) {
       const vol = this.volumeAt(node.x, node.y, this.ranges.tank);
       const th = node.throttle || 0;
-      const target = Math.max(0.0001, vol * (0.09 + th * 0.34));
+      const target = Math.max(0.0001, vol * (0.28 + th * 0.95));
       try {
         node.g.gain.setTargetAtTime(target, t0, 0.12);
         node.osc.frequency.setTargetAtTime(36 + th * 32, t0, 0.15);
@@ -873,8 +896,8 @@ function playShots(shots) {
     const k = String(kind);
     if (!k.includes("tank") && !k.includes("missile")) {
       rifles += 1;
-      // Don't let a 50-man volley bury the cannon in the same frame.
-      if (rifles > 5) continue;
+      // A volley must never bury the cannon in the same frame.
+      if (rifles > 3) continue;
     }
     Sfx.shot(kind, shot.x0, shot.y0);
   }
