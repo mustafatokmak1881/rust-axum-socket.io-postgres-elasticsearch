@@ -1126,7 +1126,10 @@ function playShots(shots) {
     }
     const isCannon = k.includes("tank") && !k.includes("mg");
     const isHeavy =
-      k.includes("missile") || k.includes("mortar") || k.includes("patriot");
+      k.includes("missile") ||
+      k.includes("mortar") ||
+      k.includes("patriot") ||
+      k.includes("bunker");
     if (!isCannon && !isHeavy) {
       rifles += 1;
       if (rifles > 4) continue;
@@ -4060,6 +4063,17 @@ function upsertMesh(entity) {
     mesh = null;
   }
 
+  if (
+    mesh &&
+    entity.kind === "bunker" &&
+    (!mesh.userData.isBunker || (mesh.userData.bunkerRigVersion || 0) < 1)
+  ) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
   // Refit buildings after scale pass.
   if (
     mesh &&
@@ -4134,7 +4148,7 @@ function upsertMesh(entity) {
 
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
-    if (mesh.userData.isPatriot) {
+    if (mesh.userData.isPatriot || mesh.userData.isBunker) {
       mesh.userData.aimAt = entity.aim_at || null;
       if (entity.aim_yaw != null && Number.isFinite(entity.aim_yaw)) {
         mesh.userData.aimYawTarget = entity.aim_yaw;
@@ -4230,6 +4244,11 @@ function faceMeshToward(mesh, x1, z1) {
   const yaw = Math.atan2(dx, dz);
   if (mesh.userData.isPatriot) {
     // Soft target only — smoothPatriotFacing slews the tubes.
+    mesh.userData.aimYawTarget = yaw;
+    mesh.userData.aimAt = mesh.userData.aimAt || "shot";
+    return;
+  }
+  if (mesh.userData.isBunker) {
     mesh.userData.aimYawTarget = yaw;
     mesh.userData.aimAt = mesh.userData.aimAt || "shot";
     return;
@@ -4386,7 +4405,7 @@ function updateTankDrive(mesh, dt) {
 }
 
 function smoothPatriotFacing(mesh, dt) {
-  if (!mesh?.userData?.isPatriot) return;
+  if (!mesh?.userData?.isPatriot && !mesh?.userData?.isBunker) return;
   const launcher = mesh.getObjectByName("muzzleRoot");
   const radar = mesh.getObjectByName("radarRoot");
   const rate = mesh.userData.turretTurnRate || 0.95;
@@ -4574,11 +4593,13 @@ function spawnShotFx(shot) {
   const toMesh = state.meshes.get(shot.to);
   const didHit = shot.hit !== false;
   const kind = String(shot.kind || fromMesh?.userData?.kind || "");
-  const isTankMg = kind.includes("mg");
-  const isTankCannon = kind.includes("tank") && !isTankMg;
+  const isTankMg = kind.includes("mg") && !!fromMesh?.userData?.isTank;
+  const isBunkerMg = kind.includes("bunker");
+  const isTankCannon = kind.includes("tank") && !kind.includes("mg");
   const isMortar = kind.includes("mortar");
   const isMissile =
     !isMortar &&
+    !isBunkerMg &&
     (kind.includes("missile") || kind.includes("patriot") || kind === "turret");
 
   if (isTankMg && fromMesh) {
@@ -4592,8 +4613,11 @@ function spawnShotFx(shot) {
   }
 
   const start = fromMesh
-    ? worldMuzzlePoint(fromMesh, isTankMg ? "mgMuzzle" : "muzzle")
-    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : 0.12, shot.y0);
+    ? worldMuzzlePoint(
+        fromMesh,
+        isTankMg && fromMesh.getObjectByName("mgMuzzle") ? "mgMuzzle" : "muzzle",
+      )
+    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : isBunkerMg ? 0.38 : 0.12, shot.y0);
   // Always use server impact point so misses fly wide of the mesh.
   const endY = didHit
     ? (toMesh?.userData?.unitHeight || (toMesh?.userData?.building ? 0.6 : 0.12) || 0.12) * 0.55
@@ -5241,7 +5265,7 @@ function animate() {
     } else if (mesh.userData.corpse) {
       if (now - (mesh.userData.corpseAt || 0) > 900) reap.push(mesh);
     } else {
-      if (mesh.userData.isPatriot) smoothPatriotFacing(mesh, dt);
+      if (mesh.userData.isPatriot || mesh.userData.isBunker) smoothPatriotFacing(mesh, dt);
       else smoothUnitFacing(mesh, dt);
       updateTankDrive(mesh, dt);
       updateInfantryDrive(mesh, dt);
