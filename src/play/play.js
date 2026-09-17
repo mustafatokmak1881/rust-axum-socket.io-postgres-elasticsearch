@@ -801,22 +801,18 @@ const Sfx = {
       const t0 = this.ctx.currentTime;
       node.g.gain.cancelScheduledValues(t0);
       node.g.gain.setValueAtTime(Math.max(0.0001, node.g.gain.value), t0);
-      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
-      node.src?.stop(t0 + 0.28);
+      node.g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.08);
+      node.src?.stop(t0 + 0.09);
       node.src = null;
     } catch {
       // ignore
     }
-    setTimeout(() => {
-      const cur = this.engines.get(id);
-      if (cur !== node) return;
-      this.engines.delete(id);
-      try {
-        node.g.disconnect();
-      } catch {
-        // ignore
-      }
-    }, 320);
+    try {
+      node.g.disconnect();
+    } catch {
+      // ignore
+    }
+    this.engines.delete(id);
   },
 
   missile(x, y) {
@@ -3444,6 +3440,9 @@ function updateTankDrive(mesh, dt) {
   if (!mesh?.userData?.isTank || mesh.userData.knock) return;
   const id = mesh.userData.id;
   if (mesh.userData.destX == null) {
+    mesh.userData.velX = 0;
+    mesh.userData.velZ = 0;
+    mesh.userData.moving = false;
     Sfx.stopEngine(id);
     return;
   }
@@ -3451,6 +3450,21 @@ function updateTankDrive(mesh, dt) {
   const beforeZ = mesh.position.z;
   slideToward(mesh, dt);
   const step = Math.hypot(mesh.position.x - beforeX, mesh.position.z - beforeZ);
+  const now = performance.now();
+  if (step < 0.00035) {
+    mesh.userData.stillFrames = (mesh.userData.stillFrames || 0) + 1;
+  } else {
+    mesh.userData.stillFrames = 0;
+    mesh.userData.engineHeardAt = now;
+  }
+  if (mesh.userData.stillFrames > 6) {
+    mesh.userData.velX = 0;
+    mesh.userData.velZ = 0;
+    mesh.userData.moving = false;
+    Sfx.stopEngine(id);
+    return;
+  }
+
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
   if (speed > 0.04) {
     mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
@@ -3461,10 +3475,9 @@ function updateTankDrive(mesh, dt) {
         if (obj.userData?.roadWheel) obj.rotation.x += spin;
       });
     }
-  } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 200) {
-    mesh.userData.moving = false;
   }
-  if (mesh.userData.moving && speed > 0.05) {
+
+  if (now - (mesh.userData.engineHeardAt || 0) < 90) {
     Sfx.setEngine(id, mesh.position.x, mesh.position.z, Math.min(1, 0.45 + speed));
   } else {
     Sfx.stopEngine(id);
