@@ -432,17 +432,19 @@ function syncBuildingSfx(prev, entity) {
 const Sfx = {
   ctx: null,
   master: null,
+  compressor: null,
+  buses: { rifle: null, tank: null, fx: null },
   builds: new Map(),
   engines: new Map(),
-  lastShotAt: 0,
+  lastRifleAt: 0,
   // World-units: full volume inside ref, silent past max. Camera look-at is listener.
   ranges: {
-    rifle: { ref: 5, max: 22 },
-    tank: { ref: 14, max: 72 },
-    missile: { ref: 6, max: 30 },
-    build: { ref: 4, max: 18 },
-    collapse: { ref: 6, max: 36 },
-    complete: { ref: 4, max: 22 },
+    rifle: { ref: 6, max: 28 },
+    tank: { ref: 24, max: 120 },
+    missile: { ref: 8, max: 42 },
+    build: { ref: 5, max: 22 },
+    collapse: { ref: 8, max: 48 },
+    complete: { ref: 5, max: 26 },
   },
 
   ensure() {
@@ -451,11 +453,48 @@ const Sfx = {
       if (!AC) return false;
       this.ctx = new AC();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.42;
-      this.master.connect(this.ctx.destination);
+      this.master.gain.value = 1;
+      this.compressor = this.ctx.createDynamicsCompressor();
+      this.compressor.threshold.value = -10;
+      this.compressor.knee.value = 6;
+      this.compressor.ratio.value = 8;
+      this.compressor.attack.value = 0.003;
+      this.compressor.release.value = 0.16;
+      this.buses.rifle = this.ctx.createGain();
+      this.buses.tank = this.ctx.createGain();
+      this.buses.fx = this.ctx.createGain();
+      this.buses.rifle.gain.value = 0.9;
+      this.buses.tank.gain.value = 1;
+      this.buses.fx.gain.value = 0.95;
+      this.buses.rifle.connect(this.master);
+      this.buses.tank.connect(this.master);
+      this.buses.fx.connect(this.master);
+      this.master.connect(this.compressor);
+      this.compressor.connect(this.ctx.destination);
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
     return true;
+  },
+
+  dest(name) {
+    return this.buses[name] || this.master;
+  },
+
+  /** Tank report ducks small-arms so the gun actually reads as louder. */
+  duckRifles(seconds = 0.7) {
+    const bus = this.buses.rifle;
+    if (!bus || !this.ctx) return;
+    const t0 = this.ctx.currentTime;
+    const g = bus.gain;
+    try {
+      g.cancelScheduledValues(t0);
+      g.setValueAtTime(Math.max(0.08, g.value), t0);
+      g.linearRampToValueAtTime(0.1, t0 + 0.018);
+      g.setValueAtTime(0.1, t0 + seconds * 0.4);
+      g.linearRampToValueAtTime(0.9, t0 + seconds);
+    } catch {
+      // ignore
+    }
   },
 
   /** Listener = where the camera is looking on the ground (RTS "ear"). */
@@ -487,7 +526,7 @@ const Sfx = {
     return buf;
   },
 
-  tone(freq, dur, type = "square", gain = 0.08, freqEnd = null, vol = 1) {
+  tone(freq, dur, type = "square", gain = 0.08, freqEnd = null, vol = 1, dest = null) {
     if (!this.ensure() || vol <= 0.004) return;
     const t0 = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
@@ -500,7 +539,7 @@ const Sfx = {
     g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     osc.connect(g);
-    g.connect(this.master);
+    g.connect(dest || this.master);
     osc.start(t0);
     osc.stop(t0 + dur + 0.02);
   },
@@ -508,7 +547,7 @@ const Sfx = {
   /**
    * Filtered noise with optional Q / attack — used for realistic gun layers.
    */
-  noiseBurst(dur, gain = 0.12, filterFreq = 2500, filterType = "bandpass", vol = 1, q = 0.7) {
+  noiseBurst(dur, gain = 0.12, filterFreq = 2500, filterType = "bandpass", vol = 1, q = 0.7, dest = null) {
     if (!this.ensure() || vol <= 0.004) return;
     const t0 = this.ctx.currentTime;
     const src = this.ctx.createBufferSource();
@@ -524,7 +563,7 @@ const Sfx = {
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     src.connect(filt);
     filt.connect(g);
-    g.connect(this.master);
+    g.connect(dest || this.master);
     src.start(t0);
     src.stop(t0 + dur + 0.02);
   },
@@ -539,27 +578,29 @@ const Sfx = {
     if (vol <= 0.004) return;
     const now = performance.now();
     // ~AK cyclic rate spacing when many fire; still allows multi-unit volleys.
-    if (now - this.lastShotAt < 42) return;
-    this.lastShotAt = now;
+    if (now - this.lastRifleAt < 48) return;
+    this.lastRifleAt = now;
 
     const t0 = this.ctx.currentTime;
     const jitter = Math.random();
+    const bus = this.dest("rifle");
+    const loud = vol * 3;
 
     // 1) Low-end powder thump (body of the report)
-    this.noiseBurst(0.09, 0.34, 140 + jitter * 40, "lowpass", vol, 0.55);
-    this.tone(78 + jitter * 18, 0.07, "sine", 0.2, 42, vol * 0.95);
-    this.tone(52 + jitter * 10, 0.1, "triangle", 0.12, 28, vol * 0.85);
+    this.noiseBurst(0.09, 0.34, 140 + jitter * 40, "lowpass", loud, 0.55, bus);
+    this.tone(78 + jitter * 18, 0.07, "sine", 0.2, 42, loud * 0.95, bus);
+    this.tone(52 + jitter * 10, 0.1, "triangle", 0.12, 28, loud * 0.85, bus);
 
     // 2) Mid crack — the recognizable “AK bark”
-    this.noiseBurst(0.055, 0.28, 900 + jitter * 200, "bandpass", vol, 1.1);
-    this.noiseBurst(0.035, 0.18, 1600 + jitter * 300, "bandpass", vol, 1.4);
+    this.noiseBurst(0.055, 0.28, 900 + jitter * 200, "bandpass", loud, 1.1, bus);
+    this.noiseBurst(0.035, 0.18, 1600 + jitter * 300, "bandpass", loud, 1.4, bus);
 
     // 3) Sharp transient snap (not a beep — short filtered noise)
-    this.noiseBurst(0.018, 0.22, 2800 + jitter * 400, "highpass", vol * 0.9, 0.8);
+    this.noiseBurst(0.018, 0.22, 2800 + jitter * 400, "highpass", loud * 0.9, 0.8, bus);
 
     // 4) Mechanical bolt / carrier clack
-    this.tone(190 + jitter * 40, 0.025, "triangle", 0.045, 90, vol * 0.7);
-    this.noiseBurst(0.022, 0.08, 420, "bandpass", vol * 0.75, 2.2);
+    this.tone(190 + jitter * 40, 0.025, "triangle", 0.045, 90, loud * 0.7, bus);
+    this.noiseBurst(0.022, 0.08, 420, "bandpass", loud * 0.75, 2.2, bus);
 
     // 5) Short metallic ring tail (receiver / muzzle)
     const ring = this.ctx.createOscillator();
@@ -571,13 +612,13 @@ const Sfx = {
     ringF.type = "bandpass";
     ringF.frequency.value = 700;
     ringF.Q.value = 3.5;
-    const ringPeak = 0.035 * vol;
+    const ringPeak = 0.035 * loud;
     ringG.gain.setValueAtTime(0.0001, t0);
     ringG.gain.exponentialRampToValueAtTime(Math.max(0.0001, ringPeak), t0 + 0.004);
     ringG.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
     ring.connect(ringF);
     ringF.connect(ringG);
-    ringG.connect(this.master);
+    ringG.connect(bus);
     ring.start(t0);
     ring.stop(t0 + 0.1);
   },
@@ -585,35 +626,40 @@ const Sfx = {
   tankCannon(x, y) {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.tank);
-    if (vol <= 0.003) return;
+    if (vol <= 0.002) return;
     const t0 = this.ctx.currentTime;
-    const boom = Math.min(1, Math.pow(Math.max(vol, 0.02), 0.52) * 1.2);
+    const bus = this.dest("tank");
+    // HE pressure wave: much louder than small-arms, heard farther.
+    const boom = Math.min(1.35, Math.pow(Math.max(vol, 0.02), 0.42) * 1.45) * 3.4;
+    this.duckRifles(0.75);
 
     // Sub pressure + HE crack (not a toy beep).
-    this.noiseBurst(0.42, 0.48, 90, "lowpass", boom, 0.45);
-    this.noiseBurst(0.18, 0.36, 320, "lowpass", boom, 0.7);
-    this.noiseBurst(0.1, 0.28, 1100, "bandpass", boom * 0.9, 1.1);
-    this.tone(48, 0.55, "sine", 0.32, 22, boom);
-    this.tone(78, 0.38, "triangle", 0.2, 28, boom);
-    this.tone(160, 0.12, "sawtooth", 0.08, 55, boom * 0.7);
+    this.noiseBurst(0.62, 0.72, 70, "lowpass", boom, 0.4, bus);
+    this.noiseBurst(0.32, 0.55, 220, "lowpass", boom, 0.65, bus);
+    this.noiseBurst(0.16, 0.42, 780, "bandpass", boom * 0.95, 1.0, bus);
+    this.noiseBurst(0.08, 0.28, 1800, "highpass", boom * 0.55, 0.7, bus);
+    this.tone(32, 0.85, "sine", 0.55, 16, boom, bus);
+    this.tone(54, 0.7, "sine", 0.42, 20, boom, bus);
+    this.tone(88, 0.42, "triangle", 0.28, 26, boom, bus);
+    this.tone(170, 0.14, "sawtooth", 0.12, 48, boom * 0.75, bus);
 
     // Delayed shock roll
     const src = this.ctx.createBufferSource();
-    src.buffer = this.noiseBuffer(0.35);
+    src.buffer = this.noiseBuffer(0.55);
     const filt = this.ctx.createBiquadFilter();
     filt.type = "lowpass";
-    filt.frequency.value = 160;
+    filt.frequency.value = 140;
     const g = this.ctx.createGain();
-    const peak = 0.16 * boom;
+    const peak = 0.38 * boom;
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.setValueAtTime(0.0001, t0 + 0.08);
+    g.gain.setValueAtTime(0.0001, t0 + 0.06);
     g.gain.exponentialRampToValueAtTime(Math.max(0.0001, peak), t0 + 0.1);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.48);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.72);
     src.connect(filt);
     filt.connect(g);
-    g.connect(this.master);
-    src.start(t0 + 0.08);
-    src.stop(t0 + 0.52);
+    g.connect(bus);
+    src.start(t0 + 0.06);
+    src.stop(t0 + 0.78);
   },
 
   setEngine(id, x, y, throttle) {
@@ -642,7 +688,7 @@ const Sfx = {
       osc.connect(filt);
       osc2.connect(filt);
       filt.connect(g);
-      g.connect(this.master);
+      g.connect(this.dest("fx"));
       osc.start();
       osc2.start();
       lfo.start();
@@ -675,8 +721,10 @@ const Sfx = {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.missile);
     if (vol <= 0.004) return;
-    this.noiseBurst(0.2, 0.14, 1100, "bandpass", vol);
-    this.tone(520, 0.25, "sawtooth", 0.07, 180, vol);
+    const bus = this.dest("fx");
+    const loud = vol * 3;
+    this.noiseBurst(0.2, 0.14, 1100, "bandpass", loud, 0.7, bus);
+    this.tone(520, 0.25, "sawtooth", 0.07, 180, loud, bus);
   },
 
   startBuild(id, x, y) {
@@ -702,12 +750,12 @@ const Sfx = {
     filt.frequency.value = 420;
     const vol = this.volumeAt(x, y, this.ranges.build);
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.035 * vol), t0 + 0.3);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.11 * vol), t0 + 0.3);
     lfo.connect(lfoGain);
     lfoGain.connect(osc.frequency);
     osc.connect(filt);
     filt.connect(g);
-    g.connect(this.master);
+    g.connect(this.dest("fx"));
     osc.start();
     lfo.start();
     const tick = setInterval(() => {
@@ -715,10 +763,10 @@ const Sfx = {
       if (!node) return;
       const v = this.volumeAt(node.x, node.y, this.ranges.build);
       if (v <= 0.004) return;
-      this.noiseBurst(0.03, 0.04, 1800, "bandpass", v);
-      this.tone(240 + Math.random() * 80, 0.04, "triangle", 0.025, 90, v);
+      this.noiseBurst(0.03, 0.04, 1800, "bandpass", v * 3, 0.7, this.dest("fx"));
+      this.tone(240 + Math.random() * 80, 0.04, "triangle", 0.025, 90, v * 3, this.dest("fx"));
     }, 480 + Math.random() * 220);
-    this.builds.set(id, { osc, lfo, g, tick, x, y, baseGain: 0.035 });
+    this.builds.set(id, { osc, lfo, g, tick, x, y, baseGain: 0.11 });
   },
 
   stopBuild(id) {
@@ -744,7 +792,7 @@ const Sfx = {
     const t0 = this.ctx.currentTime;
     for (const node of this.builds.values()) {
       const vol = this.volumeAt(node.x, node.y, this.ranges.build);
-      const target = Math.max(0.0001, (node.baseGain || 0.035) * vol);
+      const target = Math.max(0.0001, (node.baseGain || 0.11) * vol);
       try {
         node.g.gain.cancelScheduledValues(t0);
         node.g.gain.setTargetAtTime(target, t0, 0.08);
@@ -755,7 +803,7 @@ const Sfx = {
     for (const node of this.engines.values()) {
       const vol = this.volumeAt(node.x, node.y, this.ranges.tank);
       const th = node.throttle || 0;
-      const target = Math.max(0.0001, vol * (0.028 + th * 0.11));
+      const target = Math.max(0.0001, vol * (0.09 + th * 0.34));
       try {
         node.g.gain.setTargetAtTime(target, t0, 0.12);
         node.osc.frequency.setTargetAtTime(36 + th * 32, t0, 0.15);
@@ -771,21 +819,25 @@ const Sfx = {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.complete);
     if (vol <= 0.004) return;
-    this.tone(320, 0.12, "triangle", 0.06, 520, vol);
-    this.tone(480, 0.16, "sine", 0.05, 640, vol);
-    this.noiseBurst(0.08, 0.05, 2000, "highpass", vol);
+    const bus = this.dest("fx");
+    const loud = vol * 3;
+    this.tone(320, 0.12, "triangle", 0.06, 520, loud, bus);
+    this.tone(480, 0.16, "sine", 0.05, 640, loud, bus);
+    this.noiseBurst(0.08, 0.05, 2000, "highpass", loud, 0.7, bus);
   },
 
   buildingCollapse(x, y) {
     if (!this.ensure()) return;
     const vol = this.volumeAt(x, y, this.ranges.collapse);
     if (vol <= 0.004) return;
-    this.noiseBurst(0.55, 0.32, 220, "lowpass", vol);
-    this.noiseBurst(0.35, 0.2, 700, "bandpass", vol);
-    this.tone(140, 0.5, "sawtooth", 0.1, 40, vol);
-    this.tone(70, 0.6, "sine", 0.12, 28, vol);
-    setTimeout(() => this.noiseBurst(0.25, 0.12, 400, "lowpass", this.volumeAt(x, y, this.ranges.collapse) * 0.7), 120);
-    setTimeout(() => this.noiseBurst(0.2, 0.08, 900, "bandpass", this.volumeAt(x, y, this.ranges.collapse) * 0.5), 220);
+    const bus = this.dest("fx");
+    const loud = vol * 3;
+    this.noiseBurst(0.55, 0.32, 220, "lowpass", loud, 0.7, bus);
+    this.noiseBurst(0.35, 0.2, 700, "bandpass", loud, 0.7, bus);
+    this.tone(140, 0.5, "sawtooth", 0.1, 40, loud, bus);
+    this.tone(70, 0.6, "sine", 0.12, 28, loud, bus);
+    setTimeout(() => this.noiseBurst(0.25, 0.12, 400, "lowpass", this.volumeAt(x, y, this.ranges.collapse) * 2.1, 0.7, this.dest("fx")), 120);
+    setTimeout(() => this.noiseBurst(0.2, 0.08, 900, "bandpass", this.volumeAt(x, y, this.ranges.collapse) * 1.5, 0.7, this.dest("fx")), 220);
   },
 
   shot(kind, x, y) {
@@ -796,14 +848,34 @@ const Sfx = {
   },
 };
 
+function shotKindOf(shot) {
+  const fromMesh = state.meshes.get(shot.from);
+  return (
+    shot.kind ||
+    (fromMesh?.userData?.isTank ? "tank" : fromMesh?.userData?.kind) ||
+    ""
+  );
+}
+
 function playShots(shots) {
-  for (const shot of shots || []) {
+  const list = [...(shots || [])];
+  const rank = (kind) => {
+    const k = String(kind || "");
+    if (k.includes("tank")) return 0;
+    if (k.includes("missile")) return 1;
+    return 2;
+  };
+  list.sort((a, b) => rank(shotKindOf(a)) - rank(shotKindOf(b)));
+  let rifles = 0;
+  for (const shot of list) {
     spawnShotFx(shot);
-    const fromMesh = state.meshes.get(shot.from);
-    const kind =
-      shot.kind ||
-      (fromMesh?.userData?.isTank ? "tank" : fromMesh?.userData?.kind) ||
-      "";
+    const kind = shotKindOf(shot);
+    const k = String(kind);
+    if (!k.includes("tank") && !k.includes("missile")) {
+      rifles += 1;
+      // Don't let a 50-man volley bury the cannon in the same frame.
+      if (rifles > 5) continue;
+    }
     Sfx.shot(kind, shot.x0, shot.y0);
   }
 }
