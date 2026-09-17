@@ -280,6 +280,7 @@ async function setupMatchScene(snapshot) {
   loadExploredFromSnapshot(snapshot);
   rebuildMeshes();
   refreshLiveVision();
+  startVisionLoop();
 }
 
 function findOwnHome(snapshot) {
@@ -938,7 +939,7 @@ const Radar = {
       this.timer = setInterval(() => {
         if (!state.match || $("#match-screen")?.hidden) return;
         this.draw(performance.now());
-      }, 130);
+      }, 200);
     }
     if (this.bound) return;
     this.bound = true;
@@ -1476,7 +1477,6 @@ function applyExploredNew(indices) {
   for (const idx of indices) {
     if (idx >= 0 && idx < fogExploredData.length) fogExploredData[idx] = 255;
   }
-  if (fogDataTexture) fogDataTexture.needsUpdate = true;
 }
 
 function stampVisionCircle(data, size, cx, cy, radius) {
@@ -1499,10 +1499,18 @@ function stampVisionCircle(data, size, cx, cy, radius) {
 
 let lastVisionAt = 0;
 
+function startVisionLoop() {
+  if (startVisionLoop.timer) return;
+  startVisionLoop.timer = setInterval(() => {
+    if (!state.match || $("#match-screen")?.hidden) return;
+    refreshLiveVision();
+  }, 320);
+}
+
 function refreshLiveVision() {
   if (!fogVisionData || !fogExploredData || !fogDataTexture) return;
   const now = performance.now();
-  if (now - lastVisionAt < 250) return;
+  if (now - lastVisionAt < 280) return;
   lastVisionAt = now;
 
   fogVisionData.fill(0);
@@ -1682,8 +1690,8 @@ function initThree(size, terrainTexture, home) {
     controls?.dispose();
   }
 
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 
   scene = new THREE.Scene();
@@ -3136,9 +3144,19 @@ function upsertMesh(entity) {
     mesh.userData.wantProne = !!entity.prone;
   }
 
+  if (mesh.userData.building) {
+    mesh.position.set(entity.x, 0, entity.y);
+  } else if (mesh.userData.isUnitRig) {
+    applyUnitMotion(mesh, entity);
+    if (mesh.userData.lastTint !== colors[0]) {
+      tintUnitMesh(mesh, colors);
+      mesh.userData.lastTint = colors[0];
+    }
+  } else {
+    mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
+  }
+
   const syncKey = [
-    entity.x.toFixed(2),
-    entity.y.toFixed(2),
     Math.round(entity.hp || 0),
     entity.progress == null ? "-" : Math.round(entity.progress * 100),
     entity.train_progress == null ? "-" : Math.round(entity.train_progress * 100),
@@ -3146,44 +3164,6 @@ function upsertMesh(entity) {
   ].join("|");
   if (mesh.userData.syncKey === syncKey) return;
   mesh.userData.syncKey = syncKey;
-
-  if (mesh.userData.building) {
-    mesh.position.set(entity.x, 0, entity.y);
-  } else if (mesh.userData.isUnitRig) {
-    const prevX = mesh.userData.lastX;
-    const prevZ = mesh.userData.lastZ;
-    if (mesh.userData.knock) {
-      mesh.userData.knock.originX = entity.x;
-      mesh.userData.knock.originZ = entity.y;
-    } else if (mesh.userData.isTank) {
-      mesh.userData.destX = entity.x;
-      mesh.userData.destZ = entity.y;
-      if (prevX == null) mesh.position.set(entity.x, 0, entity.y);
-    } else {
-      mesh.userData.destX = entity.x;
-      mesh.userData.destZ = entity.y;
-      if (prevX == null) mesh.position.set(entity.x, 0, entity.y);
-    }
-    if (mesh.userData.lastTint !== colors[0]) {
-      tintUnitMesh(mesh, colors);
-      mesh.userData.lastTint = colors[0];
-    }
-    if (prevX != null && prevZ != null) {
-      const dx = entity.x - prevX;
-      const dz = entity.y - prevZ;
-      const dist = Math.hypot(dx, dz);
-      if (dist > 0.008 && !mesh.userData.knock) {
-        mesh.userData.moving = true;
-        mesh.userData.faceYaw = Math.atan2(dx, dz);
-        mesh.userData.moveSeenAt = performance.now();
-        mesh.userData.lastMoveDist = dist;
-      }
-    }
-    mesh.userData.lastX = entity.x;
-    mesh.userData.lastZ = entity.y;
-  } else {
-    mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
-  }
 
   const constructing = entity.progress != null && entity.progress < 1;
   const opacity = constructing ? 0.55 : 1;
@@ -3271,40 +3251,93 @@ function shortestAngle(from, to) {
   return diff;
 }
 
+function applyUnitMotion(mesh, entity) {
+  if (mesh.userData.knock) {
+    mesh.userData.knock.originX = entity.x;
+    mesh.userData.knock.originZ = entity.y;
+    return;
+  }
+  const now = performance.now();
+  const prevX = mesh.userData.lastX;
+  const prevZ = mesh.userData.lastZ;
+  const prevAt = mesh.userData.snapAt;
+  if (prevX == null || prevZ == null) {
+    mesh.position.set(entity.x, mesh.position.y, entity.y);
+    mesh.userData.velX = 0;
+    mesh.userData.velZ = 0;
+  } else if (prevAt) {
+    const dtNet = Math.max(0.05, Math.min(0.28, (now - prevAt) / 1000));
+    const dx = entity.x - prevX;
+    const dz = entity.y - prevZ;
+    const dist = Math.hypot(dx, dz);
+    if (dist > 0.004) {
+      const nvx = dx / dtNet;
+      const nvz = dz / dtNet;
+      mesh.userData.velX = (mesh.userData.velX || 0) * 0.4 + nvx * 0.6;
+      mesh.userData.velZ = (mesh.userData.velZ || 0) * 0.4 + nvz * 0.6;
+      mesh.userData.moving = true;
+      mesh.userData.faceYaw = Math.atan2(dx, dz);
+      mesh.userData.moveSeenAt = now;
+      mesh.userData.lastMoveDist = dist;
+    } else {
+      mesh.userData.velX = (mesh.userData.velX || 0) * 0.28;
+      mesh.userData.velZ = (mesh.userData.velZ || 0) * 0.28;
+      if (Math.hypot(mesh.userData.velX, mesh.userData.velZ) < 0.025) {
+        mesh.userData.velX = 0;
+        mesh.userData.velZ = 0;
+      }
+    }
+  }
+  mesh.userData.destX = entity.x;
+  mesh.userData.destZ = entity.y;
+  mesh.userData.snapAt = now;
+  mesh.userData.lastX = entity.x;
+  mesh.userData.lastZ = entity.y;
+}
+
+function predictedPos(mesh) {
+  const age = Math.min(0.18, (performance.now() - (mesh.userData.snapAt || performance.now())) / 1000);
+  return [
+    (mesh.userData.destX || 0) + (mesh.userData.velX || 0) * age,
+    (mesh.userData.destZ || 0) + (mesh.userData.velZ || 0) * age,
+  ];
+}
+
+function slideToward(mesh, dt, rate) {
+  if (mesh.userData.destX == null || mesh.userData.destZ == null) return 0;
+  const [px, pz] = predictedPos(mesh);
+  const dx = px - mesh.position.x;
+  const dz = pz - mesh.position.z;
+  const follow = 1 - Math.exp(-rate * dt);
+  mesh.position.x += dx * follow;
+  mesh.position.z += dz * follow;
+  return Math.hypot(dx, dz);
+}
+
 function updateTankDrive(mesh, dt) {
   if (!mesh?.userData?.isTank || mesh.userData.knock) return;
-  const destX = mesh.userData.destX;
-  const destZ = mesh.userData.destZ;
-  if (destX == null || destZ == null) {
+  if (mesh.userData.destX == null) {
     Sfx.setEngine(mesh.userData.id, mesh.position.x, mesh.position.z, 0.18);
     return;
   }
-  const dx = destX - mesh.position.x;
-  const dz = destZ - mesh.position.z;
-  const dist = Math.hypot(dx, dz);
-  let throttle = 0.2;
-  if (dist > 0.006) {
-    mesh.userData.faceYaw = Math.atan2(dx, dz);
-    const err = Math.abs(shortestAngle(mesh.rotation.y, mesh.userData.faceYaw));
-    // Turn in place first — don't slide sideways like infantry.
-    const align = Math.max(0, 1 - err / 0.85);
-    const speed = 0.58 * dt * (0.18 + 0.82 * align);
-    const step = Math.min(dist, speed);
-    mesh.position.x += (dx / dist) * step;
-    mesh.position.z += (dz / dist) * step;
-    mesh.userData.moving = align > 0.2;
-    throttle = 0.35 + align * 0.65;
-    if (mesh.userData.moving) {
-      const spin = step * 28;
+  const beforeX = mesh.position.x;
+  const beforeZ = mesh.position.z;
+  slideToward(mesh, dt, 11);
+  const step = Math.hypot(mesh.position.x - beforeX, mesh.position.z - beforeZ);
+  const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
+  if (speed > 0.04) {
+    mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+    mesh.userData.moving = true;
+    const spin = step * 28;
+    if (spin > 0.0002) {
       mesh.traverse((obj) => {
         if (obj.userData?.roadWheel) obj.rotation.x += spin;
       });
     }
-  } else {
-    mesh.position.x = destX;
-    mesh.position.z = destZ;
+  } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 200) {
     mesh.userData.moving = false;
   }
+  const throttle = speed > 0.05 ? 0.4 + Math.min(0.6, speed) : 0.2;
   Sfx.setEngine(mesh.userData.id, mesh.position.x, mesh.position.z, throttle);
 }
 
@@ -3346,26 +3379,14 @@ function smoothUnitFacing(mesh, dt) {
 
 function updateInfantryDrive(mesh, dt) {
   if (!mesh?.userData?.isInfantry || mesh.userData.knock) return;
-  const destX = mesh.userData.destX;
-  const destZ = mesh.userData.destZ;
-  if (destX == null || destZ == null) return;
-  const dx = destX - mesh.position.x;
-  const dz = destZ - mesh.position.z;
-  const dist = Math.hypot(dx, dz);
-  if (dist > 0.004) {
-    mesh.userData.faceYaw = Math.atan2(dx, dz);
-    const speed = 0.22 * dt;
-    const step = Math.min(dist, speed);
-    mesh.position.x += (dx / dist) * step;
-    mesh.position.z += (dz / dist) * step;
+  if (mesh.userData.destX == null || mesh.userData.destZ == null) return;
+  slideToward(mesh, dt, 16);
+  const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
+  if (speed > 0.03) {
+    mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
     mesh.userData.moving = true;
-  } else {
-    mesh.position.x = destX;
-    mesh.position.z = destZ;
-    const seen = mesh.userData.moveSeenAt || 0;
-    if (!seen || performance.now() - seen > 200) {
-      mesh.userData.moving = false;
-    }
+  } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 220) {
+    mesh.userData.moving = false;
   }
 }
 
@@ -3398,14 +3419,15 @@ function updateInfantryWalk(mesh, dt, now) {
     mesh.position.y = blend * 0.022;
   }
 
-  // Network snapshots are ~100 ms; keep the cycle alive across missed frames.
+  // Keep the cycle alive across 10 Hz snapshots and brief packet jitter.
   const lastDist = mesh.userData.lastMoveDist || 0;
   const recentlyMoved =
     mesh.userData.moving === true ||
+    Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0) > 0.03 ||
     (lastDist > 0.008 &&
       mesh.userData.moveSeenAt != null &&
       mesh.userData.moveSeenAt > 0 &&
-      now - mesh.userData.moveSeenAt < 220);
+      now - mesh.userData.moveSeenAt < 280);
 
   if (recentlyMoved) {
     const crawl = 0.22 + (1 - blend) * 0.78;
@@ -3910,7 +3932,6 @@ function animate() {
   animate._last = now;
   applyEdgePan();
   controls?.update();
-  refreshLiveVision();
   updateTankCrushVisuals(now);
   for (const mesh of state.meshes.values()) {
     if (mesh.userData.knock) {
@@ -3923,7 +3944,10 @@ function animate() {
     }
   }
   updateCombatFx(now);
-  Sfx.updateSpatial();
+  if (now - (animate._sfxAt || 0) > 80) {
+    animate._sfxAt = now;
+    Sfx.updateSpatial();
+  }
   renderer.render(scene, camera);
 }
 
