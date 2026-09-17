@@ -1660,8 +1660,8 @@ function syncSelectionMarkers() {
     if (on && !ring) {
       const tank = !!mesh.userData.isTank;
       const building = !!mesh.userData.building;
-      const inner = building ? 0.55 : tank ? 0.16 : 0.035;
-      const outer = building ? 0.68 : tank ? 0.2 : 0.05;
+      const inner = building ? 0.55 : tank ? 0.08 : 0.035;
+      const outer = building ? 0.68 : tank ? 0.1 : 0.05;
       const geo = new THREE.RingGeometry(inner, outer, 20);
       const mat = new THREE.MeshBasicMaterial({
         color: 0x9fef4a,
@@ -1893,7 +1893,7 @@ function attachOwnerMarkings(mesh, entity) {
   const sprite = makeNameSprite(name, colors);
   if (!entity.building) {
     const tank = String(entity.kind || "").includes("tank");
-    sprite.scale.set(tank ? 0.55 : 0.28, tank ? 0.14 : 0.07, 1);
+    sprite.scale.set(tank ? 0.32 : 0.28, tank ? 0.085 : 0.07, 1);
   }
   sprite.position.set(0, labelHeightFor(entity), 0);
   sprite.name = "ownerLabel";
@@ -1907,7 +1907,7 @@ function labelHeightFor(entity) {
     return entity.kind === "hq" ? 2.05 : 1.5;
   }
   const h = unitDims(entity.kind).h || 0.08;
-  return h + (String(entity.kind || "").includes("tank") ? 0.16 : 0.05);
+  return h + (String(entity.kind || "").includes("tank") ? 0.1 : 0.05);
 }
 
 function activeLoadProgress(entity) {
@@ -2078,7 +2078,7 @@ function updateHpBar(mesh, entity) {
   const sprite = makeProgressSprite(ratio, "HP", compact);
   if (!entity.building) {
     const tank = String(entity.kind || "").includes("tank");
-    sprite.scale.set(tank ? 0.42 : 0.2, tank ? 0.095 : 0.045, 1);
+    sprite.scale.set(tank ? 0.24 : 0.2, tank ? 0.055 : 0.045, 1);
   }
   sprite.name = "hpBar";
   const baseH = labelHeightFor(entity);
@@ -2100,7 +2100,8 @@ function unitDims(kind) {
   const k = String(kind || "");
   // Scale: HQ ~2.15 wu ≈ 22–28 m → infantry ~1.8 m ≈ 0.08 wu tall (≈1/3 prior).
   if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
-    return { w: 0.36, h: 0.24, d: 0.56 };
+    // Half prior tank size — closer to infantry / building proportions.
+    return { w: 0.18, h: 0.12, d: 0.28 };
   }
   if (k.includes("missile")) {
     return { w: 0.03, h: 0.08, d: 0.03 };
@@ -2373,7 +2374,7 @@ function createTankMesh(teamColor) {
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.tintParts = [];
-  g.userData.tankRigVersion = 3;
+  g.userData.tankRigVersion = 4;
 
   const hull = 0x4a5538;
   const hullDark = 0x353c2c;
@@ -2566,11 +2567,13 @@ function createTankMesh(teamColor) {
   add(turret, new THREE.CylinderGeometry(0.006, 0.006, 0.09, 5), matStd(0x111110), 0.045, 0.2, 0.155, Math.PI / 2, 0, 0);
 
   g.add(turret);
-  g.userData.unitHeight = 0.32;
+  g.userData.unitHeight = 0.16;
   g.userData.isTank = true;
   g.userData.hullTurnRate = 1.7;
   g.userData.turretTurnRate = 1.15;
   g.userData.barrelRecoil = 0;
+  // Half visual size vs prior rig (matches unitDims / server radius).
+  g.scale.setScalar(0.5);
   return g;
 }
 
@@ -2649,7 +2652,7 @@ function upsertMesh(entity) {
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
-          (mesh.userData.tankRigVersion || 0) < 3)) ||
+          (mesh.userData.tankRigVersion || 0) < 4)) ||
       (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
     if (needsWalkRig) {
       scene.remove(mesh);
@@ -2766,7 +2769,7 @@ function upsertMesh(entity) {
       const sprite = makeNameSprite(entity.owner_name || "Player", colors);
       if (!entity.building) {
         const tank = String(entity.kind || "").includes("tank");
-        sprite.scale.set(tank ? 0.55 : 0.28, tank ? 0.14 : 0.07, 1);
+        sprite.scale.set(tank ? 0.32 : 0.28, tank ? 0.085 : 0.07, 1);
       }
       sprite.position.set(0, labelHeightFor(entity), 0);
       sprite.name = "ownerLabel";
@@ -3371,7 +3374,7 @@ function updateTankCrushVisuals() {
         mesh.position.x - tankMesh.position.x,
         mesh.position.z - tankMesh.position.z,
       );
-      if (d < 0.22) applyCrushKnock(mesh, tankMesh);
+      if (d < 0.12) applyCrushKnock(mesh, tankMesh);
     }
   }
 }

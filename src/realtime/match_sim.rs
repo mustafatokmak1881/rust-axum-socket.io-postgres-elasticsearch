@@ -396,7 +396,7 @@ pub fn building_radius(kind: &str) -> f32 {
 /// Matches client unit footprint on the ground plane.
 pub fn unit_radius(kind: &str) -> f32 {
     if kind.contains("tank") {
-        0.2
+        0.1
     } else if kind.contains("missile") {
         0.02
     } else {
