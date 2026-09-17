@@ -2216,7 +2216,16 @@ function unitsInScreenBox(x0, y0, x1, y1) {
   return ids;
 }
 
+function clearUnitSelection() {
+  for (const id of state.selectedUnits) Sfx.stopEngine(id);
+  state.selectedUnits = [];
+}
+
 function setSelectedUnits(ids, toastMsg) {
+  const next = new Set(ids);
+  for (const id of state.selectedUnits) {
+    if (!next.has(id)) Sfx.stopEngine(id);
+  }
   state.selectedUnits = ids;
   state.selectedBuilding = null;
   syncSelectionMarkers();
@@ -2300,11 +2309,11 @@ function finishBoxSelect(event) {
       }
     } else if (best?.building) {
       state.selectedBuilding = best.id;
-      state.selectedUnits = [];
+      clearUnitSelection();
       syncSelectionMarkers();
       toast(`Selected ${best.kind}`);
     } else if (!boxSelect.additive) {
-      state.selectedUnits = [];
+      clearUnitSelection();
       state.selectedBuilding = null;
       syncSelectionMarkers();
       send({ t: "set_focus", x: point.x, y: point.z });
@@ -3559,7 +3568,9 @@ function updateTankDrive(mesh, dt) {
     }
   }
 
-  if (now - (mesh.userData.engineHeardAt || 0) < 90) {
+  // Palet sesi sadece seçili tank hareket ederken — tüm harita gürültü yapmasın.
+  const selected = state.selectedUnits.includes(id);
+  if (selected && now - (mesh.userData.engineHeardAt || 0) < 90) {
     Sfx.setEngine(id, mesh.position.x, mesh.position.z, Math.min(1, 0.45 + speed));
   } else {
     Sfx.stopEngine(id);
