@@ -606,6 +606,7 @@ impl MatchSim {
                     prone_until_tick: 0,
                 },
             );
+            sim.spawn_starting_force(user_id, team, x, y);
             sim.reveal_vision_for(user_id);
         }
 
@@ -743,6 +744,7 @@ impl MatchSim {
                 prone_until_tick: 0,
             },
         );
+        self.spawn_starting_force(user_id, team, x, y);
         self.reveal_vision_for(user_id);
 
         Ok(())
@@ -750,6 +752,73 @@ impl MatchSim {
 
     pub fn player_count(&self) -> usize {
         self.players.len()
+    }
+
+    /// Opening army: 50 rangers + 1 tank at the commander's HQ.
+    fn spawn_starting_force(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
+        let ranger = trainables()
+            .iter()
+            .find(|u| u.unit == "ranger")
+            .expect("ranger def");
+        let tank = trainables()
+            .iter()
+            .find(|u| u.unit == "tank")
+            .expect("tank def");
+        let hq_r = building_radius("hq");
+        for _ in 0..50 {
+            let r = unit_radius(ranger.unit);
+            let (sx, sy) = self.find_free_spawn_near(
+                hx,
+                hy,
+                r,
+                Uuid::nil(),
+                Some((hx, hy, hq_r)),
+            );
+            self.insert_unit(user_id, team, ranger, sx, sy);
+        }
+        let tr = unit_radius(tank.unit);
+        let (sx, sy) = self.find_free_spawn_near(hx, hy, tr, Uuid::nil(), Some((hx, hy, hq_r)));
+        self.insert_unit(user_id, team, tank, sx, sy);
+    }
+
+    fn insert_unit(&mut self, owner: Uuid, team: u8, def: &UnitDef, x: f32, y: f32) {
+        let id = Uuid::new_v4();
+        self.entities.insert(
+            id,
+            Entity {
+                id,
+                kind: def.unit.into(),
+                owner,
+                team,
+                x,
+                y,
+                hp: def.hp,
+                max_hp: def.hp,
+                building: false,
+                unit: true,
+                flag: None,
+                build_remaining_ms: 0,
+                train_queue: VecDeque::new(),
+                target: None,
+                move_to: None,
+                speed: def.speed,
+                damage: def.damage,
+                range: def.range,
+                attack_cooldown_ms: 0,
+                mag_ammo: if is_rifle_infantry(def.unit) {
+                    RIFLE_MAG
+                } else {
+                    0
+                },
+                dirty: true,
+                stuck_frames: 0,
+                detour: None,
+                detour_ttl: 0,
+                last_escape_ang: 0.0,
+                prone: false,
+                prone_until_tick: 0,
+            },
+        );
     }
 
     pub fn buildable_info() -> Vec<BuildableInfo> {
