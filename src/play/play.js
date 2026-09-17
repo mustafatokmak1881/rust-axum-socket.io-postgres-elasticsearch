@@ -1838,7 +1838,7 @@ function onEdgePointerMove(event) {
   edgeMouse.h = window.innerHeight;
   edgeMouse.inside = Boolean(state.match) && !$("#match-screen")?.hidden;
   edgeMouse.overUi = Boolean(
-    event.target?.closest?.("#radar, .build-rail, .unit-rail, .top-hud, .army-hud"),
+    event.target?.closest?.("#radar, .build-rail, .unit-rail"),
   );
   updateGhostPreview(event);
 }
@@ -2005,7 +2005,10 @@ function setBuildPlacement(kind) {
 }
 
 function applyEdgePan() {
-  if (!controls || !camera || !edgeMouse.inside || edgeMouse.overUi) return;
+  if (!controls || !camera || !edgeMouse.inside) return;
+  // Top resource bar is see-through — still pan when the cursor is along the screen edge.
+  const topStrip = edgeMouse.y < 64;
+  if (edgeMouse.overUi && !topStrip) return;
 
   let dx = 0;
   let dz = 0;

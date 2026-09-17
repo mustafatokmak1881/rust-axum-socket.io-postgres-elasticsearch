@@ -33,6 +33,12 @@ html, body {
   padding: 8px 14px;
   background: linear-gradient(180deg, #1a2814, #10160ecc);
   border-bottom: 2px solid #6a8a3a;
+  pointer-events: none;
+}
+
+.top-hud button,
+.top-hud a {
+  pointer-events: auto;
 }
 
 .brand {
@@ -59,14 +65,14 @@ html, body {
   font-size: 13px;
 }
 
-.screen { position: absolute; inset: 48px 0 0 0; }
+.screen { position: absolute; inset: 0; }
 
 #lobby-screen {
   overflow: auto;
   background:
     radial-gradient(ellipse at 30% 20%, #1a281888, transparent 50%),
     linear-gradient(180deg, #0e140c, #080a07);
-  padding: 24px;
+  padding: 72px 24px 24px;
 }
 
 .lobby-panel {
@@ -182,7 +188,7 @@ input {
 
 .army-hud {
   position: absolute;
-  top: 10px;
+  top: 56px;
   right: 14px;
   z-index: 6;
   display: flex;
