@@ -290,11 +290,11 @@ pub fn default_catalog() -> Vec<CatalogItem> {
             description: "Cosmetic banner skin for buildings.".into(),
         },
         CatalogItem {
-            id: "tank_desert_skin".into(),
-            name: "Desert Tank Skin".into(),
+            id: "mlrs_camo_skin".into(),
+            name: "M270 Woodland Camo".into(),
             kind: "cosmetic_unit".into(),
             price_label: "$3.99".into(),
-            description: "Visual only — same stats as standard tank.".into(),
+            description: "Visual only — same stats as standard M270 MLRS.".into(),
         },
         CatalogItem {
             id: "xp_boost".into(),

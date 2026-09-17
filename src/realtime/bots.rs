@@ -1187,7 +1187,7 @@ fn try_place_away(
 fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: bool) {
     let rangers = count_units(sim, bot_id, |k| k == "ranger");
     let mortars = count_units(sim, bot_id, |k| k.contains("mortar"));
-    let tanks = count_units(sim, bot_id, |k| k.contains("tank"));
+    let tanks = count_units(sim, bot_id, |k| k.contains("tank") || k.contains("mlrs"));
 
     let barracks: Vec<Uuid> = sim
         .entities
@@ -1217,7 +1217,7 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
     // Combined arms: AT and tanks before another ranger blob.
     for id in factories {
         if tanks < style.tank_cap() {
-            let _ = sim.train_unit(bot_id, id, "tank");
+            let _ = sim.train_unit(bot_id, id, if tanks % 3 == 1 { "mlrs" } else { "tank" });
         }
     }
     for id in barracks {

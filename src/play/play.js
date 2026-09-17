@@ -423,7 +423,11 @@ function updateArmyCounts() {
   if (you) {
     for (const entity of state.entities.values()) {
       if (!entity.unit || entity.owner !== you) continue;
-      if (String(entity.kind || "").includes("tank")) tanks += 1;
+      if (
+        String(entity.kind || "").includes("tank") ||
+        String(entity.kind || "").includes("mlrs")
+      )
+        tanks += 1;
       else inf += 1;
     }
   }
@@ -1090,6 +1094,7 @@ const Sfx = {
   shot(kind, x, y) {
     const k = String(kind || "");
     if (k.includes("tank_mg") || k.includes("_mg")) this.rifle(x, y);
+    else if (k.includes("mlrs")) this.missile(x, y);
     else if (k.includes("tank")) this.tankCannon(x, y);
     else if (k.includes("mortar")) this.missile(x, y);
     else if (k.includes("missile")) this.missile(x, y);
@@ -1110,8 +1115,8 @@ function playShots(shots) {
   const list = [...(shots || [])];
   const rank = (kind) => {
     const k = String(kind || "");
-    if (k.includes("tank") && !k.includes("mg")) return 0;
-    if (k.includes("mortar") || k.includes("missile")) return 1;
+    if (k.includes("tank") && !k.includes("mg") && !k.includes("mlrs")) return 0;
+    if (k.includes("mlrs") || k.includes("mortar") || k.includes("missile")) return 1;
     return 2;
   };
   list.sort((a, b) => rank(shotKindOf(a)) - rank(shotKindOf(b)));
@@ -1124,10 +1129,14 @@ function playShots(shots) {
     if (k.includes("tank") && !k.includes("mg") && shot.x1 != null && shot.y1 != null) {
       Radar.ping(shot.x1, shot.y1, "tank");
     }
-    const isCannon = k.includes("tank") && !k.includes("mg");
+    if (k.includes("mlrs") && shot.x1 != null && shot.y1 != null) {
+      Radar.ping(shot.x1, shot.y1, "mlrs");
+    }
+    const isCannon = k.includes("tank") && !k.includes("mg") && !k.includes("mlrs");
     const isHeavy =
       k.includes("missile") ||
       k.includes("mortar") ||
+      k.includes("mlrs") ||
       k.includes("patriot") ||
       k.includes("bunker");
     if (!isCannon && !isHeavy) {
@@ -1252,7 +1261,7 @@ const Radar = {
     ctx.fillStyle = "#9fef4a";
     for (const entity of state.entities.values()) {
       if (entity.hp != null && entity.hp <= 0) continue;
-      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank")) {
+      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank") || String(entity.kind).includes("mlrs")) {
         continue;
       }
       if (entity.owner !== you) continue;
@@ -1266,7 +1275,7 @@ const Radar = {
       let allyN = 0;
       for (const entity of state.entities.values()) {
         if (entity.hp != null && entity.hp <= 0) continue;
-        if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank")) {
+        if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank") || String(entity.kind).includes("mlrs")) {
           continue;
         }
         if (entity.owner === you || entity.team !== myTeam) continue;
@@ -1278,7 +1287,7 @@ const Radar = {
     ctx.fillStyle = "#ff5a3a";
     for (const entity of state.entities.values()) {
       if (entity.hp != null && entity.hp <= 0) continue;
-      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank")) {
+      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank") || String(entity.kind).includes("mlrs")) {
         continue;
       }
       if (entity.owner === you || entity.team === myTeam) continue;
@@ -1290,7 +1299,7 @@ const Radar = {
     for (const entity of state.entities.values()) {
       if (entity.hp != null && entity.hp <= 0) continue;
       const kind = entity.kind || "";
-      const heavy = entity.building || kind.includes("tank") || kind === "hq";
+      const heavy = entity.building || kind.includes("tank") || kind.includes("mlrs") || kind === "hq";
       if (!heavy) continue;
       const px = (entity.x / mapSize) * w;
       const py = (entity.y / mapSize) * h;
@@ -3116,7 +3125,8 @@ function enemyUnderPointer(event, groundPoint) {
     if (entity.hp != null && entity.hp <= 0) continue;
     const reach = entity.building
       ? 0.55
-      : String(entity.kind || "").includes("tank")
+      : String(entity.kind || "").includes("tank") ||
+          String(entity.kind || "").includes("mlrs")
         ? 0.28
         : 0.12;
     const d = Math.hypot(entity.x - groundPoint.x, entity.y - groundPoint.z);
@@ -3249,7 +3259,7 @@ function labelHeightFor(entity) {
     return entity.kind === "hq" ? 2.05 : 1.5;
   }
   const h = unitDims(entity.kind).h || 0.08;
-  return h + (String(entity.kind || "").includes("tank") ? 0.1 : 0.05);
+  return h + (String(entity.kind || "").includes("tank") || String(entity.kind || "").includes("mlrs") ? 0.1 : 0.05);
 }
 
 function activeLoadProgress(entity) {
@@ -3441,6 +3451,9 @@ function updateHpBar(mesh, entity) {
 function unitDims(kind) {
   const k = String(kind || "");
   // Scale: HQ ~2.15 wu ≈ 22–28 m → infantry ~1.8 m ≈ 0.08 wu tall (≈1/3 prior).
+  if (k.includes("mlrs")) {
+    return { w: 0.2, h: 0.16, d: 0.32 };
+  }
   if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
     // Half prior tank size — closer to infantry / building proportions.
     return { w: 0.18, h: 0.12, d: 0.28 };
@@ -3997,8 +4010,161 @@ function createTankMesh(teamColor) {
   return g;
 }
 
+/** M270 MLRS — tracked launcher with elevating dual rocket pods (not a tank). */
+function createMlrsMesh(teamColor) {
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
+  g.userData.isTank = true; // hull drive + pod yaw reuse tank motion path
+  g.userData.isMlrs = true;
+  g.userData.tintParts = [];
+  g.userData.mlrsRigVersion = 1;
+  g.userData.tankRigVersion = 6;
+
+  const hull = 0x4a5240;
+  const hullDark = 0x32382c;
+  const hullLight = 0x5c6650;
+  const track = 0x1a1814;
+  const rubber = 0x11100e;
+  const metal = 0x2c2c28;
+  const pod = 0x3e4536;
+  const podDark = 0x2a2f24;
+  const tube = 0x1e2018;
+  const glass = 0x1a2228;
+  const accent = teamColor >>> 0;
+
+  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
+    const m = new THREE.Mesh(geo, typeof mat === "number" ? matStd(mat) : mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    if (tint) g.userData.tintParts.push(m);
+    parent.add(m);
+    return m;
+  };
+
+  // —— Tracks (Bradley-derived, longer wheelbase) ——
+  for (const side of [-1, 1]) {
+    const x = side * 0.168;
+    add(g, new THREE.BoxGeometry(0.052, 0.072, 0.58), track, x, 0.04, -0.02);
+    add(g, new THREE.BoxGeometry(0.038, 0.024, 0.56), rubber, x, 0.01, -0.02);
+    for (let i = 0; i < 6; i++) {
+      const z = -0.22 + i * 0.088;
+      const wheel = add(
+        g,
+        new THREE.CylinderGeometry(0.028, 0.028, 0.034, 10),
+        rubber,
+        x,
+        0.028,
+        z,
+        0,
+        0,
+        Math.PI / 2,
+      );
+      wheel.userData.roadWheel = true;
+    }
+    const sprocket = add(
+      g,
+      new THREE.CylinderGeometry(0.032, 0.032, 0.036, 12),
+      metal,
+      x,
+      0.034,
+      -0.28,
+      0,
+      0,
+      Math.PI / 2,
+    );
+    sprocket.userData.roadWheel = true;
+    add(g, new THREE.CylinderGeometry(0.026, 0.026, 0.034, 10), metal, x, 0.03, 0.26, 0, 0, Math.PI / 2);
+  }
+
+  // —— Lower hull / chassis ——
+  add(g, new THREE.BoxGeometry(0.28, 0.07, 0.52), hull, 0, 0.075, -0.01, 0, 0, 0, true);
+  add(g, new THREE.BoxGeometry(0.26, 0.04, 0.48), hullDark, 0, 0.12, -0.01);
+  // Side skirts
+  for (const side of [-1, 1]) {
+    add(g, new THREE.BoxGeometry(0.018, 0.055, 0.5), hullLight, side * 0.148, 0.08, -0.02, 0, 0, 0, true);
+  }
+
+  // —— Cab (front) ——
+  const cab = new THREE.Group();
+  cab.position.set(0, 0.14, 0.18);
+  g.add(cab);
+  add(cab, new THREE.BoxGeometry(0.22, 0.14, 0.2), hull, 0, 0.07, 0, 0, 0, 0, true);
+  add(cab, new THREE.BoxGeometry(0.2, 0.06, 0.04), glass, 0, 0.1, 0.09);
+  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), glass, -0.095, 0.09, 0.02);
+  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), glass, 0.095, 0.09, 0.02);
+  // Team stripe on cab roof
+  add(cab, new THREE.BoxGeometry(0.16, 0.012, 0.06), accent, 0, 0.145, -0.02, 0, 0, 0, true);
+  // Bumper / light bar
+  add(cab, new THREE.BoxGeometry(0.2, 0.025, 0.03), metal, 0, 0.02, 0.11);
+  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), 0xc8c090, -0.07, 0.035, 0.12);
+  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), 0xc8c090, 0.07, 0.035, 0.12);
+
+  // —— Elevating rocket pod (yaw + elevation) ——
+  const turret = new THREE.Group();
+  turret.name = "muzzleRoot";
+  turret.position.set(0, 0.155, -0.12);
+  g.add(turret);
+
+  // Traversing ring / base
+  add(turret, new THREE.CylinderGeometry(0.08, 0.09, 0.03, 12), metal, 0, 0.01, 0);
+  add(turret, new THREE.BoxGeometry(0.12, 0.04, 0.14), hullDark, 0, 0.035, 0);
+
+  const elev = new THREE.Group();
+  elev.name = "mlrsElev";
+  elev.position.set(0, 0.055, 0);
+  // Default elevation ~25° like a loaded launch posture
+  elev.rotation.x = -0.42;
+  turret.add(elev);
+
+  // Dual M269 pods side-by-side
+  for (const side of [-1, 1]) {
+    const bay = new THREE.Group();
+    bay.position.set(side * 0.072, 0.06, 0);
+    elev.add(bay);
+    add(bay, new THREE.BoxGeometry(0.11, 0.12, 0.32), pod, 0, 0, 0);
+    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), podDark, 0, 0.065, 0);
+    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), podDark, 0, -0.065, 0);
+    // 3×2 tube mouths facing +Z (forward when elevated)
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 3; col++) {
+        const tx = (col - 1) * 0.028;
+        const ty = (row - 0.5) * 0.04;
+        add(bay, new THREE.CylinderGeometry(0.011, 0.011, 0.3, 8), tube, tx, ty, 0, Math.PI / 2, 0, 0);
+        add(bay, new THREE.CylinderGeometry(0.012, 0.012, 0.012, 8), metal, tx, ty, 0.155, Math.PI / 2, 0, 0);
+      }
+    }
+  }
+
+  // Center spine between pods
+  add(elev, new THREE.BoxGeometry(0.03, 0.08, 0.28), metal, 0, 0.05, 0);
+  // Hydraulic ram suggestion
+  add(elev, new THREE.CylinderGeometry(0.008, 0.008, 0.14, 6), metal, 0.02, -0.02, -0.08, 0.6, 0, 0);
+
+  // Muzzle tip at pod array face (world FX)
+  const muzzle = new THREE.Object3D();
+  muzzle.name = "muzzle";
+  muzzle.position.set(0, 0.06, 0.18);
+  elev.add(muzzle);
+
+  // Dummy barrel name so remesh checks that look for tankBarrel pass
+  const dummyBarrel = new THREE.Object3D();
+  dummyBarrel.name = "tankBarrel";
+  dummyBarrel.position.set(0, 0.06, 0.1);
+  elev.add(dummyBarrel);
+
+  g.userData.unitHeight = 0.28;
+  g.userData.hullTurnRate = 0.95;
+  g.userData.turretTurnRate = 0.85;
+  g.userData.barrelRecoil = 0;
+  g.scale.setScalar(0.5);
+  return g;
+}
+
 function createUnitMesh(kind, teamColor) {
   const k = String(kind || "");
+  if (k.includes("mlrs")) return createMlrsMesh(teamColor);
   if (k.includes("tank")) return createTankMesh(teamColor);
   if (k.includes("mortar")) return createMortarMesh(teamColor);
   if (k.includes("missile")) return createMortarMesh(teamColor);
@@ -4091,16 +4257,20 @@ function upsertMesh(entity) {
   // Upgrade old unit boxes / static infantry to walk-capable / tank turret rigs.
   if (mesh && entity.unit) {
     const kind = String(entity.kind || "");
-    const isTank = kind.includes("tank");
+    const isMlrs = kind.includes("mlrs");
+    const isTank = kind.includes("tank") && !isMlrs;
     const isMortar = kind.includes("mortar") || kind.includes("missile");
     const needsWalkRig =
       !mesh.userData.isUnitRig ||
+      (isMlrs &&
+        (!mesh.userData.isMlrs || (mesh.userData.mlrsRigVersion || 0) < 1)) ||
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
           (mesh.userData.tankRigVersion || 0) < 6)) ||
       (isMortar && !mesh.userData.isMortar) ||
       (!isTank &&
+        !isMlrs &&
         !isMortar &&
         (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
     if (needsWalkRig) {
@@ -4200,7 +4370,9 @@ function upsertMesh(entity) {
       label.material.dispose();
       const sprite = makeNameSprite(entity.owner_name || "Player", colors);
       if (!entity.building) {
-        const tank = String(entity.kind || "").includes("tank");
+        const tank =
+          String(entity.kind || "").includes("tank") ||
+          String(entity.kind || "").includes("mlrs");
         sprite.scale.set(tank ? 0.32 : 0.28, tank ? 0.085 : 0.07, 1);
       }
       sprite.position.set(0, labelHeightFor(entity), 0);
@@ -4281,9 +4453,11 @@ function applyUnitMotion(mesh, entity) {
   const kind = String(entity.kind || mesh.userData.kind || "");
   mesh.userData.moveSpeed = kind.includes("tank")
     ? 0.58
-    : kind.includes("mortar") || kind.includes("missile")
-      ? 0.14
-      : 0.2;
+    : kind.includes("mlrs")
+      ? 0.42
+      : kind.includes("mortar") || kind.includes("missile")
+        ? 0.14
+        : 0.2;
   const prevX = mesh.userData.lastX;
   const prevZ = mesh.userData.lastZ;
   const prevAt = mesh.userData.snapAt;
@@ -4593,13 +4767,15 @@ function spawnShotFx(shot) {
   const toMesh = state.meshes.get(shot.to);
   const didHit = shot.hit !== false;
   const kind = String(shot.kind || fromMesh?.userData?.kind || "");
-  const isTankMg = kind.includes("mg") && !!fromMesh?.userData?.isTank;
+  const isTankMg = kind.includes("mg") && !!fromMesh?.userData?.isTank && !fromMesh?.userData?.isMlrs;
   const isBunkerMg = kind.includes("bunker");
-  const isTankCannon = kind.includes("tank") && !kind.includes("mg");
+  const isMlrs = kind.includes("mlrs") || !!fromMesh?.userData?.isMlrs;
+  const isTankCannon = kind.includes("tank") && !kind.includes("mg") && !isMlrs;
   const isMortar = kind.includes("mortar");
   const isMissile =
     !isMortar &&
     !isBunkerMg &&
+    !isMlrs &&
     (kind.includes("missile") || kind.includes("patriot") || kind === "turret");
 
   if (isTankMg && fromMesh) {
@@ -4617,7 +4793,7 @@ function spawnShotFx(shot) {
         fromMesh,
         isTankMg && fromMesh.getObjectByName("mgMuzzle") ? "mgMuzzle" : "muzzle",
       )
-    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : isBunkerMg ? 0.38 : 0.12, shot.y0);
+    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : isBunkerMg ? 0.38 : isMlrs ? 0.22 : 0.12, shot.y0);
   // Always use server impact point so misses fly wide of the mesh.
   const endY = didHit
     ? (toMesh?.userData?.unitHeight || (toMesh?.userData?.building ? 0.6 : 0.12) || 0.12) * 0.55
@@ -4630,20 +4806,100 @@ function spawnShotFx(shot) {
 
   const now = performance.now();
   const fx = {
-    type: isTankCannon ? "shell" : isMortar ? "mortar" : isMissile ? "missile" : "bullet",
+    type: isTankCannon
+      ? "shell"
+      : isMlrs
+        ? "mlrs"
+        : isMortar
+          ? "mortar"
+          : isMissile
+            ? "missile"
+            : "bullet",
     born: now,
-    life: isTankCannon ? 380 : isMortar ? 780 : isMissile ? 520 : 90,
+    life: isTankCannon ? 380 : isMlrs ? 720 : isMortar ? 780 : isMissile ? 520 : 90,
     start: start.clone(),
     end: end.clone(),
     dir: dir.clone(),
     dist,
-    arc: isMortar ? Math.max(0.45, dist * 0.28) : 0,
+    arc: isMortar ? Math.max(0.45, dist * 0.28) : isMlrs ? Math.max(0.55, dist * 0.18) : 0,
     fromMesh: fromMesh || null,
     hit: didHit,
     parts: [],
   };
 
-  if (isTankCannon) {
+  if (isMlrs) {
+    // Exhaust bloom from the pod face
+    const blast = new THREE.Mesh(
+      new THREE.SphereGeometry(0.045, 8, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xffaa55,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+      }),
+    );
+    blast.position.copy(start);
+    scene.add(blast);
+    fx.parts.push({ mesh: blast, role: "blast" });
+
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.05, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x9a9688,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+      }),
+    );
+    smoke.position.copy(start).addScaledVector(dir, -0.03);
+    scene.add(smoke);
+    fx.parts.push({ mesh: smoke, role: "smoke" });
+
+    // Thick artillery rocket body + darker nose
+    const rocket = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.014, 0.016, 0.12, 7),
+      new THREE.MeshBasicMaterial({ color: 0xb8a878 }),
+    );
+    const nose = new THREE.Mesh(
+      new THREE.ConeGeometry(0.014, 0.04, 7),
+      new THREE.MeshBasicMaterial({ color: 0x3a3828 }),
+    );
+    nose.position.y = 0.08;
+    const finMat = new THREE.MeshBasicMaterial({ color: 0x2a2820 });
+    for (let f = 0; f < 4; f++) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.03, 0.022), finMat);
+      const a = (f / 4) * Math.PI * 2;
+      fin.position.set(Math.cos(a) * 0.016, -0.05, Math.sin(a) * 0.016);
+      rocket.add(fin);
+    }
+    rocket.add(body);
+    rocket.add(nose);
+    rocket.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    rocket.position.copy(start);
+    scene.add(rocket);
+    fx.parts.push({ mesh: rocket, role: "projectile" });
+
+    // Exhaust trail puff
+    const trail = new THREE.Mesh(
+      new THREE.SphereGeometry(0.02, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0xc8c4b0,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      }),
+    );
+    trail.position.copy(start);
+    scene.add(trail);
+    fx.parts.push({ mesh: trail, role: "ring" });
+
+    if (fromMesh) {
+      fromMesh.userData.hullKick = 1;
+      const elev = fromMesh.getObjectByName("mlrsElev");
+      if (elev) elev.userData.kick = 1;
+    }
+  } else if (isTankCannon) {
     // Heavy muzzle blast
     const blast = new THREE.Mesh(
       new THREE.SphereGeometry(0.05, 8, 8),
@@ -4896,16 +5152,28 @@ function updateCombatFx(now) {
     }
     if (mesh.userData.hullKick > 0) {
       mesh.userData.hullKick = Math.max(0, mesh.userData.hullKick - 0.06);
-      // Visual shudder: tiny pitch on turret
-      const turret = mesh.getObjectByName("muzzleRoot");
-      if (turret) {
-        turret.rotation.x = -0.08 * mesh.userData.hullKick;
+      if (mesh.userData.isMlrs) {
+        const elev = mesh.getObjectByName("mlrsElev");
+        if (elev) {
+          elev.rotation.x = -0.42 - 0.06 * mesh.userData.hullKick;
+        }
+      } else {
+        // Visual shudder: tiny pitch on turret
+        const turret = mesh.getObjectByName("muzzleRoot");
+        if (turret) {
+          turret.rotation.x = -0.08 * mesh.userData.hullKick;
+        }
       }
-    } else {
+    } else if (!mesh.userData.isMlrs) {
       const turret = mesh.getObjectByName("muzzleRoot");
       if (turret && turret.rotation.x) {
         turret.rotation.x *= 0.75;
         if (Math.abs(turret.rotation.x) < 0.001) turret.rotation.x = 0;
+      }
+    } else {
+      const elev = mesh.getObjectByName("mlrsElev");
+      if (elev && elev.rotation.x < -0.42) {
+        elev.rotation.x += (-0.42 - elev.rotation.x) * 0.15;
       }
     }
   }
@@ -4914,23 +5182,30 @@ function updateCombatFx(now) {
     const fx = activeFx[i];
     const t = Math.min(1, (now - fx.born) / fx.life);
     const pos = fx.start.clone().lerp(fx.end, t);
-    if ((fx.type === "mortar" || fx.type === "patriot") && fx.arc) {
+    if ((fx.type === "mortar" || fx.type === "patriot" || fx.type === "mlrs") && fx.arc) {
       // Patriot: boost loft early then flatten onto the intercept.
+      // MLRS rockets: ballistic loft then flatten into the beaten zone.
       const loft =
-        fx.type === "patriot" ? 4 * t * (1 - t) * (1 - t * 0.35) : 4 * t * (1 - t);
+        fx.type === "patriot"
+          ? 4 * t * (1 - t) * (1 - t * 0.35)
+          : fx.type === "mlrs"
+            ? 4 * t * (1 - t) * (0.85 + t * 0.15)
+            : 4 * t * (1 - t);
       pos.y += loft * fx.arc;
     }
 
     for (const part of fx.parts) {
       if (part.role === "projectile") {
         part.mesh.position.copy(pos);
-        if (fx.type === "mortar" || fx.type === "patriot") {
+        if (fx.type === "mortar" || fx.type === "patriot" || fx.type === "mlrs") {
           const t2 = Math.min(1, t + 0.025);
           const next = fx.start.clone().lerp(fx.end, t2);
           const loft2 =
             fx.type === "patriot"
               ? 4 * t2 * (1 - t2) * (1 - t2 * 0.35)
-              : 4 * t2 * (1 - t2);
+              : fx.type === "mlrs"
+                ? 4 * t2 * (1 - t2) * (0.85 + t2 * 0.15)
+                : 4 * t2 * (1 - t2);
           next.y += loft2 * (fx.arc || 0);
           const v = next.sub(pos);
           if (v.lengthSq() > 1e-8) {
@@ -4961,8 +5236,8 @@ function updateCombatFx(now) {
           part.mesh.position.y = fx.start.y + t * 0.25;
         }
       } else if (part.role === "ring") {
-        if (fx.type === "patriot") {
-          // Exhaust smoke puff trailing the missile.
+        if (fx.type === "patriot" || fx.type === "mlrs") {
+          // Exhaust smoke puff trailing the missile / rocket.
           part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.06 - t * 0.04);
           part.mesh.material.opacity = 0.5 * (1 - t);
           part.mesh.scale.setScalar(1 + t * 6);
@@ -4981,7 +5256,7 @@ function updateCombatFx(now) {
         part.mesh.material.opacity = 0.55 * (1 - t);
         part.mesh.scale.setScalar(1 + t * 4);
       } else if (part.role === "smoke") {
-        if (fx.type === "patriot") {
+        if (fx.type === "patriot" || fx.type === "mlrs") {
           part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.035);
           part.mesh.material.opacity = 0.9 * (1 - t * 0.85);
           part.mesh.scale.setScalar(1 + t * 2.2);
@@ -5005,13 +5280,24 @@ function updateCombatFx(now) {
         }
       } else if (fx.type === "bullet") {
         spawnMissImpact(fx.end, fx.hit === false);
-      } else if (fx.type === "missile" || fx.type === "mortar" || fx.type === "patriot") {
+      } else if (
+        fx.type === "missile" ||
+        fx.type === "mortar" ||
+        fx.type === "patriot" ||
+        fx.type === "mlrs"
+      ) {
         if (fx.hit !== false) {
           spawnTankExplosion(fx.end);
           applyBlastKnock(
             fx.end.x,
             fx.end.z,
-            fx.type === "mortar" ? 0.95 : fx.type === "patriot" ? 1.05 : 0.85,
+            fx.type === "mlrs"
+              ? 1.55
+              : fx.type === "mortar"
+                ? 0.95
+                : fx.type === "patriot"
+                  ? 1.05
+                  : 0.85,
           );
         } else {
           spawnMissImpact(fx.end, true);
