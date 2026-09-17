@@ -1075,6 +1075,7 @@ impl MatchSim {
     }
 
     /// Stamp current unit/building vision into the player's explored map.
+    /// Allied matches share teammate vision discs.
     pub fn reveal_vision_for(&mut self, user_id: Uuid) -> Vec<u16> {
         if self.global_vision_active() {
             if let Some(player) = self.players.get_mut(&user_id) {
@@ -1082,10 +1083,17 @@ impl MatchSim {
             }
             return Vec::new();
         }
+        let viewer_team = self.players.get(&user_id).map(|p| p.team);
+        let share = !self.ffa;
         let sources: Vec<(f32, f32, f32)> = self
             .entities
             .values()
-            .filter(|e| e.owner == user_id && aoi::entity_provides_vision(e))
+            .filter(|e| {
+                if !aoi::entity_provides_vision(e) {
+                    return false;
+                }
+                e.owner == user_id || (share && viewer_team == Some(e.team))
+            })
             .map(|e| (e.x, e.y, aoi::vision_radius(e)))
             .collect();
         let Some(player) = self.players.get_mut(&user_id) else {
@@ -2927,15 +2935,20 @@ impl MatchSim {
     }
 
     /// Own units always; enemies only if they sit inside a friendly vision disc.
+    /// Allied (!FFA): teammates and their vision discs are shared.
     /// During the opening global-vision window, every living entity is visible.
     fn visible_ids_for(&self, viewer: Uuid) -> HashSet<Uuid> {
         if self.global_vision_active() {
             return self.entities.keys().copied().collect();
         }
+        let viewer_team = self.players.get(&viewer).map(|p| p.team);
+        let share = !self.ffa;
         let mut visible = HashSet::with_capacity(64);
         let mut sources: Vec<(f32, f32, f32)> = Vec::new();
         for entity in self.entities.values() {
-            if entity.owner != viewer {
+            let friendly =
+                entity.owner == viewer || (share && viewer_team == Some(entity.team));
+            if !friendly {
                 continue;
             }
             visible.insert(entity.id);

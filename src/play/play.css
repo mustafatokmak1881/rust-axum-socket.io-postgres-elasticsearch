@@ -482,6 +482,11 @@ input {
   color: #fff4ce;
 }
 
+.scoreboard tr.ally td {
+  background: #12304040;
+  color: #b8e8ff;
+}
+
 .scoreboard tr.dead td {
   opacity: 0.55;
 }

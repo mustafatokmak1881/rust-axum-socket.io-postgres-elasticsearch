@@ -245,15 +245,28 @@ function renderScoreboard() {
   body.innerHTML = rows
     .map((r) => {
       const [c0, c1, c2] = r.colors || [0x888888, 0x555555, 0x333333];
-      const cls = [r.you ? "you" : "", r.alive ? "alive" : "dead"].filter(Boolean).join(" ");
+      const ally =
+        !state.match?.ffa &&
+        !r.you &&
+        Number(r.team) === Number(state.match?.team);
+      const cls = [
+        r.you ? "you" : "",
+        ally ? "ally" : "",
+        r.alive ? "alive" : "dead",
+      ]
+        .filter(Boolean)
+        .join(" ");
       const faction = String(r.faction || "").toUpperCase();
-      const tag = r.bot ? "BOT" : r.you ? "SEN" : "OYUNCU";
+      const tag = r.bot ? "BOT" : r.you ? "SEN" : ally ? "DOST" : "OYUNCU";
+      const teamLabel = state.match?.ffa
+        ? "—"
+        : `T${Number(r.team) + 1}`;
       const status = r.alive
         ? `<span class="status on">ACTIVE</span>`
         : `<span class="status off">DEAD</span>`;
       return `<tr class="${cls}">
         <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
-        <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag}</small></div></td>
+        <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag} · ${teamLabel}</small></div></td>
         <td>${status}</td>
         <td>${r.infantry ?? 0}</td>
         <td>${r.tanks ?? 0}</td>
@@ -304,6 +317,11 @@ function enterMatch(snapshot) {
   }
   $("#lobby-screen").hidden = true;
   $("#match-screen").hidden = false;
+  if (snapshot.ffa) {
+    toast("FFA — everyone is hostile");
+  } else {
+    toast(`Allied · you are Team ${Number(snapshot.team) + 1} (shared vision)`);
+  }
   // Fullscreen only from click handlers (create/join/pointer) — browsers block gesture-less FS.
   void setupMatchScene(snapshot);
 }
@@ -1236,6 +1254,21 @@ const Radar = {
       if (ownN % 2) continue;
       ctx.fillRect((entity.x / mapSize) * w - 0.75, (entity.y / mapSize) * h - 0.75, 2, 2);
     }
+    // Allied infantry (non-FFA)
+    if (!state.match.ffa) {
+      ctx.fillStyle = "#5ad0ff";
+      let allyN = 0;
+      for (const entity of state.entities.values()) {
+        if (entity.hp != null && entity.hp <= 0) continue;
+        if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank")) {
+          continue;
+        }
+        if (entity.owner === you || entity.team !== myTeam) continue;
+        allyN += 1;
+        if (allyN % 2) continue;
+        ctx.fillRect((entity.x / mapSize) * w - 0.75, (entity.y / mapSize) * h - 0.75, 2, 2);
+      }
+    }
     ctx.fillStyle = "#ff5a3a";
     for (const entity of state.entities.values()) {
       if (entity.hp != null && entity.hp <= 0) continue;
@@ -2121,9 +2154,13 @@ function refreshLiveVision() {
 
   fogVisionData.fill(0);
   const you = state.match?.you;
+  const myTeam = state.match?.team;
+  const shareAllies = state.match && !state.match.ffa;
   const stamped = [];
   for (const entity of state.entities.values()) {
-    if (entity.owner !== you) continue;
+    const mine = entity.owner === you;
+    const ally = shareAllies && Number(entity.team) === Number(myTeam);
+    if (!mine && !ally) continue;
     const radius = visionRadiusFor(entity);
     if (!radius) continue;
     // Infantry blobs overlap — one stamp covers a squad and saves ~50× circle fills.
