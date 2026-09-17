@@ -9,17 +9,20 @@ pub const AOI_RADIUS: f32 = 20.0;
 pub const VISION_HQ: f32 = 20.0;
 pub const VISION_BUILDING: f32 = 13.0;
 pub const VISION_UNIT: f32 = 11.0;
-/// Finished radar station — lights up a large sector of the map.
-pub const VISION_RADAR: f32 = 34.0;
+/// Finished radar station — lights up a large sector of the map (~half a 64-map).
+pub const VISION_RADAR: f32 = 38.0;
 
 /// Opening window where every commander sees the whole map.
 pub const GLOBAL_VISION_SECS: u64 = 5 * 60;
 
 pub fn entity_provides_vision(entity: &Entity) -> bool {
-    entity.building || entity.unit
+    entity.hp > 0.0 && (entity.building || entity.unit)
 }
 
 pub fn vision_radius(entity: &Entity) -> f32 {
+    if entity.hp <= 0.0 {
+        return 0.0;
+    }
     if entity.kind == "hq" {
         VISION_HQ
     } else if entity.kind == "radar" {

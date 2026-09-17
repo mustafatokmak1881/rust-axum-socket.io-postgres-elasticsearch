@@ -26,6 +26,7 @@ pub fn router() -> Router<SharedState> {
         .route("/assets/sounds/tank-shoot.wav", get(tank_shoot_wav))
         .route("/assets/sounds/tank-destroyed.mp3", get(tank_destroyed_mp3))
         .route("/assets/sounds/mlrs-rocket.mp3", get(mlrs_rocket_mp3))
+        .route("/assets/sounds/patriot.mp3", get(patriot_mp3))
         .route("/assets/sounds/soldier-shoot.mp3", get(soldier_shoot_mp3))
         .route("/assets/sounds/building.mp3", get(building_mp3))
 }
@@ -152,6 +153,16 @@ async fn mlrs_rocket_mp3() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_bytes!("../web/usa/sounds/mlrs-rocket.mp3").as_slice(),
+    )
+}
+
+async fn patriot_mp3() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("../web/usa/sounds/patriot.mp3").as_slice(),
     )
 }
 

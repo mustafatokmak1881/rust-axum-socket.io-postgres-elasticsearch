@@ -593,6 +593,8 @@ const Sfx = {
   tankDestroyedWait: null,
   mlrsRocketBuf: null,
   mlrsRocketWait: null,
+  patriotBuf: null,
+  patriotWait: null,
   soldierShootBuf: null,
   soldierShootWait: null,
   buildingBuf: null,
@@ -609,6 +611,7 @@ const Sfx = {
     complete: { ref: 3.5, max: 14, exp: 2.5 },
     wreck: { ref: 7, max: 28, exp: 2.0 },
     mlrs: { ref: 6, max: 30, exp: 2.2 },
+    patriot: { ref: 6.5, max: 32, exp: 2.15 },
   },
 
   ensure() {
@@ -653,6 +656,7 @@ const Sfx = {
     void this.loadTankShoot();
     void this.loadTankDestroyed();
     void this.loadMlrsRocket();
+    void this.loadPatriot();
     void this.loadSoldierShoot();
     void this.loadBuilding();
     return true;
@@ -932,6 +936,43 @@ const Sfx = {
     else void this.loadMlrsRocket().then(play);
   },
 
+  loadPatriot() {
+    if (this.patriotBuf) return Promise.resolve(this.patriotBuf);
+    if (this.patriotWait) return this.patriotWait;
+    if (!this.ctx) return Promise.resolve(null);
+    this.patriotWait = fetch("/assets/sounds/patriot.mp3")
+      .then((res) => {
+        if (!res.ok) throw new Error("patriot");
+        return res.arrayBuffer();
+      })
+      .then((raw) => this.ctx.decodeAudioData(raw))
+      .then((buf) => {
+        this.patriotBuf = buf;
+        return buf;
+      })
+      .catch(() => {
+        this.patriotWait = null;
+        return null;
+      });
+    return this.patriotWait;
+  },
+
+  patriotLaunch(x, y) {
+    if (!this.ensure()) return;
+    const vol = this.volumeAt(x, y, this.ranges.patriot);
+    if (vol <= 0.004) return;
+    this.duckRifles(0.85 + vol * 0.55);
+    const play = (buf) => {
+      if (!buf || !this.ctx) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = 0.97 + Math.random() * 0.06;
+      this.startSpatialSource(src, x, y, vol * 1.1, this.dest("tank"), 2.5, 1.5);
+    };
+    if (this.patriotBuf) play(this.patriotBuf);
+    else void this.loadPatriot().then(play);
+  },
+
   loadSoldierShoot() {
     if (this.soldierShootBuf) return Promise.resolve(this.soldierShootBuf);
     if (this.soldierShootWait) return this.soldierShootWait;
@@ -1181,8 +1222,9 @@ const Sfx = {
 
   shot(kind, x, y) {
     const k = String(kind || "");
-    if (k.includes("tank_mg") || k.includes("_mg")) this.rifle(x, y);
+    if (k.includes("tank_mg") || k.includes("_mg") || k.includes("bunker")) this.rifle(x, y);
     else if (k.includes("mlrs")) this.mlrsRocket(x, y);
+    else if (k.includes("patriot") || k === "turret") this.patriotLaunch(x, y);
     else if (k.includes("tank")) this.tankCannon(x, y);
     else if (k.includes("mortar")) this.missile(x, y);
     else if (k.includes("missile")) this.missile(x, y);
@@ -1992,33 +2034,38 @@ function createBunkerMesh(fallbackMat) {
 }
 
 
-/** Long-range radar dish — support building, no weapons. */
+/** AN/TPS-style search radar — Generals / RA2 vibe, real rotating dish + ops hut. */
 function createRadarStationMesh(fallbackMat) {
   const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
-  const hull = 0x4a5240;
-  const hullDark = 0x32382c;
+  const olive = 0x4a5538;
+  const oliveDark = 0x343c2c;
+  const oliveLight = 0x5a6648;
+  const concrete = 0x5a5848;
+  const concreteDark = 0x3e3c34;
   const metal = 0x2a2c28;
-  const dish = 0x5a6250;
+  const metalBright = 0x3a3c38;
+  const dish = 0x6a7060;
   const dishDark = 0x3a4034;
   const panel = 0x1a2228;
+  const sand = 0x6b6550;
 
   const root = new THREE.Group();
   root.userData.building = true;
   root.userData.isRadar = true;
-  root.userData.radarRigVersion = 1;
+  root.userData.radarRigVersion = 2;
   root.userData.modelKind = "radar";
   root.userData.isFallback = false;
   root.userData.keepMtlColors = true;
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-  root.userData.unitHeight = 0.55;
-  root.userData.scanRate = 0.85;
+  root.userData.unitHeight = 0.92;
+  root.userData.scanRate = 0.7;
 
   const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
     const m = new THREE.Mesh(
       geo,
       matStd(color, {
-        metalness: opts.metalness ?? 0.25,
-        roughness: opts.roughness ?? 0.7,
+        metalness: opts.metalness ?? 0.22,
+        roughness: opts.roughness ?? 0.72,
       }),
     );
     m.position.set(x, y, z);
@@ -2029,65 +2076,212 @@ function createRadarStationMesh(fallbackMat) {
     return m;
   };
 
-  // Pad
-  add(root, new THREE.CylinderGeometry(0.32, 0.34, 0.04, 14), hullDark, 0, 0.02, 0, 0, 0, 0, {
+  // Concrete pad + berm
+  add(root, new THREE.CylinderGeometry(0.42, 0.46, 0.035, 16), concreteDark, 0, 0.015, 0, 0, 0, 0, {
+    roughness: 0.95,
+    cast: false,
+  });
+  add(root, new THREE.BoxGeometry(0.72, 0.025, 0.55), concrete, 0, 0.03, -0.02, 0, 0, 0, {
     roughness: 0.9,
     cast: false,
   });
-  // Equipment hut
-  add(root, new THREE.BoxGeometry(0.28, 0.16, 0.22), hull, -0.08, 0.12, -0.06, 0, 0, 0);
-  add(root, new THREE.BoxGeometry(0.12, 0.08, 0.02), panel, -0.08, 0.14, 0.06, 0, 0, 0, {
-    metalness: 0.4,
+  add(root, new THREE.CylinderGeometry(0.12, 0.14, 0.06, 12), concrete, 0.14, 0.055, 0.1);
+
+  // Ops / equipment hut
+  const hut = new THREE.Group();
+  hut.position.set(-0.14, 0, -0.04);
+  root.add(hut);
+  add(hut, new THREE.BoxGeometry(0.36, 0.22, 0.3), olive, 0, 0.14, 0, 0, 0, 0);
+  add(hut, new THREE.BoxGeometry(0.38, 0.03, 0.32), oliveDark, 0, 0.26, 0);
+  add(hut, new THREE.BoxGeometry(0.4, 0.015, 0.34), oliveLight, 0, 0.275, 0, 0, 0, 0, {
+    roughness: 0.8,
+  });
+  add(hut, new THREE.BoxGeometry(0.08, 0.12, 0.012), panel, 0.14, 0.12, 0.155, 0, 0, 0, {
+    metalness: 0.35,
+    roughness: 0.5,
+  });
+  for (const wx of [-0.1, 0.02]) {
+    add(hut, new THREE.BoxGeometry(0.07, 0.05, 0.01), panel, wx, 0.16, 0.155, 0, 0, 0, {
+      metalness: 0.45,
+      roughness: 0.4,
+    });
+  }
+  add(hut, new THREE.BoxGeometry(0.06, 0.05, 0.04), metalBright, -0.19, 0.14, 0.05, 0, 0, 0, {
+    metalness: 0.5,
     roughness: 0.45,
   });
-  // Team stripe
-  add(root, new THREE.BoxGeometry(0.2, 0.02, 0.04), accent, -0.08, 0.21, -0.06, 0, 0, 0, {
+  add(hut, new THREE.BoxGeometry(0.05, 0.04, 0.08), metal, 0.1, 0.24, -0.08, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.55,
+  });
+  add(hut, new THREE.BoxGeometry(0.28, 0.025, 0.04), accent, 0, 0.255, 0.12, 0, 0, 0, {
     metalness: 0.2,
     roughness: 0.55,
   });
+  add(hut, new THREE.BoxGeometry(0.1, 0.04, 0.06), oliveDark, 0.14, 0.04, 0.18, 0, 0, 0, {
+    cast: false,
+  });
 
-  // Mast
-  add(root, new THREE.CylinderGeometry(0.028, 0.035, 0.38, 8), metal, 0.12, 0.25, 0.08, 0, 0, 0, {
+  // Generator cart
+  add(root, new THREE.BoxGeometry(0.14, 0.1, 0.12), oliveDark, -0.32, 0.07, 0.16);
+  add(root, new THREE.CylinderGeometry(0.025, 0.025, 0.08, 8), metal, -0.32, 0.14, 0.16, 0, 0, 0, {
     metalness: 0.55,
     roughness: 0.4,
   });
-  add(root, new THREE.CylinderGeometry(0.04, 0.04, 0.03, 10), metal, 0.12, 0.44, 0.08, 0, 0, 0, {
-    metalness: 0.5,
-    roughness: 0.45,
+
+  // Sandbag ring
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + 0.2;
+    if (a > 1.2 && a < 2.4) continue;
+    add(
+      root,
+      new THREE.BoxGeometry(0.07, 0.035, 0.05),
+      sand,
+      Math.cos(a) * 0.38,
+      0.04,
+      Math.sin(a) * 0.32,
+      0,
+      -a,
+      0,
+      { roughness: 0.92, cast: false },
+    );
+  }
+
+  // Lattice mast
+  const mastX = 0.16;
+  const mastZ = 0.1;
+  add(root, new THREE.CylinderGeometry(0.032, 0.042, 0.52, 10), metalBright, mastX, 0.32, mastZ, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  for (const [lx, lz] of [
+    [0.055, 0.055],
+    [-0.055, 0.055],
+    [0.055, -0.055],
+    [-0.055, -0.055],
+  ]) {
+    add(root, new THREE.BoxGeometry(0.012, 0.48, 0.012), metal, mastX + lx, 0.3, mastZ + lz, 0, 0, 0, {
+      metalness: 0.5,
+      roughness: 0.45,
+    });
+  }
+  for (let i = 0; i < 4; i++) {
+    const y = 0.14 + i * 0.11;
+    add(root, new THREE.BoxGeometry(0.11, 0.01, 0.01), metal, mastX, y, mastZ, 0, 0.4, 0, {
+      metalness: 0.45,
+      roughness: 0.5,
+      cast: false,
+    });
+    add(root, new THREE.BoxGeometry(0.01, 0.01, 0.11), metal, mastX, y + 0.04, mastZ, 0, 0, 0, {
+      metalness: 0.45,
+      roughness: 0.5,
+      cast: false,
+    });
+  }
+  add(root, new THREE.BoxGeometry(0.22, 0.02, 0.025), metal, 0.02, 0.06, 0.02, 0, 0.35, 0, {
+    metalness: 0.4,
+    roughness: 0.6,
+    cast: false,
+  });
+
+  // Turntable
+  add(root, new THREE.CylinderGeometry(0.07, 0.08, 0.04, 14), metal, mastX, 0.58, mastZ, 0, 0, 0, {
+    metalness: 0.6,
+    roughness: 0.35,
+  });
+  add(root, new THREE.CylinderGeometry(0.05, 0.05, 0.03, 12), oliveDark, mastX, 0.61, mastZ, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.5,
   });
 
   // Rotating dish assembly
   const dishRoot = new THREE.Group();
   dishRoot.name = "radarDish";
-  dishRoot.position.set(0.12, 0.46, 0.08);
+  dishRoot.position.set(mastX, 0.64, mastZ);
   root.add(dishRoot);
 
-  // Dish bowl (open toward +Z when elevated)
+  add(dishRoot, new THREE.BoxGeometry(0.2, 0.035, 0.06), metalBright, 0, 0.02, 0, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  for (const sx of [-0.09, 0.09]) {
+    add(dishRoot, new THREE.BoxGeometry(0.025, 0.12, 0.04), metal, sx, 0.08, -0.02, 0.15, 0, 0, {
+      metalness: 0.5,
+      roughness: 0.42,
+    });
+  }
+
+  const elev = new THREE.Group();
+  elev.position.set(0, 0.12, 0);
+  elev.rotation.x = -0.48;
+  dishRoot.add(elev);
+
   const bowl = new THREE.Mesh(
-    new THREE.SphereGeometry(0.18, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    matStd(dish, { metalness: 0.35, roughness: 0.55 }),
+    new THREE.SphereGeometry(0.26, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.52),
+    matStd(dish, { metalness: 0.4, roughness: 0.48 }),
   );
-  bowl.rotation.x = Math.PI * 0.55;
-  bowl.position.set(0, 0.02, 0.02);
+  bowl.rotation.x = Math.PI * 0.52;
+  bowl.position.set(0, 0.02, 0.04);
   bowl.castShadow = true;
   bowl.receiveShadow = true;
-  dishRoot.add(bowl);
+  elev.add(bowl);
 
-  add(dishRoot, new THREE.CylinderGeometry(0.012, 0.012, 0.14, 6), metal, 0, 0.02, 0.1, Math.PI / 2, 0, 0, {
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.255, 0.012, 8, 28),
+    matStd(dishDark, { metalness: 0.45, roughness: 0.5 }),
+  );
+  rim.rotation.x = Math.PI / 2;
+  rim.position.set(0, 0.02, 0.12);
+  rim.castShadow = true;
+  elev.add(rim);
+
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI;
+    const rib = new THREE.Mesh(
+      new THREE.BoxGeometry(0.008, 0.22, 0.006),
+      matStd(metalBright, { metalness: 0.5, roughness: 0.4 }),
+    );
+    rib.position.set(Math.cos(a) * 0.08, 0.02, 0.05 + Math.sin(a) * 0.04);
+    rib.rotation.set(0.35, a, Math.sin(a) * 0.4);
+    rib.castShadow = false;
+    elev.add(rib);
+  }
+
+  add(elev, new THREE.CylinderGeometry(0.01, 0.01, 0.22, 6), metal, 0, 0.02, 0.18, Math.PI / 2, 0, 0, {
+    metalness: 0.65,
+    roughness: 0.32,
+  });
+  add(elev, new THREE.ConeGeometry(0.035, 0.05, 8), dishDark, 0, 0.02, 0.3, Math.PI / 2, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+  add(elev, new THREE.CylinderGeometry(0.018, 0.022, 0.03, 8), metalBright, 0, 0.02, 0.26, Math.PI / 2, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+  add(elev, new THREE.BoxGeometry(0.1, 0.06, 0.08), oliveDark, 0, 0.0, -0.12, 0, 0, 0, {
+    metalness: 0.35,
+    roughness: 0.55,
+  });
+
+  // Secondary IFF antenna
+  add(root, new THREE.CylinderGeometry(0.008, 0.008, 0.28, 6), metal, -0.22, 0.42, -0.12, 0.15, 0, 0.1, {
     metalness: 0.6,
     roughness: 0.35,
   });
-  add(dishRoot, new THREE.SphereGeometry(0.025, 8, 8), dishDark, 0, 0.02, 0.16, 0, 0, 0, {
-    metalness: 0.4,
-    roughness: 0.5,
-  });
-  // Elevation tilt
-  dishRoot.rotation.x = -0.55;
-
-  // Side antenna stub
-  add(root, new THREE.CylinderGeometry(0.006, 0.006, 0.2, 5), metal, -0.18, 0.28, -0.12, 0.2, 0, 0.15, {
-    metalness: 0.55,
+  add(root, new THREE.BoxGeometry(0.06, 0.015, 0.015), metalBright, -0.22, 0.55, -0.12, 0, 0.4, 0, {
+    metalness: 0.5,
     roughness: 0.4,
+  });
+  add(root, new THREE.BoxGeometry(0.015, 0.015, 0.06), metalBright, -0.22, 0.55, -0.12, 0, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+
+  add(root, new THREE.SphereGeometry(0.018, 8, 8), 0xaa3310, mastX, 0.9, mastZ, 0, 0, 0, {
+    metalness: 0.3,
+    roughness: 0.4,
+    cast: false,
   });
 
   return root;
@@ -2403,7 +2597,14 @@ function makeFallbackTerrainTexture(mapSize) {
 }
 
 function visionRadiusFor(entity) {
-  if (entity.kind === "hq") return 20;
+  if (!entity || (entity.hp != null && entity.hp <= 0)) return 0;
+  const kind = String(entity.kind || "");
+  if (kind === "hq") return 20;
+  if (kind === "radar") {
+    // Under construction: short local vision; finished dish lights a huge sector.
+    const building = entity.progress != null && entity.progress < 1;
+    return building ? 6 : 38;
+  }
   if (entity.building) return 13;
   if (entity.unit) return 11;
   return 0;
@@ -2920,7 +3121,7 @@ function buildingRadius(kind) {
     supply: 1.7,
     turret: 0.55,
     bunker: 0.34,
-    radar: 0.7,
+    radar: 0.85,
   }[kind] ?? 1.35;
   return visual * 0.42;
 }
@@ -3429,7 +3630,7 @@ function labelHeightFor(entity) {
   if (entity.building) {
     if (entity.kind === "hq") return 2.05;
     if (entity.kind === "bunker") return 0.42;
-    if (entity.kind === "radar") return 0.72;
+    if (entity.kind === "radar") return 1.05;
     if (entity.kind === "turret") return 0.85;
     return 1.5;
   }
@@ -4418,7 +4619,7 @@ function upsertMesh(entity) {
   if (
     mesh &&
     entity.kind === "radar" &&
-    (!mesh.userData.isRadar || (mesh.userData.radarRigVersion || 0) < 1)
+    (!mesh.userData.isRadar || (mesh.userData.radarRigVersion || 0) < 2)
   ) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
@@ -5414,16 +5615,32 @@ function updateCombatFx(now) {
           part.mesh.material.opacity = 0.95 * (1 - t * 0.5);
         }
       } else if (part.role === "blast") {
-        const fade = Math.max(0, 1 - t * (fx.type === "tank_boom" ? 1.6 : 4));
+        const fade = Math.max(
+          0,
+          1 - t * (fx.type === "tank_boom" || fx.type === "patriot_boom" ? 1.45 : 4),
+        );
         part.mesh.material.opacity = fade;
-        const grow = fx.type === "shell" || fx.type === "tank_boom" ? 1 + t * 8 : 1 + t * 3;
+        const grow =
+          fx.type === "shell" || fx.type === "tank_boom"
+            ? 1 + t * 8
+            : fx.type === "patriot_boom"
+              ? 1 + t * 11
+              : 1 + t * 3;
         part.mesh.scale.setScalar(grow);
-        if (fx.type === "tank_boom") {
-          part.mesh.position.y = fx.start.y + t * 0.25;
+        if (fx.type === "tank_boom" || fx.type === "patriot_boom") {
+          part.mesh.position.y = fx.start.y + t * (fx.type === "patriot_boom" ? 0.35 : 0.25);
         }
       } else if (part.role === "ring") {
-        if (fx.type === "patriot" || fx.type === "mlrs") {
-          // Exhaust smoke puff trailing the missile / rocket.
+        if (fx.type === "patriot") {
+          // Exhaust smoke puff trailing the missile.
+          part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.06 - t * 0.04);
+          part.mesh.material.opacity = 0.5 * (1 - t);
+          part.mesh.scale.setScalar(1 + t * 6);
+        } else if (fx.type === "patriot_boom") {
+          part.mesh.material.opacity = 0.9 * (1 - t);
+          const s = 1 + t * 14;
+          part.mesh.scale.set(s, s, s);
+        } else if (fx.type === "mlrs") {
           part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.06 - t * 0.04);
           part.mesh.material.opacity = 0.5 * (1 - t);
           part.mesh.scale.setScalar(1 + t * 6);
@@ -5440,7 +5657,7 @@ function updateCombatFx(now) {
           part.mesh.position.z = fx.start.z + drift.z * t;
         }
         part.mesh.material.opacity = 0.55 * (1 - t);
-        part.mesh.scale.setScalar(1 + t * 4);
+        part.mesh.scale.setScalar(1 + t * (fx.type === "patriot_boom" ? 5.5 : 4));
       } else if (part.role === "smoke") {
         if (fx.type === "patriot" || fx.type === "mlrs") {
           part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.035);
@@ -5473,18 +5690,17 @@ function updateCombatFx(now) {
         fx.type === "mlrs"
       ) {
         if (fx.hit !== false) {
-          spawnTankExplosion(fx.end);
-          applyBlastKnock(
-            fx.end.x,
-            fx.end.z,
-            fx.type === "mlrs"
-              ? 1.55
-              : fx.type === "mortar"
-                ? 0.95
-                : fx.type === "patriot"
-                  ? 1.05
-                  : 0.85,
-          );
+          if (fx.type === "patriot") {
+            spawnPatriotImpact(fx.end);
+            applyBlastKnock(fx.end.x, fx.end.z, 1.45);
+          } else {
+            spawnTankExplosion(fx.end);
+            applyBlastKnock(
+              fx.end.x,
+              fx.end.z,
+              fx.type === "mlrs" ? 1.75 : fx.type === "mortar" ? 0.95 : 0.85,
+            );
+          }
         } else {
           spawnMissImpact(fx.end, true);
         }
@@ -5593,6 +5809,137 @@ function spawnTankExplosion(at) {
     parts,
     start: at.clone(),
     end: at.clone(),
+    dir: new THREE.Vector3(0, 1, 0),
+    dist: 0,
+  });
+}
+
+/** PAC-2/3 style intercept flash — bright white core, shock ring, hot fragments. */
+function spawnPatriotImpact(at) {
+  if (!scene) return;
+  const now = performance.now();
+  const parts = [];
+  const origin = at.clone();
+  origin.y = Math.max(0.06, at.y);
+
+  const flash = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 12, 12),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    }),
+  );
+  flash.position.copy(origin);
+  scene.add(flash);
+  parts.push({ mesh: flash, role: "blast" });
+
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.055, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xa8d8ff,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    }),
+  );
+  core.position.copy(origin);
+  scene.add(core);
+  parts.push({ mesh: core, role: "blast" });
+
+  const fire = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xff8844,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+    }),
+  );
+  fire.position.copy(origin);
+  scene.add(fire);
+  parts.push({ mesh: fire, role: "blast" });
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.06, 0.2, 28),
+    new THREE.MeshBasicMaterial({
+      color: 0xd0e8ff,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(origin.x, 0.05, origin.z);
+  scene.add(ring);
+  parts.push({ mesh: ring, role: "ring" });
+
+  const ring2 = new THREE.Mesh(
+    new THREE.RingGeometry(0.1, 0.28, 28),
+    new THREE.MeshBasicMaterial({
+      color: 0xffaa66,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  ring2.rotation.x = -Math.PI / 2;
+  ring2.position.set(origin.x, 0.04, origin.z);
+  scene.add(ring2);
+  parts.push({ mesh: ring2, role: "ring" });
+
+  for (let i = 0; i < 8; i++) {
+    const ang = (i / 8) * Math.PI * 2 + Math.random() * 0.2;
+    const spark = new THREE.Mesh(
+      new THREE.SphereGeometry(0.018 + Math.random() * 0.012, 5, 5),
+      new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xffeeaa : 0x88ccff,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+      }),
+    );
+    spark.position.copy(origin);
+    spark.userData.drift = new THREE.Vector3(
+      Math.cos(ang) * (0.45 + Math.random() * 0.35),
+      0.35 + Math.random() * 0.55,
+      Math.sin(ang) * (0.45 + Math.random() * 0.35),
+    );
+    scene.add(spark);
+    parts.push({ mesh: spark, role: "debris" });
+  }
+
+  for (let i = 0; i < 4; i++) {
+    const ang = (i / 4) * Math.PI * 2;
+    const smoke = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06 + Math.random() * 0.04, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0x8a8880,
+        transparent: true,
+        opacity: 0.5,
+        depthWrite: false,
+      }),
+    );
+    smoke.position.set(
+      origin.x + Math.cos(ang) * 0.04,
+      origin.y + 0.04,
+      origin.z + Math.sin(ang) * 0.04,
+    );
+    smoke.userData.drift = new THREE.Vector3(Math.cos(ang) * 0.25, 0.5, Math.sin(ang) * 0.25);
+    scene.add(smoke);
+    parts.push({ mesh: smoke, role: "debris" });
+  }
+
+  activeFx.push({
+    type: "patriot_boom",
+    born: now,
+    life: 720,
+    parts,
+    start: origin.clone(),
+    end: origin.clone(),
     dir: new THREE.Vector3(0, 1, 0),
     dist: 0,
   });

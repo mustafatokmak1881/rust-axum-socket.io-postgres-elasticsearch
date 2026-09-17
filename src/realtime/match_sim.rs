@@ -641,7 +641,7 @@ fn building_visual_size(kind: &str) -> f32 {
         "power_plant" | "supply" => 1.7,
         "turret" => 0.55,
         "bunker" => 0.34,
-        "radar" => 0.7,
+        "radar" => 0.85,
         _ => 1.35,
     }
 }
@@ -1564,11 +1564,25 @@ impl MatchSim {
         let Some(def) = buildables().iter().find(|b| b.kind == entity.kind) else {
             return;
         };
-        if def.power <= 0 {
-            return;
+        if def.power > 0 {
+            if let Some(player) = self.players.get_mut(&entity.owner) {
+                player.resources.power = player.resources.power.saturating_add(def.power);
+            }
         }
-        if let Some(player) = self.players.get_mut(&entity.owner) {
-            player.resources.power = player.resources.power.saturating_add(def.power);
+        // Radar / any finished building: stamp its vision disc immediately.
+        let owner = entity.owner;
+        let _ = self.reveal_vision_for(owner);
+        if !self.ffa {
+            let team = entity.team;
+            let allies: Vec<Uuid> = self
+                .players
+                .values()
+                .filter(|p| p.team == team && p.user_id != owner)
+                .map(|p| p.user_id)
+                .collect();
+            for uid in allies {
+                let _ = self.reveal_vision_for(uid);
+            }
         }
     }
 
@@ -3486,10 +3500,8 @@ impl MatchSim {
         Vec<u16>,
         Vec<ShotEvent>,
     ) {
-        if self.tick % 4 == 0 {
-            let _ = self.reveal_vision_for(user_id);
-        }
-        let explored_new = Vec::new();
+        // Always stamp vision discs (radar / units) into the permanent shroud.
+        let explored_new = self.reveal_vision_for(user_id);
 
         let Some(player) = self.players.get_mut(&user_id) else {
             return (vec![], vec![], None, explored_new, vec![]);
