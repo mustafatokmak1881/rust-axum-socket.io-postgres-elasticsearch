@@ -98,10 +98,10 @@ pub struct Resources {
 impl Resources {
     pub fn starter() -> Self {
         Self {
-            supplies: 50_000,
-            fuel: 50_000,
-            munitions: 50_000,
-            power: 1_000,
+            supplies: 10_000,
+            fuel: 10_000,
+            munitions: 10_000,
+            power: 10_000,
             power_used: 0,
         }
     }
@@ -1028,9 +1028,8 @@ impl MatchSim {
         player.resources.supplies -= def.cost_supplies;
         player.resources.fuel -= def.cost_fuel;
         player.resources.munitions -= def.cost_munitions;
-        if def.power > 0 {
-            player.resources.power += def.power;
-        } else {
+        // Consumers reserve power on place; producers add generation when the build finishes.
+        if def.power < 0 {
             player.resources.power_used += -def.power;
         }
 
@@ -1197,6 +1196,91 @@ impl MatchSim {
         }
     }
 
+    /// Completed economy buildings pay out once per second so they matter after the build.
+    fn apply_building_income(&mut self) {
+        if self.tick % u64::from(TICK_HZ) != 0 {
+            return;
+        }
+        #[derive(Default, Clone, Copy)]
+        struct Gain {
+            sup: i32,
+            fuel: i32,
+            mun: i32,
+            pwr: i32,
+        }
+        let mut by_owner: HashMap<Uuid, Gain> = HashMap::new();
+        for e in self.entities.values() {
+            if !e.building || e.hp <= 0.0 || e.build_remaining_ms > 0 {
+                continue;
+            }
+            let g = by_owner.entry(e.owner).or_default();
+            match e.kind.as_str() {
+                "hq" => {
+                    g.sup += 8;
+                    g.fuel += 3;
+                    g.mun += 3;
+                }
+                "supply" => {
+                    g.sup += 32;
+                    g.fuel += 10;
+                    g.mun += 8;
+                }
+                "power_plant" => {
+                    g.pwr += 15;
+                }
+                "war_factory" => {
+                    g.fuel += 8;
+                    g.mun += 6;
+                }
+                "barracks" => {
+                    g.mun += 4;
+                }
+                _ => {}
+            }
+        }
+        for (owner, g) in by_owner {
+            let Some(player) = self.players.get_mut(&owner) else {
+                continue;
+            };
+            if !player.alive {
+                continue;
+            }
+            player.resources.supplies = player.resources.supplies.saturating_add(g.sup);
+            player.resources.fuel = player.resources.fuel.saturating_add(g.fuel);
+            player.resources.munitions = player.resources.munitions.saturating_add(g.mun);
+            player.resources.power = player.resources.power.saturating_add(g.pwr);
+        }
+    }
+
+    fn on_building_finished(&mut self, entity: &Entity) {
+        let Some(def) = buildables().iter().find(|b| b.kind == entity.kind) else {
+            return;
+        };
+        if def.power <= 0 {
+            return;
+        }
+        if let Some(player) = self.players.get_mut(&entity.owner) {
+            player.resources.power = player.resources.power.saturating_add(def.power);
+        }
+    }
+
+    fn refund_building_economy(&mut self, entity: &Entity) {
+        if !entity.building {
+            return;
+        }
+        let Some(def) = buildables().iter().find(|b| b.kind == entity.kind) else {
+            return;
+        };
+        let Some(player) = self.players.get_mut(&entity.owner) else {
+            return;
+        };
+        if def.power < 0 {
+            player.resources.power_used = (player.resources.power_used + def.power).max(0);
+        } else if entity.build_remaining_ms == 0 && def.power > 0 {
+            player.resources.power = (player.resources.power - def.power).max(0);
+        }
+    }
+
     pub fn tick_once(&mut self) {
         if self.ended {
             return;
@@ -1206,22 +1290,7 @@ impl MatchSim {
         self.grid
             .rebuild(self.entities.values().map(|e| (e.id, e.x, e.y)));
 
-        // Income from supply buildings.
-        if self.tick % u64::from(TICK_HZ) == 0 {
-            let owners: Vec<Uuid> = self
-                .entities
-                .values()
-                .filter(|e| e.kind == "supply" && e.build_remaining_ms == 0)
-                .map(|e| e.owner)
-                .collect();
-            for owner in owners {
-                if let Some(player) = self.players.get_mut(&owner) {
-                    player.resources.supplies += 40;
-                    player.resources.fuel += 20;
-                    player.resources.munitions += 15;
-                }
-            }
-        }
+        self.apply_building_income();
 
         let building_ids: Vec<Uuid> = self
             .entities
@@ -1234,9 +1303,13 @@ impl MatchSim {
                 continue;
             };
 
+            let was_building = entity.build_remaining_ms > 0;
             if entity.build_remaining_ms > 0 {
                 entity.build_remaining_ms = entity.build_remaining_ms.saturating_sub(dt_ms);
                 entity.dirty = true;
+            }
+            if was_building && entity.build_remaining_ms == 0 {
+                self.on_building_finished(&entity);
             }
 
             if entity.build_remaining_ms == 0 {
@@ -1710,6 +1783,7 @@ impl MatchSim {
             .collect();
         for id in dead {
             if let Some(entity) = self.take_entity(id) {
+                self.refund_building_economy(&entity);
                 self.removed.push(id);
                 if entity.kind == "hq" {
                     if let Some(player) = self.players.get_mut(&entity.owner) {

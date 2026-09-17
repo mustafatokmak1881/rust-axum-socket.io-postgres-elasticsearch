@@ -3127,9 +3127,26 @@ function createTankMesh(teamColor) {
   // Commander cupola
   add(turret, new THREE.CylinderGeometry(0.038, 0.044, 0.032, 10), matStd(metal), 0.045, 0.295, -0.02);
   add(turret, new THREE.BoxGeometry(0.032, 0.014, 0.032), matStd(0x222018), 0.045, 0.312, -0.02);
-  // Cupola MG
-  add(turret, new THREE.CylinderGeometry(0.005, 0.005, 0.07, 5), matStd(0x111110), 0.045, 0.318, 0.04, Math.PI / 2, 0, 0);
-  add(turret, new THREE.BoxGeometry(0.02, 0.012, 0.025), matStd(metal), 0.045, 0.318, 0.01);
+  // Roof pintle MG (fires independently of the main gun)
+  const mg = new THREE.Group();
+  mg.name = "tankMg";
+  mg.position.set(0.045, 0.328, -0.02);
+  add(mg, new THREE.CylinderGeometry(0.01, 0.01, 0.022, 6), matStd(metal), 0, 0.012, 0);
+  add(mg, new THREE.BoxGeometry(0.016, 0.012, 0.028), matStd(0x1a1a16), 0, 0.02, 0.01);
+  const mgBarrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.0045, 0.0055, 0.09, 6),
+    matStd(0x111110, { metalness: 0.65 }),
+  );
+  mgBarrel.rotation.x = Math.PI / 2;
+  mgBarrel.position.set(0, 0.022, 0.052);
+  mgBarrel.castShadow = true;
+  mg.add(mgBarrel);
+  add(mg, new THREE.BoxGeometry(0.012, 0.008, 0.018), matStd(metal), 0, 0.03, 0.02);
+  const mgTip = new THREE.Object3D();
+  mgTip.name = "mgMuzzle";
+  mgTip.position.set(0, 0.022, 0.1);
+  mg.add(mgTip);
+  turret.add(mg);
   // Smoke grenade launchers
   for (let i = 0; i < 3; i++) {
     add(turret, new THREE.CylinderGeometry(0.008, 0.008, 0.03, 6), matStd(metal), -0.09, 0.24, 0.06 + i * 0.025, 0.6, 0, 0.4);
@@ -3185,6 +3202,7 @@ function createTankMesh(teamColor) {
   g.userData.hullTurnRate = 1.05;
   g.userData.turretTurnRate = 1.25;
   g.userData.barrelRecoil = 0;
+  g.userData.tankRigVersion = 6;
   // Half visual size vs prior rig (matches unitDims / server radius).
   g.scale.setScalar(0.5);
   return g;
@@ -3265,7 +3283,7 @@ function upsertMesh(entity) {
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
-          (mesh.userData.tankRigVersion || 0) < 5)) ||
+          (mesh.userData.tankRigVersion || 0) < 6)) ||
       (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
     if (needsWalkRig) {
       Sfx.stopEngine(entity.id);
@@ -3380,8 +3398,8 @@ function rebuildMeshes() {
 
 const activeFx = [];
 
-function worldMuzzlePoint(mesh) {
-  const tip = mesh?.getObjectByName?.("muzzle");
+function worldMuzzlePoint(mesh, name = "muzzle") {
+  const tip = mesh?.getObjectByName?.(name);
   if (tip) {
     const p = new THREE.Vector3();
     tip.getWorldPosition(p);
@@ -3584,6 +3602,17 @@ function smoothUnitFacing(mesh, dt) {
         const maxStep = turretRate * dt;
         turret.rotation.y = cur + Math.max(-maxStep, Math.min(maxStep, diff));
       }
+      const mg = turret.getObjectByName("tankMg");
+      if (mg) {
+        const mgAim =
+          mesh.userData.mgAimYaw != null ? mesh.userData.mgAimYaw : aim;
+        if (mgAim != null) {
+          const desiredLocal = shortestAngle(0, mgAim - mesh.rotation.y - turret.rotation.y);
+          const cur = mg.rotation.y;
+          const diff = shortestAngle(cur, desiredLocal);
+          mg.rotation.y = cur + Math.max(-2.8 * dt, Math.min(2.8 * dt, diff));
+        }
+      }
     }
     return;
   }
@@ -3675,11 +3704,23 @@ function spawnShotFx(shot) {
   const fromMesh = state.meshes.get(shot.from);
   const toMesh = state.meshes.get(shot.to);
   const didHit = shot.hit !== false;
+  const kind = String(shot.kind || fromMesh?.userData?.kind || "");
+  const isTankMg = kind.includes("mg");
+  const isTankCannon = kind.includes("tank") && !isTankMg;
+  const isMissile = kind.includes("missile");
 
-  faceMeshToward(fromMesh, shot.x1, shot.y1);
+  if (isTankMg && fromMesh) {
+    const dx = shot.x1 - fromMesh.position.x;
+    const dz = shot.y1 - fromMesh.position.z;
+    if (dx * dx + dz * dz > 1e-6) {
+      fromMesh.userData.mgAimYaw = Math.atan2(dx, dz);
+    }
+  } else {
+    faceMeshToward(fromMesh, shot.x1, shot.y1);
+  }
 
   const start = fromMesh
-    ? worldMuzzlePoint(fromMesh)
+    ? worldMuzzlePoint(fromMesh, isTankMg ? "mgMuzzle" : "muzzle")
     : new THREE.Vector3(shot.x0, 0.12, shot.y0);
   // Always use server impact point so misses fly wide of the mesh.
   const endY = didHit
@@ -3687,18 +3728,15 @@ function spawnShotFx(shot) {
     : 0.04;
   const end = new THREE.Vector3(shot.x1, endY, shot.y1);
 
-  const kind = String(shot.kind || fromMesh?.userData?.kind || "");
-  const isTank = kind.includes("tank") || !!fromMesh?.userData?.isTank;
-  const isMissile = kind.includes("missile");
   const dir = new THREE.Vector3().subVectors(end, start);
   const dist = Math.max(0.05, dir.length());
   dir.normalize();
 
   const now = performance.now();
   const fx = {
-    type: isTank ? "shell" : isMissile ? "missile" : "bullet",
+    type: isTankCannon ? "shell" : isMissile ? "missile" : "bullet",
     born: now,
-    life: isTank ? 380 : isMissile ? 520 : 90,
+    life: isTankCannon ? 380 : isMissile ? 520 : 90,
     start: start.clone(),
     end: end.clone(),
     dir: dir.clone(),
@@ -3708,7 +3746,7 @@ function spawnShotFx(shot) {
     parts: [],
   };
 
-  if (isTank) {
+  if (isTankCannon) {
     // Heavy muzzle blast
     const blast = new THREE.Mesh(
       new THREE.SphereGeometry(0.05, 8, 8),

@@ -1,8 +1,7 @@
 //! Opening computer commanders: five nations that attack and defend on their own.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use rand::Rng;
 use uuid::Uuid;
 
 use super::grid::MAX_ENTITY_RADIUS;
@@ -30,6 +29,10 @@ pub struct BotMind {
     pub war_owner: Option<Uuid>,
     pub next_wave: u64,
     pub last_move: u64,
+    /// Last living count per building kind — used to detect losses.
+    pub seen_counts: HashMap<String, u32>,
+    /// Don't slap the same building down the tick after it dies.
+    pub rebuild_hold: HashMap<String, u64>,
 }
 
 struct BotProfile {
@@ -191,6 +194,17 @@ impl BotStyle {
             BotStyle::Reckless => 1,
         }
     }
+
+    /// Ticks to wait after a building dies before even considering that kind again.
+    fn rebuild_delay(self) -> u64 {
+        match self {
+            BotStyle::Reckless => 240,
+            BotStyle::Aggressive => 300,
+            BotStyle::Balanced => 380,
+            BotStyle::Defensive => 340,
+            BotStyle::Counter => 320,
+        }
+    }
 }
 
 pub fn seed_opening_bots(sim: &mut MatchSim) {
@@ -213,6 +227,8 @@ pub fn seed_opening_bots(sim: &mut MatchSim) {
                 war_owner: None,
                 next_wave: profile.style.first_wave_tick(),
                 last_move: 0,
+                seen_counts: HashMap::new(),
+                rebuild_hold: HashMap::new(),
             }),
         );
     }
@@ -278,7 +294,7 @@ fn think(sim: &mut MatchSim, bot_id: Uuid) {
     let hq_hurt = hq_hp < hq_max * 0.82;
     let threatened = enemy_near(sim, team, hx, hy, 16.0);
 
-    expand_base(sim, bot_id, style, hx, hy);
+    expand_base(sim, bot_id, style, hx, hy, team, threatened);
     train_army(sim, bot_id, style, threatened);
 
     let own = collect_own(sim, bot_id);
@@ -990,50 +1006,155 @@ fn count_units(sim: &MatchSim, owner: Uuid, pred: impl Fn(&str) -> bool) -> usiz
         .count()
 }
 
-fn expand_base(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, hx: f32, hy: f32) {
+fn expand_base(
+    sim: &mut MatchSim,
+    bot_id: Uuid,
+    style: BotStyle,
+    hx: f32,
+    hy: f32,
+    team: u8,
+    threatened: bool,
+) {
     let plants = count_kind(sim, bot_id, "power_plant");
     let barracks = count_kind(sim, bot_id, "barracks");
     let supply = count_kind(sim, bot_id, "supply");
     let factory = count_kind(sim, bot_id, "war_factory");
     let turrets = count_kind(sim, bot_id, "turret");
+    let now = sim.tick;
 
-    if plants < 1 {
-        try_place(sim, bot_id, "power_plant", hx, hy, 2.8);
+    if sim.entities.values().any(|e| {
+        e.owner == bot_id && e.building && e.hp > 0.0 && e.build_remaining_ms > 0
+    }) {
         return;
     }
-    if barracks < 1 {
-        try_place(sim, bot_id, "barracks", hx, hy, 3.2);
+
+    let snapshot = [
+        ("power_plant", plants),
+        ("barracks", barracks),
+        ("supply", supply),
+        ("war_factory", factory),
+        ("turret", turrets),
+    ];
+    if let Some(mind) = sim.players.get_mut(&bot_id).and_then(|p| p.bot.as_mut()) {
+        let delay = style.rebuild_delay();
+        for (kind, count) in snapshot {
+            let prev = mind.seen_counts.get(kind).copied().unwrap_or(count);
+            if count < prev {
+                mind.rebuild_hold.insert(kind.into(), now + delay);
+            }
+            mind.seen_counts.insert(kind.into(), count);
+        }
+    }
+
+    let held = |kind: &str| -> bool {
+        sim.players
+            .get(&bot_id)
+            .and_then(|p| p.bot.as_ref())
+            .and_then(|m| m.rebuild_hold.get(kind).copied())
+            .is_some_and(|until| now < until)
+    };
+
+    let army = count_units(sim, bot_id, |_| true);
+    let need = if threatened {
+        // Fight first. Only replace a missing production building in the rear.
+        if barracks == 0 && army < 8 && !held("barracks") {
+            Some(("barracks", 3.4))
+        } else if plants == 0 && !held("power_plant") {
+            Some(("power_plant", 3.2))
+        } else {
+            None
+        }
+    } else if barracks == 0 && !held("barracks") {
+        Some(("barracks", 3.2))
+    } else if plants == 0 && !held("power_plant") {
+        Some(("power_plant", 2.8))
+    } else if supply == 0 && !held("supply") {
+        Some(("supply", 3.4))
+    } else if factory == 0 && !held("war_factory") {
+        Some(("war_factory", 3.8))
+    } else if plants < 2 && now > 220 && !held("power_plant") {
+        Some(("power_plant", 4.2))
+    } else if barracks < 2
+        && matches!(style, BotStyle::Reckless | BotStyle::Aggressive)
+        && now > 160
+        && !held("barracks")
+    {
+        Some(("barracks", 4.0))
+    } else if turrets < style.turrets() && !held("turret") {
+        Some(("turret", 5.2))
+    } else {
+        None
+    };
+
+    let Some((kind, radius)) = need else {
         return;
-    }
-    if supply < 1 {
-        try_place(sim, bot_id, "supply", hx, hy, 3.4);
-        return;
-    }
-    if factory < 1 {
-        try_place(sim, bot_id, "war_factory", hx, hy, 3.8);
-        return;
-    }
-    if plants < 2 && sim.tick > 220 {
-        try_place(sim, bot_id, "power_plant", hx, hy, 4.2);
-        return;
-    }
-    if barracks < 2 && matches!(style, BotStyle::Reckless | BotStyle::Aggressive) && sim.tick > 160 {
-        try_place(sim, bot_id, "barracks", hx, hy, 4.0);
-        return;
-    }
-    if turrets < style.turrets() && (style.turrets() > 0) {
-        try_place(sim, bot_id, "turret", hx, hy, 5.2);
-    }
+    };
+    let (tx, ty) = threat_xy(sim, team, hx, hy);
+    try_place_away(sim, bot_id, kind, hx, hy, radius, tx, ty);
 }
 
-fn try_place(sim: &mut MatchSim, bot_id: Uuid, kind: &str, hx: f32, hy: f32, radius: f32) {
-    let mut rng = rand::thread_rng();
+fn threat_xy(sim: &MatchSim, team: u8, hx: f32, hy: f32) -> (f32, f32) {
+    let mut best_unit: Option<(f32, f32, f32)> = None;
+    sim.grid.for_each_nearby(hx, hy, 22.0 + MAX_ENTITY_RADIUS, |id| {
+        let Some(e) = sim.entities.get(&id) else {
+            return false;
+        };
+        if e.team == team || e.hp <= 0.0 || !e.unit {
+            return false;
+        }
+        let d = dist2(hx, hy, e.x, e.y);
+        if best_unit.map(|(_, _, bd)| d < bd).unwrap_or(true) {
+            best_unit = Some((e.x, e.y, d));
+        }
+        false
+    });
+    if let Some((x, y, _)) = best_unit {
+        return (x, y);
+    }
+    let mut best_hq: Option<(f32, f32, f32)> = None;
+    for e in sim.entities.values() {
+        if e.kind != "hq" || e.team == team || e.hp <= 0.0 {
+            continue;
+        }
+        let d = dist2(hx, hy, e.x, e.y);
+        if best_hq.map(|(_, _, bd)| d < bd).unwrap_or(true) {
+            best_hq = Some((e.x, e.y, d));
+        }
+    }
+    best_hq
+        .map(|(x, y, _)| (x, y))
+        .unwrap_or((hx + 8.0, hy))
+}
+
+fn try_place_away(
+    sim: &mut MatchSim,
+    bot_id: Uuid,
+    kind: &str,
+    hx: f32,
+    hy: f32,
+    radius: f32,
+    threat_x: f32,
+    threat_y: f32,
+) {
     let br = building_radius(kind);
-    for k in 0..36 {
-        let ang = (k as f32) * 0.7 + rng.gen_range(-0.2..0.2);
-        let dist = radius + br + (k as f32) * 0.22;
-        let x = (hx + ang.cos() * dist).floor() as i32;
-        let y = (hy + ang.sin() * dist).floor() as i32;
+    let tdx = threat_x - hx;
+    let tdy = threat_y - hy;
+    let tlen = (tdx * tdx + tdy * tdy).sqrt().max(0.001);
+    let ux = tdx / tlen;
+    let uy = tdy / tlen;
+    let mut spots: Vec<(f32, i32, i32)> = Vec::with_capacity(48);
+    for k in 0..48 {
+        let ang = (k as f32) * 0.42;
+        let dist = radius + br + ((k % 10) as f32) * 0.28;
+        let px = hx + ang.cos() * dist;
+        let py = hy + ang.sin() * dist;
+        // Prefer the back side of the HQ relative to the threat.
+        let toward_threat = ((px - hx) * ux + (py - hy) * uy) / dist.max(0.001);
+        let score = -toward_threat;
+        spots.push((score, px.floor() as i32, py.floor() as i32));
+    }
+    spots.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    for (_, x, y) in spots {
         if sim.place_building(bot_id, kind, x, y).is_ok() {
             return;
         }
