@@ -247,6 +247,17 @@ pub fn buildables() -> &'static [BuildDef] {
             power: -15,
             hp: 1400.0,
         },
+        BuildDef {
+            kind: "bunker",
+            name: "Machine-Gun Bunker",
+            cost_supplies: 900,
+            cost_fuel: 80,
+            cost_munitions: 420,
+            build_ms: 14_000,
+            power: -25,
+            // Reinforced concrete — soaks a lot of tank HE.
+            hp: 6_400.0,
+        },
     ]
 }
 
@@ -272,20 +283,21 @@ pub fn trainables() -> &'static [UnitDef] {
             attack_ms: 850,
         },
         UnitDef {
-            unit: "missile_defender",
-            name: "Missile Defender",
+            unit: "mortar",
+            name: "Mortar",
             from_building: "barracks",
-            cost_supplies: 280,
-            cost_fuel: 40,
-            cost_munitions: 160,
-            train_ms: 8_000,
-            hp: 280.0,
-            // Guided punch vs armor; infantry still takes more than one hit (see hit_damage).
-            damage: 280.0,
-            // Laden AT team — slower than rifle infantry.
-            speed: 0.16,
-            range: 7.5,
-            attack_ms: 4_800,
+            // Heavier crew + ammo — clearly above ranger cost.
+            cost_supplies: 480,
+            cost_fuel: 60,
+            cost_munitions: 280,
+            train_ms: 12_000,
+            hp: 260.0,
+            // HE bomb: strong vs soft / buildings; tanks shrug more (see hit_damage).
+            damage: 340.0,
+            // Tube + baseplate — slower than rifle infantry.
+            speed: 0.14,
+            range: 9.5,
+            attack_ms: 5_600,
         },
         UnitDef {
             unit: "tank",
@@ -324,6 +336,9 @@ fn attack_cooldown_for(kind: &str) -> u32 {
     if kind == "turret" {
         return 2_800;
     }
+    if kind == "bunker" {
+        return 95; // MG cyclic rate between rounds in a burst
+    }
     trainables()
         .iter()
         .find(|u| u.unit == kind)
@@ -336,9 +351,21 @@ const RIFLE_RELOAD_MS: u32 = 5_000;
 /// Patriot engagement bubble — anything that steps into this gets a missile.
 const PATRIOT_RANGE: f32 = 13.5;
 const PATRIOT_DAMAGE: f32 = 520.0;
+/// Pillbox MG nest — shorter than Patriot, shreds infantry.
+const BUNKER_RANGE: f32 = 8.5;
+const BUNKER_DAMAGE: f32 = 55.0;
+const BUNKER_MAG: u8 = 40;
+const BUNKER_RELOAD_MS: u32 = 2_400;
+const BUNKER_SLEW_RATE: f32 = 1.85;
+const BUNKER_SCAN_RATE: f32 = 0.75;
+const BUNKER_AIM_ALIGN: f32 = 0.12;
 
 fn is_rifle_infantry(kind: &str) -> bool {
-    !kind.contains("tank") && !kind.contains("missile") && kind != "turret"
+    !kind.contains("tank")
+        && !kind.contains("missile")
+        && !kind.contains("mortar")
+        && kind != "turret"
+        && kind != "bunker"
 }
 
 /// Match client `atan2(dx, dz)` — yaw 0 faces +Y / +Z.
@@ -362,14 +389,30 @@ const TANK_TURRET_RATE: f32 = 1.15;
 const TANK_AIM_ALIGN: f32 = 0.07;
 const TANK_MG_RANGE: f32 = 5.4;
 const TANK_MG_COOLDOWN_MS: u32 = 130;
+/// Patriot launcher slew (~55°/s) — waits on bearing like a tank turret.
+const PATRIOT_SLEW_RATE: f32 = 0.95;
+const PATRIOT_AIM_ALIGN: f32 = 0.08;
+/// Idle search sweep when no contact.
+const PATRIOT_SCAN_RATE: f32 = 0.55;
 
 /// Infantry: a few rifle hits drop a soldier. Tank HE in the burst radius is lethal.
 fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     let infantry = target.unit && !target.kind.contains("tank");
     if infantry && attacker_kind.contains("tank") {
         10_000.0
+    } else if infantry && attacker_kind.contains("mortar") {
+        // Mortar HE: usually one solid hit drops a soldier in the blast seat.
+        (base * 0.95).max(220.0)
+    } else if infantry && attacker_kind == "bunker" {
+        (base * 1.15).max(48.0)
+    } else if target.kind.contains("tank") && attacker_kind == "bunker" {
+        // MG vs armor — mostly sparks.
+        (base * 0.12).max(4.0)
     } else if infantry && (attacker_kind.contains("missile") || attacker_kind == "turret") {
         (base * 0.55).max(110.0)
+    } else if target.kind.contains("tank") && attacker_kind.contains("mortar") {
+        // Soft HE vs armor — chips, does not delete tanks.
+        (base * 0.28).max(70.0)
     } else if target.kind.contains("tank") && attacker_kind == "turret" {
         // Guided SAM punch vs armor.
         (base * 1.15).max(base)
@@ -401,6 +444,11 @@ fn shot_hit_chance(
     // Distance where hit chance has dropped to ~50% of point-blank.
     let d0 = if attacker_kind.contains("tank") {
         range * 0.42
+    } else if attacker_kind == "bunker" {
+        range * 0.38
+    } else if attacker_kind.contains("mortar") {
+        // Lobbed fire: mid-range is the sweet spot.
+        range * 0.48
     } else if attacker_kind.contains("missile") || attacker_kind == "turret" {
         // Guided: stays lethal farther out.
         range * 0.55
@@ -412,6 +460,10 @@ fn shot_hit_chance(
     // Point-blank connect rate (before size / cover / prone).
     let weapon_near = if attacker_kind.contains("tank") {
         0.84
+    } else if attacker_kind == "bunker" {
+        0.70
+    } else if attacker_kind.contains("mortar") {
+        0.68
     } else if attacker_kind.contains("missile") {
         0.72
     } else {
@@ -527,6 +579,7 @@ fn building_visual_size(kind: &str) -> f32 {
         "barracks" => 1.35,
         "power_plant" | "supply" => 1.7,
         "turret" => 0.55,
+        "bunker" => 0.72,
         _ => 1.35,
     }
 }
@@ -541,6 +594,8 @@ pub fn building_radius(kind: &str) -> f32 {
 pub fn unit_radius(kind: &str) -> f32 {
     if kind.contains("tank") {
         0.1
+    } else if kind.contains("mortar") {
+        0.022
     } else if kind.contains("missile") {
         0.02
     } else {
@@ -1219,10 +1274,10 @@ impl MatchSim {
 
         let flag = player.flag.clone();
         let id = Uuid::new_v4();
-        let (damage, range) = if def.kind == "turret" {
-            (PATRIOT_DAMAGE, PATRIOT_RANGE)
-        } else {
-            (0.0, 0.0)
+        let (damage, range, mag) = match def.kind {
+            "turret" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
+            "bunker" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
+            _ => (0.0, 0.0, 0u8),
         };
         self.put_entity(Entity {
             id,
@@ -1244,7 +1299,7 @@ impl MatchSim {
             damage,
             range,
             attack_cooldown_ms: 0,
-            mag_ammo: 0,
+            mag_ammo: mag,
             dirty: true,
             stuck_frames: 0,
             detour: None,
@@ -1921,6 +1976,9 @@ impl MatchSim {
                         if hit && kind.contains("tank") && !kind.contains("mg") {
                             self.apply_shell_blast(team, fx, fy, tx, ty, tid);
                         }
+                        if hit && kind.contains("mortar") {
+                            self.apply_mortar_blast(team, fx, fy, tx, ty, tid);
+                        }
                     }
                 } else {
                     entity.target = None;
@@ -1994,6 +2052,80 @@ impl MatchSim {
 
         bots::tick_bots(self);
         self.check_victory();
+    }
+
+    /// Mortar bomb splash — smaller than tank HE, lethal to nearby infantry.
+    fn apply_mortar_blast(
+        &mut self,
+        team: u8,
+        from_x: f32,
+        from_y: f32,
+        x: f32,
+        y: f32,
+        primary: Uuid,
+    ) {
+        const RADIUS: f32 = 0.95;
+        let mut victims: Vec<(Uuid, f32, bool)> = Vec::new();
+        self.grid.for_each_nearby(x, y, RADIUS + MAX_ENTITY_RADIUS, |id| {
+            let Some(e) = self.entities.get(&id) else {
+                return false;
+            };
+            if e.hp <= 0.0 || !(e.unit || e.building) {
+                return false;
+            }
+            let infantry = e.unit && !e.kind.contains("tank");
+            if !infantry && e.team == team {
+                return false;
+            }
+            let dx = e.x - x;
+            let dy = e.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > RADIUS {
+                return false;
+            }
+            victims.push((e.id, dist, infantry));
+            false
+        });
+
+        let inx = x - from_x;
+        let iny = y - from_y;
+        let in_len = (inx * inx + iny * iny).sqrt().max(0.001);
+        let iux = inx / in_len;
+        let iuy = iny / in_len;
+
+        for (id, dist, is_infantry) in victims {
+            if id == primary {
+                continue;
+            }
+            let Some(victim) = self.entities.get(&id) else {
+                continue;
+            };
+            if !is_infantry && self.blast_blocked(primary, x, y, iux, iuy, victim) {
+                continue;
+            }
+            let falloff = (1.0 - dist / RADIUS).clamp(0.0, 1.0);
+            let dmg = if is_infantry {
+                220.0 * falloff
+            } else if self
+                .entities
+                .get(&id)
+                .is_some_and(|e| e.kind.contains("tank"))
+            {
+                28.0 * falloff
+            } else {
+                70.0 * falloff
+            };
+            if dmg < 1.0 {
+                continue;
+            }
+            if let Some(e) = self.entities.get_mut(&id) {
+                e.hp -= dmg;
+                e.dirty = true;
+                if is_infantry {
+                    e.prone_until_tick = e.prone_until_tick.max(self.tick + 36);
+                }
+            }
+        }
     }
 
     /// HE blast around a tank shell impact. Primary target already took direct damage.
@@ -2241,11 +2373,146 @@ impl MatchSim {
         }
     }
 
-    /// Finished defense buildings (Patriot Battery) lock and fire inside their bubble.
+    /// Armed buildings (Patriot / bunker) engage while finished.
     fn tick_armed_building(&mut self, entity: &mut Entity, dt_ms: u32) {
+        if entity.kind == "bunker" {
+            self.tick_bunker(entity, dt_ms);
+            return;
+        }
+        self.tick_patriot(entity, dt_ms);
+    }
+
+    /// Pillbox: idle MG sweep, slew onto contact, burst fire when aimed.
+    fn tick_bunker(&mut self, entity: &mut Entity, dt_ms: u32) {
         if entity.attack_cooldown_ms > 0 {
             entity.attack_cooldown_ms = entity.attack_cooldown_ms.saturating_sub(dt_ms);
         }
+        let dt = dt_ms as f32 / 1000.0;
+
+        if self.tick % 2 == 0 {
+            let stale = match entity.target {
+                None => true,
+                Some(tid) => match self.entities.get(&tid) {
+                    None => true,
+                    Some(t) => {
+                        if t.hp <= 0.0 || t.team == entity.team {
+                            true
+                        } else {
+                            let dx = t.x - entity.x;
+                            let dy = t.y - entity.y;
+                            (dx * dx + dy * dy).sqrt() > entity.range
+                        }
+                    }
+                },
+            };
+            if stale {
+                entity.target = self.find_enemy_in_range(
+                    entity.id,
+                    entity.team,
+                    entity.x,
+                    entity.y,
+                    entity.range,
+                );
+            }
+        }
+
+        let Some(tid) = entity.target else {
+            entity.aim_yaw += BUNKER_SCAN_RATE * dt;
+            if entity.aim_yaw > std::f32::consts::PI {
+                entity.aim_yaw -= std::f32::consts::TAU;
+            }
+            if self.tick % 4 == 0 {
+                entity.dirty = true;
+            }
+            return;
+        };
+        let Some(target) = self.entities.get(&tid) else {
+            entity.target = None;
+            return;
+        };
+        let dx = target.x - entity.x;
+        let dy = target.y - entity.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > entity.range {
+            entity.target = None;
+            return;
+        }
+
+        let mut aimed = true;
+        if dist > 0.001 {
+            let desired = world_aim_yaw(dx, dy);
+            let err = shortest_angle(entity.aim_yaw, desired);
+            let step = BUNKER_SLEW_RATE * dt;
+            entity.aim_yaw += err.clamp(-step, step);
+            entity.dirty = true;
+            aimed = err.abs() <= BUNKER_AIM_ALIGN;
+        }
+
+        if !aimed || entity.attack_cooldown_ms > 0 {
+            return;
+        }
+
+        let cover = self.shot_cover(entity.id, entity.x, entity.y, target);
+        if cover.blocked {
+            return;
+        }
+
+        if entity.mag_ammo == 0 {
+            entity.mag_ammo = BUNKER_MAG;
+        }
+        entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
+        if entity.mag_ammo == 0 {
+            entity.attack_cooldown_ms = BUNKER_RELOAD_MS;
+            entity.mag_ammo = BUNKER_MAG;
+        } else {
+            entity.attack_cooldown_ms = attack_cooldown_for("bunker");
+        }
+        entity.dirty = true;
+
+        let dmg = hit_damage("bunker", target, entity.damage);
+        let tx = target.x;
+        let ty = target.y;
+        let fx = entity.x;
+        let fy = entity.y;
+        let from_id = entity.id;
+        let hit_p = shot_hit_chance("bunker", target, dist, entity.range, cover.exposure);
+        let mut rng = rand::thread_rng();
+        // MG spray: decent connect rate up close, wilder at edge.
+        let hit = rng.gen_range(0.0..1.0) < hit_p.max(0.35).min(0.82);
+        let (ix, iy) = if hit {
+            (tx, ty)
+        } else {
+            miss_impact(&mut rng, target, fx, fy)
+        };
+
+        if let Some(t) = self.entities.get_mut(&tid) {
+            if hit {
+                t.hp -= dmg;
+                t.dirty = true;
+            }
+            if t.unit && !t.kind.contains("tank") {
+                t.prone_until_tick = t.prone_until_tick.max(self.tick + 18);
+            }
+        }
+
+        self.shots.push(ShotEvent {
+            from: from_id,
+            to: tid,
+            x0: fx,
+            y0: fy,
+            x1: ix,
+            y1: iy,
+            kind: "bunker_mg".into(),
+            hit,
+        });
+    }
+
+    /// Patriot Battery: idle radar/launcher scan; slew onto contact; fire only when aimed.
+    fn tick_patriot(&mut self, entity: &mut Entity, dt_ms: u32) {
+        if entity.attack_cooldown_ms > 0 {
+            entity.attack_cooldown_ms = entity.attack_cooldown_ms.saturating_sub(dt_ms);
+        }
+        let dt = dt_ms as f32 / 1000.0;
 
         if self.tick % 2 == 0 {
             let stale = match entity.target {
@@ -2269,7 +2536,16 @@ impl MatchSim {
             }
         }
 
+        // No contact — keep the launcher sweeping like a search radar.
         let Some(tid) = entity.target else {
+            entity.aim_yaw += PATRIOT_SCAN_RATE * dt;
+            if entity.aim_yaw > std::f32::consts::PI {
+                entity.aim_yaw -= std::f32::consts::TAU;
+            }
+            // ~5 Hz dirty so clients see the sweep without flooding every tick.
+            if self.tick % 4 == 0 {
+                entity.dirty = true;
+            }
             return;
         };
         let Some(target) = self.entities.get(&tid) else {
@@ -2284,19 +2560,23 @@ impl MatchSim {
             return;
         }
 
+        let mut aimed = true;
         if dist > 0.001 {
             let desired = world_aim_yaw(dx, dy);
             let err = shortest_angle(entity.aim_yaw, desired);
-            let step = 2.4 * (dt_ms as f32 / 1000.0);
+            let step = PATRIOT_SLEW_RATE * dt;
             entity.aim_yaw += err.clamp(-step, step);
             entity.dirty = true;
-            if err.abs() > 0.12 {
-                return;
-            }
+            aimed = err.abs() <= PATRIOT_AIM_ALIGN;
+        }
+
+        // Tank-style: do not commit a missile until the tubes face the contact.
+        if !aimed || entity.attack_cooldown_ms > 0 {
+            return;
         }
 
         let cover = self.shot_cover(entity.id, entity.x, entity.y, target);
-        if cover.blocked || entity.attack_cooldown_ms > 0 {
+        if cover.blocked {
             return;
         }
 
@@ -3159,8 +3439,19 @@ impl MatchSim {
             progress,
             train_progress,
             prone: entity.prone,
-            aim_at: if entity.kind.contains("tank") {
+            aim_at: if entity.kind.contains("tank")
+                || entity.kind == "turret"
+                || entity.kind == "bunker"
+            {
                 entity.target
+            } else {
+                None
+            },
+            aim_yaw: if entity.kind.contains("tank")
+                || entity.kind == "turret"
+                || entity.kind == "bunker"
+            {
+                Some(entity.aim_yaw)
             } else {
                 None
             },

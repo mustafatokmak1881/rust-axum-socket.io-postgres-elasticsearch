@@ -165,13 +165,13 @@ impl BotStyle {
         }
     }
 
-    fn missile_cap(self) -> usize {
+    fn mortar_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 6,
-            BotStyle::Aggressive => 8,
-            BotStyle::Balanced => 10,
-            BotStyle::Defensive => 14,
-            BotStyle::Counter => 10,
+            BotStyle::Reckless => 4,
+            BotStyle::Aggressive => 6,
+            BotStyle::Balanced => 8,
+            BotStyle::Defensive => 12,
+            BotStyle::Counter => 8,
         }
     }
 
@@ -192,6 +192,16 @@ impl BotStyle {
             BotStyle::Balanced => 2,
             BotStyle::Aggressive => 1,
             BotStyle::Reckless => 1,
+        }
+    }
+
+    fn bunkers(self) -> u32 {
+        match self {
+            BotStyle::Defensive => 3,
+            BotStyle::Counter => 2,
+            BotStyle::Balanced => 1,
+            BotStyle::Aggressive => 1,
+            BotStyle::Reckless => 0,
         }
     }
 
@@ -265,7 +275,7 @@ struct OwnedUnit {
     x: f32,
     y: f32,
     tank: bool,
-    missile: bool,
+    mortar: bool,
     range: f32,
     target: Option<Uuid>,
     dest: Option<(f32, f32)>,
@@ -416,8 +426,14 @@ fn score_target(u: &OwnedUnit, c: &Contact) -> f32 {
     if !c.building {
         s += 8.0;
     }
-    if u.missile && c.tank {
-        s += 40.0;
+    if u.mortar && !c.tank && !c.building {
+        s += 36.0; // HE loves soft targets
+    }
+    if u.mortar && c.building {
+        s += 16.0;
+    }
+    if u.mortar && c.tank {
+        s += 3.0; // poor vs armor
     }
     if u.tank && c.tank {
         s += 22.0;
@@ -471,7 +487,7 @@ fn command_squad(
     let mut raid_ids: HashSet<Uuid> = HashSet::new();
     if squad.len() >= 9 {
         if let Some(soft) = soft_target(sim, team, war) {
-            for u in squad.iter().filter(|u| !u.tank && !u.missile).take(3) {
+            for u in squad.iter().filter(|u| !u.tank && !u.mortar).take(3) {
                 order_attack(sim, bot_id, u, soft);
                 raid_ids.insert(u.id);
             }
@@ -494,11 +510,11 @@ fn assign_combined_arms(
     focus: Option<Uuid>,
 ) {
     let tanks: Vec<&OwnedUnit> = squad.iter().filter(|u| u.tank).collect();
-    let missiles: Vec<&OwnedUnit> = squad.iter().filter(|u| u.missile).collect();
-    let infantry: Vec<&OwnedUnit> = squad.iter().filter(|u| !u.tank && !u.missile).collect();
+    let mortars: Vec<&OwnedUnit> = squad.iter().filter(|u| u.mortar).collect();
+    let infantry: Vec<&OwnedUnit> = squad.iter().filter(|u| !u.tank && !u.mortar).collect();
 
     if let Some(tid) = focus {
-        for u in missiles.iter().chain(tanks.iter()) {
+        for u in mortars.iter().chain(tanks.iter()) {
             order_attack(sim, bot_id, u, tid);
         }
     } else {
@@ -507,13 +523,11 @@ fn assign_combined_arms(
             let (x, y) = approach_point(u.x, u.y, tx, ty, stand, 0.0);
             order_move(sim, bot_id, u, x, y, 1.6);
         }
-        for u in &missiles {
-            if tanks.is_empty() {
-                order_move(sim, bot_id, u, tx, ty, 2.0);
-            } else {
-                let (x, y) = centroid_refs(&tanks);
-                order_move(sim, bot_id, u, x, y, 2.2);
-            }
+        for u in &mortars {
+            // Stand off and lob — don't rush the line with the tube.
+            let stand = (u.range - 1.4).max(5.5);
+            let (x, y) = approach_point(u.x, u.y, tx, ty, stand, 0.0);
+            order_move(sim, bot_id, u, x, y, 2.0);
         }
     }
 
@@ -621,7 +635,7 @@ fn command_home(
 fn role_push(u: &OwnedUnit) -> f32 {
     if u.tank {
         3.0
-    } else if u.missile {
+    } else if u.mortar {
         2.0
     } else {
         1.0
@@ -685,7 +699,7 @@ fn collect_own(sim: &MatchSim, bot_id: Uuid) -> Vec<OwnedUnit> {
             x: e.x,
             y: e.y,
             tank: e.kind.contains("tank"),
-            missile: e.kind.contains("missile"),
+            mortar: e.kind.contains("mortar"),
             range: e.range,
             target: e.target,
             dest: e.move_to,
@@ -722,7 +736,7 @@ fn collect_enemies(sim: &MatchSim, team: u8, x: f32, y: f32, radius: f32) -> Vec
 fn unit_power(u: &OwnedUnit) -> f32 {
     if u.tank {
         6.0
-    } else if u.missile {
+    } else if u.mortar {
         2.4
     } else {
         1.0
@@ -734,7 +748,7 @@ fn contact_power(unit: bool, kind: &str) -> f32 {
         0.4
     } else if kind.contains("tank") {
         6.0
-    } else if kind.contains("missile") {
+    } else if kind.contains("mortar") {
         2.4
     } else {
         1.0
@@ -1025,6 +1039,7 @@ fn expand_base(
     let supply = count_kind(sim, bot_id, "supply");
     let factory = count_kind(sim, bot_id, "war_factory");
     let turrets = count_kind(sim, bot_id, "turret");
+    let bunkers = count_kind(sim, bot_id, "bunker");
     let now = sim.tick;
 
     if sim.entities.values().any(|e| {
@@ -1039,6 +1054,7 @@ fn expand_base(
         ("supply", supply),
         ("war_factory", factory),
         ("turret", turrets),
+        ("bunker", bunkers),
     ];
     if let Some(mind) = sim.players.get_mut(&bot_id).and_then(|p| p.bot.as_mut()) {
         let delay = style.rebuild_delay();
@@ -1085,6 +1101,8 @@ fn expand_base(
         && !held("barracks")
     {
         Some(("barracks", 4.0))
+    } else if bunkers < style.bunkers() && !held("bunker") {
+        Some(("bunker", 4.0))
     } else if turrets < style.turrets() && !held("turret") {
         Some(("turret", 5.2))
     } else {
@@ -1168,7 +1186,7 @@ fn try_place_away(
 
 fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: bool) {
     let rangers = count_units(sim, bot_id, |k| k == "ranger");
-    let missiles = count_units(sim, bot_id, |k| k.contains("missile"));
+    let mortars = count_units(sim, bot_id, |k| k.contains("mortar"));
     let tanks = count_units(sim, bot_id, |k| k.contains("tank"));
 
     let barracks: Vec<Uuid> = sim
@@ -1203,9 +1221,9 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
         }
     }
     for id in barracks {
-        let want_at = missiles < style.missile_cap()
-            && (threatened || tanks > 0 || missiles + 1 <= (rangers / 6).max(1));
-        if want_at && sim.train_unit(bot_id, id, "missile_defender").is_ok() {
+        let want_mortar = mortars < style.mortar_cap()
+            && (threatened || tanks > 0 || mortars + 1 <= (rangers / 6).max(1));
+        if want_mortar && sim.train_unit(bot_id, id, "mortar").is_ok() {
             continue;
         }
         if rangers < style.ranger_cap() {

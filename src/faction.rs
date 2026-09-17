@@ -158,7 +158,7 @@ pub fn building_description(faction: Faction, kind: &str) -> &'static str {
     match faction {
         Faction::Usa => match kind {
             "headquarters" => "USA ana komuta binası",
-            "barracks" => "Ranger ve Missile Defender eğitimi",
+            "barracks" => "Ranger ve Mortar (havan) eğitimi",
             "stable" => "Raptor, Chinook ve hava birimleri",
             "workshop" => "Tank, Paladin ve kara araçları",
             "academy" => "Bombardment, Search & Destroy, Hold the Line",

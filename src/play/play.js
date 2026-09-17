@@ -1091,6 +1091,7 @@ const Sfx = {
     const k = String(kind || "");
     if (k.includes("tank_mg") || k.includes("_mg")) this.rifle(x, y);
     else if (k.includes("tank")) this.tankCannon(x, y);
+    else if (k.includes("mortar")) this.missile(x, y);
     else if (k.includes("missile")) this.missile(x, y);
     else this.rifle(x, y);
   },
@@ -1110,7 +1111,7 @@ function playShots(shots) {
   const rank = (kind) => {
     const k = String(kind || "");
     if (k.includes("tank") && !k.includes("mg")) return 0;
-    if (k.includes("missile")) return 1;
+    if (k.includes("mortar") || k.includes("missile")) return 1;
     return 2;
   };
   list.sort((a, b) => rank(shotKindOf(a)) - rank(shotKindOf(b)));
@@ -1124,8 +1125,9 @@ function playShots(shots) {
       Radar.ping(shot.x1, shot.y1, "tank");
     }
     const isCannon = k.includes("tank") && !k.includes("mg");
-    const isMissile = k.includes("missile");
-    if (!isCannon && !isMissile) {
+    const isHeavy =
+      k.includes("missile") || k.includes("mortar") || k.includes("patriot");
+    if (!isCannon && !isHeavy) {
       rifles += 1;
       if (rifles > 4) continue;
     }
@@ -1198,8 +1200,9 @@ const Radar = {
   ping(x, y, kind) {
     const k = String(kind || "");
     const tank = k.includes("tank");
-    const missile = k.includes("missile");
-    if (!tank && !missile) {
+    const heavy =
+      k.includes("missile") || k.includes("mortar") || k.includes("patriot");
+    if (!tank && !heavy) {
       this.rifleSkip += 1;
       if (this.rifleSkip % 5) return;
     }
@@ -1208,7 +1211,7 @@ const Radar = {
       y,
       tank,
       born: performance.now(),
-      life: tank ? 900 : 500,
+      life: tank || heavy ? 900 : 500,
     });
     if (this.pings.length > 18) this.pings.splice(0, this.pings.length - 18);
   },
@@ -1372,7 +1375,7 @@ const BUILDING_MODELS = {
 /** Bump when BUILDING_MODELS targets change so cached meshes refit. */
 const BUILDING_FIT_VERSION = 4;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
-const PATRIOT_RIG_VERSION = 2;
+const PATRIOT_RIG_VERSION = 3;
 
 async function prepareStlGeometry(url, targetSize) {
   const loader = new STLLoader();
@@ -1475,6 +1478,9 @@ function createBuildingMesh(kind, fallbackMat) {
   if (kind === "turret") {
     return createPatriotBatteryMesh(fallbackMat);
   }
+  if (kind === "bunker") {
+    return createBunkerMesh(fallbackMat);
+  }
   const template = templateForKind(kind);
   if (template) {
     const mesh = template.clone(true);
@@ -1528,7 +1534,9 @@ function createPatriotBatteryMesh(fallbackMat) {
   root.userData.isFallback = false;
   root.userData.keepMtlColors = true;
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-  root.userData.unitHeight = 0.36;
+  root.userData.turretTurnRate = 0.95;
+  root.userData.scanRate = 0.55;
+  root.userData.aimYaw = 0;
 
   const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
     const m = new THREE.Mesh(
@@ -1704,8 +1712,9 @@ function createPatriotBatteryMesh(fallbackMat) {
   tip.position.set(0.038, 0.028, 0.2);
   cradle.add(tip);
 
-  // —— AN/MPQ-53 style phased-array (compact mast beside launcher) ——
+  // —— AN/MPQ-53 style phased-array (scans independently) ——
   const radar = new THREE.Group();
+  radar.name = "radarRoot";
   radar.position.set(-0.02, 0, -0.12);
   root.add(radar);
   add(radar, new THREE.CylinderGeometry(0.012, 0.016, 0.2, 10), metal, 0, 0.12, 0, 0, 0, 0, {
@@ -1755,6 +1764,148 @@ function createPatriotBatteryMesh(fallbackMat) {
     metalness: 0.1,
     roughness: 0.9,
     cast: false,
+  });
+
+  return root;
+}
+
+/** Reinforced MG pillbox — crew silhouettes + rotating cupola. */
+function createBunkerMesh(fallbackMat) {
+  const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
+  const concrete = 0x5a5848;
+  const concreteDark = 0x3e3c34;
+  const sandbag = 0x6b6550;
+  const metal = 0x2a2c28;
+  const camo = 0x4a5538;
+  const skin = 0xc9a882;
+  const helmet = 0x3a4a30;
+
+  const root = new THREE.Group();
+  root.userData.building = true;
+  root.userData.isBunker = true;
+  root.userData.bunkerRigVersion = 1;
+  root.userData.modelKind = "bunker";
+  root.userData.isFallback = false;
+  root.userData.keepMtlColors = true;
+  root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.unitHeight = 0.42;
+  root.userData.turretTurnRate = 1.85;
+  root.userData.scanRate = 0.75;
+  root.userData.aimYaw = 0;
+
+  const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
+    const m = new THREE.Mesh(
+      geo,
+      matStd(color, {
+        metalness: opts.metalness ?? 0.15,
+        roughness: opts.roughness ?? 0.78,
+      }),
+    );
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = opts.cast !== false;
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  };
+
+  // Earth berm / pad
+  add(root, new THREE.BoxGeometry(0.78, 0.04, 0.68), 0x3a3830, 0, 0.02, 0, 0, 0, 0, {
+    roughness: 0.95,
+    cast: false,
+  });
+
+  // Main concrete blockhouse
+  add(root, new THREE.BoxGeometry(0.58, 0.28, 0.48), concrete, 0, 0.18, 0);
+  add(root, new THREE.BoxGeometry(0.62, 0.06, 0.52), concreteDark, 0, 0.33, 0);
+  // Sloped front glacis
+  add(root, new THREE.BoxGeometry(0.56, 0.1, 0.14), concreteDark, 0, 0.14, 0.28, -0.45, 0, 0);
+
+  // Embrasure slits (dark recesses)
+  for (const z of [-0.12, 0.08, 0.22]) {
+    add(root, new THREE.BoxGeometry(0.1, 0.04, 0.04), 0x121410, 0.3, 0.22, z, 0, 0, 0, {
+      metalness: 0.4,
+      roughness: 0.5,
+      cast: false,
+    });
+    add(root, new THREE.BoxGeometry(0.1, 0.04, 0.04), 0x121410, -0.3, 0.22, z, 0, 0, 0, {
+      metalness: 0.4,
+      roughness: 0.5,
+      cast: false,
+    });
+  }
+  add(root, new THREE.BoxGeometry(0.22, 0.05, 0.05), 0x121410, 0, 0.24, 0.26, 0, 0, 0, {
+    cast: false,
+  });
+
+  // Sandbag ring
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    add(
+      root,
+      new THREE.BoxGeometry(0.1, 0.06, 0.07),
+      sandbag,
+      Math.cos(a) * 0.34,
+      0.08,
+      Math.sin(a) * 0.3,
+      0,
+      -a,
+      0,
+      { roughness: 0.9 },
+    );
+  }
+
+  // Team stripe
+  add(root, new THREE.BoxGeometry(0.5, 0.03, 0.04), accent, 0, 0.34, -0.22, 0, 0, 0, {
+    metalness: 0.2,
+    roughness: 0.55,
+  });
+
+  // —— Rotating MG cupola ——
+  const cupola = new THREE.Group();
+  cupola.name = "muzzleRoot";
+  cupola.position.set(0.02, 0.34, 0.02);
+  root.add(cupola);
+  add(cupola, new THREE.CylinderGeometry(0.09, 0.1, 0.08, 12), concreteDark, 0, 0.04, 0, 0, 0, 0, {
+    metalness: 0.25,
+    roughness: 0.7,
+  });
+  add(cupola, new THREE.CylinderGeometry(0.07, 0.07, 0.03, 10), metal, 0, 0.09, 0, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+
+  // Twin MG barrels
+  for (const x of [-0.018, 0.018]) {
+    add(cupola, new THREE.CylinderGeometry(0.008, 0.009, 0.16, 6), metal, x, 0.08, 0.1, Math.PI / 2, 0, 0, {
+      metalness: 0.7,
+      roughness: 0.3,
+    });
+  }
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0, 0.08, 0.18);
+  cupola.add(tip);
+
+  // Crew helmets visible in slits (3–4 soldiers)
+  const crewSlots = [
+    [-0.16, 0.26, 0.14],
+    [0.16, 0.26, 0.14],
+    [-0.12, 0.28, -0.1],
+    [0.14, 0.28, -0.08],
+  ];
+  for (const [cx, cy, cz] of crewSlots) {
+    add(root, new THREE.BoxGeometry(0.028, 0.022, 0.03), helmet, cx, cy, cz);
+    add(root, new THREE.BoxGeometry(0.022, 0.016, 0.02), skin, cx, cy - 0.014, cz + 0.006, 0, 0, 0, {
+      cast: false,
+    });
+    add(root, new THREE.BoxGeometry(0.04, 0.03, 0.028), camo, cx, cy - 0.04, cz - 0.01);
+  }
+
+  // Antenna
+  add(root, new THREE.CylinderGeometry(0.004, 0.004, 0.22, 5), metal, -0.22, 0.48, -0.16, 0, 0, 0, {
+    metalness: 0.6,
+    roughness: 0.35,
   });
 
   return root;
@@ -2586,6 +2737,7 @@ function buildingRadius(kind) {
     power_plant: 1.7,
     supply: 1.7,
     turret: 0.55,
+    bunker: 0.72,
   }[kind] ?? 1.35;
   return visual * 0.42;
 }
@@ -3290,6 +3442,9 @@ function unitDims(kind) {
     // Half prior tank size — closer to infantry / building proportions.
     return { w: 0.18, h: 0.12, d: 0.28 };
   }
+  if (k.includes("mortar")) {
+    return { w: 0.036, h: 0.08, d: 0.036 };
+  }
   if (k.includes("missile")) {
     return { w: 0.03, h: 0.08, d: 0.03 };
   }
@@ -3535,26 +3690,79 @@ function createRangerMesh(teamColor) {
   return g;
 }
 
-function createMissileDefenderMesh(teamColor) {
+function createMortarMesh(teamColor) {
   const g = createRangerMesh(teamColor);
-  // Swap rifle for a thicker tube launcher on the shoulder
+  g.userData.isMortar = true;
+  g.userData.rigVersion = 5;
+  // Swap rifle for a bipod mortar tube (elevated lob).
   const old = g.getObjectByName("muzzleRoot");
   if (old) old.parent?.remove(old);
-  const launcher = new THREE.Group();
-  launcher.name = "muzzleRoot";
-  const tube = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.016, 0.018, 0.14, 6),
-    matStd(0x3a4034, { metalness: 0.35, roughness: 0.55 }),
+  const mortar = new THREE.Group();
+  mortar.name = "muzzleRoot";
+  mortar.position.set(0.02, 0.02, 0.02);
+
+  // Baseplate
+  const plate = new THREE.Mesh(
+    new THREE.BoxGeometry(0.05, 0.008, 0.05),
+    matStd(0x2a2c28, { metalness: 0.45, roughness: 0.5 }),
   );
-  tube.rotation.x = Math.PI / 2;
-  tube.position.set(0.02, 0.14, 0.04);
-  launcher.add(tube);
+  plate.position.set(0.01, 0.004, 0.04);
+  mortar.add(plate);
+
+  // Bipod legs
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.004, 0.005, 0.07, 5),
+      matStd(0x3a3c38, { metalness: 0.55, roughness: 0.4 }),
+    );
+    leg.position.set(side * 0.028, 0.028, 0.055);
+    leg.rotation.z = side * 0.55;
+    leg.rotation.x = 0.35;
+    mortar.add(leg);
+  }
+
+  // Tube elevated ~55°
+  const tubeGroup = new THREE.Group();
+  tubeGroup.position.set(0.01, 0.02, 0.03);
+  tubeGroup.rotation.x = -0.95;
+  mortar.add(tubeGroup);
+
+  const tube = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.012, 0.014, 0.11, 8),
+    matStd(0x4a553c, { metalness: 0.4, roughness: 0.45 }),
+  );
+  tube.position.y = 0.055;
+  tubeGroup.add(tube);
+  const breech = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.015, 0.015, 0.018, 8),
+    matStd(0x2a2e28, { metalness: 0.5, roughness: 0.4 }),
+  );
+  breech.position.y = 0.008;
+  tubeGroup.add(breech);
+  const muzzleRing = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.013, 0.015, 0.01, 8),
+    matStd(0x1a1c18, { metalness: 0.65, roughness: 0.35 }),
+  );
+  muzzleRing.position.y = 0.11;
+  tubeGroup.add(muzzleRing);
+
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0.02, 0.14, 0.12);
-  launcher.add(tip);
+  tip.position.set(0, 0.12, 0);
+  tubeGroup.add(tip);
+
+  // Ammo satchel on left hip
   const torso = g.getObjectByName("torso");
-  (torso || g).add(launcher);
+  if (torso) {
+    const satchel = new THREE.Mesh(
+      new THREE.BoxGeometry(0.028, 0.032, 0.02),
+      matStd(0x3b2a1c, { metalness: 0.1, roughness: 0.75 }),
+    );
+    satchel.position.set(-0.055, 0.1, -0.01);
+    torso.add(satchel);
+  }
+
+  (torso || g).add(mortar);
   return g;
 }
 
@@ -3789,7 +3997,8 @@ function createTankMesh(teamColor) {
 function createUnitMesh(kind, teamColor) {
   const k = String(kind || "");
   if (k.includes("tank")) return createTankMesh(teamColor);
-  if (k.includes("missile")) return createMissileDefenderMesh(teamColor);
+  if (k.includes("mortar")) return createMortarMesh(teamColor);
+  if (k.includes("missile")) return createMortarMesh(teamColor);
   return createRangerMesh(teamColor);
 }
 
@@ -3821,7 +4030,7 @@ function disposeMeshTree(mesh) {
 }
 
 function buildingHasProperModel(kind) {
-  if (kind === "turret") return true;
+  if (kind === "turret" || kind === "bunker") return true;
   return Boolean(templateForKind(kind) || geometryForKind(kind));
 }
 
@@ -3869,13 +4078,17 @@ function upsertMesh(entity) {
   if (mesh && entity.unit) {
     const kind = String(entity.kind || "");
     const isTank = kind.includes("tank");
+    const isMortar = kind.includes("mortar") || kind.includes("missile");
     const needsWalkRig =
       !mesh.userData.isUnitRig ||
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
           (mesh.userData.tankRigVersion || 0) < 6)) ||
-      (!isTank && (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
+      (isMortar && !mesh.userData.isMortar) ||
+      (!isTank &&
+        !isMortar &&
+        (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
     if (needsWalkRig) {
       Sfx.stopEngine(entity.id);
       scene.remove(mesh);
@@ -3921,6 +4134,12 @@ function upsertMesh(entity) {
 
   if (mesh.userData.building) {
     mesh.position.set(entity.x, 0, entity.y);
+    if (mesh.userData.isPatriot) {
+      mesh.userData.aimAt = entity.aim_at || null;
+      if (entity.aim_yaw != null && Number.isFinite(entity.aim_yaw)) {
+        mesh.userData.aimYawTarget = entity.aim_yaw;
+      }
+    }
   } else if (mesh.userData.isUnitRig) {
     applyUnitMotion(mesh, entity);
     if (mesh.userData.lastTint !== colors[0]) {
@@ -4010,9 +4229,9 @@ function faceMeshToward(mesh, x1, z1) {
   if (dx * dx + dz * dz < 1e-6) return;
   const yaw = Math.atan2(dx, dz);
   if (mesh.userData.isPatriot) {
-    mesh.userData.aimYaw = yaw;
-    const launcher = mesh.getObjectByName("muzzleRoot");
-    if (launcher) launcher.rotation.y = yaw;
+    // Soft target only — smoothPatriotFacing slews the tubes.
+    mesh.userData.aimYawTarget = yaw;
+    mesh.userData.aimAt = mesh.userData.aimAt || "shot";
     return;
   }
   if (mesh.userData.building) return;
@@ -4043,8 +4262,8 @@ function applyUnitMotion(mesh, entity) {
   const kind = String(entity.kind || mesh.userData.kind || "");
   mesh.userData.moveSpeed = kind.includes("tank")
     ? 0.58
-    : kind.includes("missile")
-      ? 0.16
+    : kind.includes("mortar") || kind.includes("missile")
+      ? 0.14
       : 0.2;
   const prevX = mesh.userData.lastX;
   const prevZ = mesh.userData.lastZ;
@@ -4163,6 +4382,56 @@ function updateTankDrive(mesh, dt) {
     Sfx.setEngine(id, mesh.position.x, mesh.position.z, Math.min(1, 0.45 + speed));
   } else {
     Sfx.stopEngine(id);
+  }
+}
+
+function smoothPatriotFacing(mesh, dt) {
+  if (!mesh?.userData?.isPatriot) return;
+  const launcher = mesh.getObjectByName("muzzleRoot");
+  const radar = mesh.getObjectByName("radarRoot");
+  const rate = mesh.userData.turretTurnRate || 0.95;
+  const scan = mesh.userData.scanRate || 0.55;
+  const tid = mesh.userData.aimAt;
+
+  if (!tid || tid === "shot") {
+    // Idle / post-shot: keep sweeping the sector.
+    if (!tid) {
+      mesh.userData.aimYaw = (mesh.userData.aimYaw || 0) + scan * dt;
+    } else if (mesh.userData.aimYawTarget != null) {
+      const cur = mesh.userData.aimYaw || 0;
+      const diff = shortestAngle(cur, mesh.userData.aimYawTarget);
+      const step = rate * dt;
+      mesh.userData.aimYaw = cur + Math.max(-step, Math.min(step, diff));
+      if (Math.abs(diff) < 0.05) mesh.userData.aimAt = null;
+    }
+    if (launcher) launcher.rotation.y = mesh.userData.aimYaw || 0;
+    if (radar) radar.rotation.y = (radar.rotation.y || 0) + scan * 1.7 * dt;
+    return;
+  }
+
+  let desired = mesh.userData.aimYawTarget;
+  const ent = state.entities.get(tid);
+  const other = state.meshes.get(tid);
+  const tx = ent ? ent.x : other?.position.x;
+  const tz = ent ? ent.y : other?.position.z;
+  if (tx != null && tz != null) {
+    desired = Math.atan2(tx - mesh.position.x, tz - mesh.position.z);
+    mesh.userData.aimYawTarget = desired;
+  }
+  if (desired == null && mesh.userData.aimYawTarget != null) {
+    desired = mesh.userData.aimYawTarget;
+  }
+  if (desired == null) return;
+
+  const cur = mesh.userData.aimYaw || 0;
+  const diff = shortestAngle(cur, desired);
+  const step = rate * dt;
+  mesh.userData.aimYaw = cur + Math.max(-step, Math.min(step, diff));
+  if (launcher) launcher.rotation.y = mesh.userData.aimYaw;
+  if (radar) {
+    const radCur = radar.rotation.y || 0;
+    const rDiff = shortestAngle(radCur, desired + 0.12);
+    radar.rotation.y = radCur + Math.max(-scan * 1.8 * dt, Math.min(scan * 1.8 * dt, rDiff));
   }
 }
 
@@ -4307,8 +4576,10 @@ function spawnShotFx(shot) {
   const kind = String(shot.kind || fromMesh?.userData?.kind || "");
   const isTankMg = kind.includes("mg");
   const isTankCannon = kind.includes("tank") && !isTankMg;
+  const isMortar = kind.includes("mortar");
   const isMissile =
-    kind.includes("missile") || kind.includes("patriot") || kind === "turret";
+    !isMortar &&
+    (kind.includes("missile") || kind.includes("patriot") || kind === "turret");
 
   if (isTankMg && fromMesh) {
     const dx = shot.x1 - fromMesh.position.x;
@@ -4322,7 +4593,7 @@ function spawnShotFx(shot) {
 
   const start = fromMesh
     ? worldMuzzlePoint(fromMesh, isTankMg ? "mgMuzzle" : "muzzle")
-    : new THREE.Vector3(shot.x0, 0.12, shot.y0);
+    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : 0.12, shot.y0);
   // Always use server impact point so misses fly wide of the mesh.
   const endY = didHit
     ? (toMesh?.userData?.unitHeight || (toMesh?.userData?.building ? 0.6 : 0.12) || 0.12) * 0.55
@@ -4335,13 +4606,14 @@ function spawnShotFx(shot) {
 
   const now = performance.now();
   const fx = {
-    type: isTankCannon ? "shell" : isMissile ? "missile" : "bullet",
+    type: isTankCannon ? "shell" : isMortar ? "mortar" : isMissile ? "missile" : "bullet",
     born: now,
-    life: isTankCannon ? 380 : isMissile ? 520 : 90,
+    life: isTankCannon ? 380 : isMortar ? 780 : isMissile ? 520 : 90,
     start: start.clone(),
     end: end.clone(),
     dir: dir.clone(),
     dist,
+    arc: isMortar ? Math.max(0.45, dist * 0.28) : 0,
     fromMesh: fromMesh || null,
     hit: didHit,
     parts: [],
@@ -4392,49 +4664,137 @@ function spawnShotFx(shot) {
       const barrel = fromMesh.getObjectByName("tankBarrel");
       if (barrel) barrel.position.z = -0.055;
     }
-  } else if (isMissile) {
-    const isPatriot = kind.includes("patriot") || kind === "turret";
-    const smoke = new THREE.Mesh(
-      new THREE.SphereGeometry(isPatriot ? 0.022 : 0.03, 6, 6),
+  } else if (isMortar) {
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(0.028, 6, 6),
       new THREE.MeshBasicMaterial({
-        color: isPatriot ? 0xddeeff : 0xaaccee,
+        color: 0xc8b890,
         transparent: true,
-        opacity: 0.75,
+        opacity: 0.8,
         depthWrite: false,
       }),
     );
-    smoke.position.copy(start);
-    scene.add(smoke);
-    fx.parts.push({ mesh: smoke, role: "blast" });
+    puff.position.copy(start);
+    scene.add(puff);
+    fx.parts.push({ mesh: puff, role: "blast" });
 
-    const rocket = new THREE.Mesh(
-      new THREE.CylinderGeometry(
-        isPatriot ? 0.008 : 0.01,
-        isPatriot ? 0.011 : 0.014,
-        isPatriot ? 0.07 : 0.08,
-        6,
-      ),
-      new THREE.MeshBasicMaterial({ color: isPatriot ? 0xffffff : 0x88ddff }),
+    const bomb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.016, 7, 7),
+      new THREE.MeshBasicMaterial({ color: 0x3a3828 }),
     );
-    rocket.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-    rocket.position.copy(start);
-    scene.add(rocket);
-    fx.parts.push({ mesh: rocket, role: "projectile" });
+    bomb.position.copy(start);
+    scene.add(bomb);
+    fx.parts.push({ mesh: bomb, role: "projectile" });
 
+    const fin = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.004, 0.01, 0.028, 5),
+      new THREE.MeshBasicMaterial({ color: 0x5a5848 }),
+    );
+    fin.position.copy(start);
+    scene.add(fin);
+    fx.parts.push({ mesh: fin, role: "tracer" });
+  } else if (isMissile) {
+    const isPatriot = kind.includes("patriot") || kind === "turret";
     if (isPatriot) {
-      fx.life = 620;
-      const flare = new THREE.Mesh(
-        new THREE.SphereGeometry(0.012, 6, 6),
+      // MIM-104 style: white body, ogive nose, cruciform fins, boost plume + trail.
+      fx.life = Math.min(1100, 420 + dist * 55);
+      fx.arc = Math.max(0.55, dist * 0.18);
+      fx.type = "patriot";
+
+      const launchSmoke = new THREE.Mesh(
+        new THREE.SphereGeometry(0.04, 8, 8),
         new THREE.MeshBasicMaterial({
-          color: 0xffaa44,
+          color: 0xd8d0c0,
           transparent: true,
-          opacity: 0.9,
+          opacity: 0.85,
           depthWrite: false,
         }),
       );
-      flare.position.copy(start);
-      scene.add(flare);
-      fx.parts.push({ mesh: flare, role: "smoke" });
+      launchSmoke.position.copy(start);
+      scene.add(launchSmoke);
+      fx.parts.push({ mesh: launchSmoke, role: "blast" });
+
+      const missile = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.009, 0.011, 0.11, 8),
+        new THREE.MeshBasicMaterial({ color: 0xf2f0e8 }),
+      );
+      body.position.y = 0.02;
+      missile.add(body);
+      const band = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.0115, 0.0115, 0.012, 8),
+        new THREE.MeshBasicMaterial({ color: 0x2a2c28 }),
+      );
+      band.position.y = -0.01;
+      missile.add(band);
+      const nose = new THREE.Mesh(
+        new THREE.ConeGeometry(0.009, 0.032, 8),
+        new THREE.MeshBasicMaterial({ color: 0xe8e4d8 }),
+      );
+      nose.position.y = 0.09;
+      missile.add(nose);
+      for (let i = 0; i < 4; i++) {
+        const fin = new THREE.Mesh(
+          new THREE.BoxGeometry(0.002, 0.028, 0.018),
+          new THREE.MeshBasicMaterial({ color: 0xc8c4b8 }),
+        );
+        const ang = (i * Math.PI) / 2;
+        fin.position.set(Math.cos(ang) * 0.012, -0.028, Math.sin(ang) * 0.012);
+        fin.rotation.y = ang;
+        missile.add(fin);
+      }
+      missile.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      missile.position.copy(start);
+      scene.add(missile);
+      fx.parts.push({ mesh: missile, role: "projectile" });
+
+      const plume = new THREE.Mesh(
+        new THREE.SphereGeometry(0.018, 6, 6),
+        new THREE.MeshBasicMaterial({
+          color: 0xff8833,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false,
+        }),
+      );
+      plume.position.copy(start).addScaledVector(dir, -0.04);
+      scene.add(plume);
+      fx.parts.push({ mesh: plume, role: "smoke" });
+
+      const trail = new THREE.Mesh(
+        new THREE.SphereGeometry(0.014, 6, 6),
+        new THREE.MeshBasicMaterial({
+          color: 0xbbb8a8,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+        }),
+      );
+      trail.position.copy(start);
+      scene.add(trail);
+      fx.parts.push({ mesh: trail, role: "ring" });
+    } else {
+      const smoke = new THREE.Mesh(
+        new THREE.SphereGeometry(0.03, 6, 6),
+        new THREE.MeshBasicMaterial({
+          color: 0xaaccee,
+          transparent: true,
+          opacity: 0.75,
+          depthWrite: false,
+        }),
+      );
+      smoke.position.copy(start);
+      scene.add(smoke);
+      fx.parts.push({ mesh: smoke, role: "blast" });
+
+      const rocket = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.01, 0.014, 0.08, 6),
+        new THREE.MeshBasicMaterial({ color: 0x88ddff }),
+      );
+      rocket.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      rocket.position.copy(start);
+      scene.add(rocket);
+      fx.parts.push({ mesh: rocket, role: "projectile" });
     }
   } else {
     // Rifle: brief muzzle flash + fast thin tracer bullet
@@ -4480,10 +4840,19 @@ function spawnShotFx(shot) {
 function disposeFxPart(part) {
   if (!part?.mesh) return;
   scene?.remove(part.mesh);
-  part.mesh.geometry?.dispose?.();
-  if (part.mesh.material) {
-    if (Array.isArray(part.mesh.material)) part.mesh.material.forEach((m) => m.dispose?.());
-    else part.mesh.material.dispose?.();
+  part.mesh.traverse?.((obj) => {
+    obj.geometry?.dispose?.();
+    if (obj.material) {
+      if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose?.());
+      else obj.material.dispose?.();
+    }
+  });
+  if (!part.mesh.traverse) {
+    part.mesh.geometry?.dispose?.();
+    if (part.mesh.material) {
+      if (Array.isArray(part.mesh.material)) part.mesh.material.forEach((m) => m.dispose?.());
+      else part.mesh.material.dispose?.();
+    }
   }
 }
 
@@ -4521,20 +4890,44 @@ function updateCombatFx(now) {
     const fx = activeFx[i];
     const t = Math.min(1, (now - fx.born) / fx.life);
     const pos = fx.start.clone().lerp(fx.end, t);
+    if ((fx.type === "mortar" || fx.type === "patriot") && fx.arc) {
+      // Patriot: boost loft early then flatten onto the intercept.
+      const loft =
+        fx.type === "patriot" ? 4 * t * (1 - t) * (1 - t * 0.35) : 4 * t * (1 - t);
+      pos.y += loft * fx.arc;
+    }
 
     for (const part of fx.parts) {
       if (part.role === "projectile") {
         part.mesh.position.copy(pos);
+        if (fx.type === "mortar" || fx.type === "patriot") {
+          const t2 = Math.min(1, t + 0.025);
+          const next = fx.start.clone().lerp(fx.end, t2);
+          const loft2 =
+            fx.type === "patriot"
+              ? 4 * t2 * (1 - t2) * (1 - t2 * 0.35)
+              : 4 * t2 * (1 - t2);
+          next.y += loft2 * (fx.arc || 0);
+          const v = next.sub(pos);
+          if (v.lengthSq() > 1e-8) {
+            v.normalize();
+            part.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v);
+          }
+        }
       } else if (part.role === "tracer") {
-        const tip = fx.start.clone().addScaledVector(fx.dir, part.tipLen || 0.4);
-        const head = pos.clone();
-        const tail = head.clone().addScaledVector(fx.dir, -(part.tipLen || 0.4));
-        // Keep tracer behind the bullet head
-        const a = t < 0.15 ? fx.start : tail;
-        const b = head;
-        part.mesh.geometry.setFromPoints([a, b]);
-        part.mesh.geometry.attributes.position.needsUpdate = true;
-        part.mesh.material.opacity = 0.95 * (1 - t * 0.5);
+        if (fx.type === "mortar") {
+          part.mesh.position.copy(pos);
+          part.mesh.material.opacity = 0.7 * (1 - t);
+        } else {
+          const tip = fx.start.clone().addScaledVector(fx.dir, part.tipLen || 0.4);
+          const head = pos.clone();
+          const tail = head.clone().addScaledVector(fx.dir, -(part.tipLen || 0.4));
+          const a = t < 0.15 ? fx.start : tail;
+          const b = head;
+          part.mesh.geometry.setFromPoints([a, b]);
+          part.mesh.geometry.attributes.position.needsUpdate = true;
+          part.mesh.material.opacity = 0.95 * (1 - t * 0.5);
+        }
       } else if (part.role === "blast") {
         const fade = Math.max(0, 1 - t * (fx.type === "tank_boom" ? 1.6 : 4));
         part.mesh.material.opacity = fade;
@@ -4544,9 +4937,16 @@ function updateCombatFx(now) {
           part.mesh.position.y = fx.start.y + t * 0.25;
         }
       } else if (part.role === "ring") {
-        part.mesh.material.opacity = 0.85 * (1 - t);
-        const s = 1 + t * 9;
-        part.mesh.scale.set(s, s, s);
+        if (fx.type === "patriot") {
+          // Exhaust smoke puff trailing the missile.
+          part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.06 - t * 0.04);
+          part.mesh.material.opacity = 0.5 * (1 - t);
+          part.mesh.scale.setScalar(1 + t * 6);
+        } else {
+          part.mesh.material.opacity = 0.85 * (1 - t);
+          const s = 1 + t * 9;
+          part.mesh.scale.set(s, s, s);
+        }
       } else if (part.role === "debris") {
         const drift = part.mesh.userData.drift;
         if (drift) {
@@ -4557,9 +4957,15 @@ function updateCombatFx(now) {
         part.mesh.material.opacity = 0.55 * (1 - t);
         part.mesh.scale.setScalar(1 + t * 4);
       } else if (part.role === "smoke") {
-        part.mesh.material.opacity = 0.55 * (1 - t);
-        part.mesh.scale.setScalar(1 + t * 5);
-        part.mesh.position.copy(fx.start).addScaledVector(fx.dir, 0.04 + t * 0.08);
+        if (fx.type === "patriot") {
+          part.mesh.position.copy(pos).addScaledVector(fx.dir, -0.035);
+          part.mesh.material.opacity = 0.9 * (1 - t * 0.85);
+          part.mesh.scale.setScalar(1 + t * 2.2);
+        } else {
+          part.mesh.material.opacity = 0.55 * (1 - t);
+          part.mesh.scale.setScalar(1 + t * 5);
+          part.mesh.position.copy(fx.start).addScaledVector(fx.dir, 0.04 + t * 0.08);
+        }
       }
     }
 
@@ -4575,10 +4981,14 @@ function updateCombatFx(now) {
         }
       } else if (fx.type === "bullet") {
         spawnMissImpact(fx.end, fx.hit === false);
-      } else if (fx.type === "missile") {
+      } else if (fx.type === "missile" || fx.type === "mortar" || fx.type === "patriot") {
         if (fx.hit !== false) {
           spawnTankExplosion(fx.end);
-          applyBlastKnock(fx.end.x, fx.end.z, 0.85);
+          applyBlastKnock(
+            fx.end.x,
+            fx.end.z,
+            fx.type === "mortar" ? 0.95 : fx.type === "patriot" ? 1.05 : 0.85,
+          );
         } else {
           spawnMissImpact(fx.end, true);
         }
@@ -4831,7 +5241,8 @@ function animate() {
     } else if (mesh.userData.corpse) {
       if (now - (mesh.userData.corpseAt || 0) > 900) reap.push(mesh);
     } else {
-      smoothUnitFacing(mesh, dt);
+      if (mesh.userData.isPatriot) smoothPatriotFacing(mesh, dt);
+      else smoothUnitFacing(mesh, dt);
       updateTankDrive(mesh, dt);
       updateInfantryDrive(mesh, dt);
       updateInfantryWalk(mesh, dt, now);

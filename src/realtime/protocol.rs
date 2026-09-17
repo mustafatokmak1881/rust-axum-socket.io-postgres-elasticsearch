@@ -215,9 +215,12 @@ pub struct EntityView {
     /// Infantry lying down in combat.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prone: bool,
-    /// Current attack target — tanks slew the turret toward this before firing.
+    /// Current attack target — tanks/Patriot slew toward this before firing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim_at: Option<Uuid>,
+    /// Launcher / turret yaw (radians). Sent for tanks and Patriot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aim_yaw: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
