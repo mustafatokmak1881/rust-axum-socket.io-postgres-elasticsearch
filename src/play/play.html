@@ -37,7 +37,7 @@
     <section id="lobby-screen" class="screen">
       <div class="lobby-panel">
         <h1>Command Lobby</h1>
-        <p class="blurb">Match-based Generals · drop-in join · up to 10 commanders · fair cosmetics only</p>
+        <p class="blurb">Match-based Generals · drop-in join · up to 50 commanders · fair cosmetics only</p>
 
         <div class="faction-row" id="faction-row">
           <button type="button" data-faction="usa" class="faction on">USA</button>
@@ -47,10 +47,10 @@
 
         <div class="lobby-actions">
           <label>Slots
-            <input id="max-players" type="number" min="2" max="10" value="10">
+            <input id="max-players" type="number" min="2" max="50" value="50">
           </label>
           <label>Map
-            <input id="map-size" type="number" min="64" max="256" value="192">
+            <input id="map-size" type="number" min="64" max="256" value="128">
           </label>
           <label class="check"><input id="ffa" type="checkbox"> FFA</label>
           <button type="button" id="btn-create" class="primary">Start Match</button>
@@ -141,6 +141,6 @@
     </section>
   </div>
 
-  <script type="module" src="/assets/play.js?v=cap10start5"></script>
+  <script type="module" src="/assets/play.js?v=tank50cap"></script>
 </body>
 </html>

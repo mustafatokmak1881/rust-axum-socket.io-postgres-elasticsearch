@@ -1,8 +1,5 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { STLLoader } from "three/addons/loaders/STLLoader.js";
-import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
-import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -1485,11 +1482,10 @@ const Radar = {
 let renderer, scene, camera, controls, ground, raycaster, pointer;
 let mapSize = 192;
 let buildingGeometries = Object.create(null);
-/** Pre-scaled OBJ/MTL groups (HQ etc.) — clone per entity. */
 let buildingTemplates = Object.create(null);
 let buildingModelsPromise = null;
-/** True after OBJ/STL templates are ready — avoid permanent fallback boxes. */
-let buildingModelsReady = false;
+/** Procedural buildings are always ready — no async OBJ/STL wait. */
+let buildingModelsReady = true;
 let ghostMesh = null;
 let fogOfWar = null;
 let fogExploredData = null; // Uint8Array size*size — 0/1 explored
@@ -1511,157 +1507,529 @@ const CAMERA_DIST_MAX = 10;
 const CAMERA_FOV = 32;
 const EDGE_SCROLL_PX = 160;
 
-const BUILDING_MODELS = {
-  hq: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 2.15 },
-  power_plant: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.7 },
-  supply: { type: "obj", obj: "/assets/models/command-center.obj", mtl: "/assets/models/command-center.mtl", target: 1.7 },
-  barracks: { type: "stl", url: "/assets/models/barracks.stl", target: 1.35 },
-  war_factory: { type: "obj", obj: "/assets/models/war-factory.obj", mtl: "/assets/models/war-factory.mtl", target: 2.1 },
-  // turret / Patriot Battery: procedural mesh in createPatriotBatteryMesh
+/** Visual max-dimension targets — must match server `building_visual_size`. */
+const BUILDING_VISUAL = {
+  hq: 2.15,
+  war_factory: 2.1,
+  barracks: 1.35,
+  power_plant: 1.7,
+  supply: 1.7,
+  turret: 0.55,
+  bunker: 0.34,
+  radar: 0.85,
 };
 
-/** Bump when BUILDING_MODELS targets change so cached meshes refit. */
-const BUILDING_FIT_VERSION = 4;
+/** Bump when procedural building meshes change so live matches remesh. */
+const BUILDING_FIT_VERSION = 5;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
 const PATRIOT_RIG_VERSION = 3;
 
-async function prepareStlGeometry(url, targetSize) {
-  const loader = new STLLoader();
-  const geo = await loader.loadAsync(url);
-  // Most CAD STLs are Z-up; Three.js is Y-up — stand the building upright.
-  geo.rotateX(-Math.PI / 2);
-  geo.computeVertexNormals();
-  geo.center();
-  geo.computeBoundingBox();
-  const box = geo.boundingBox;
-  const size = new THREE.Vector3();
-  box.getSize(size);
-  const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const s = targetSize / maxDim;
-  geo.scale(s, s, s);
-  geo.computeBoundingBox();
-  geo.translate(0, -geo.boundingBox.min.y, 0);
-  return geo;
+function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) {
+  const m = new THREE.Mesh(
+    geo,
+    matStd(color, {
+      metalness: opts.metalness ?? 0.28,
+      roughness: opts.roughness ?? 0.62,
+      emissive: opts.emissive,
+      emissiveIntensity: opts.emissiveIntensity,
+    }),
+  );
+  if (opts.transparent) {
+    m.material.transparent = true;
+    m.material.opacity = opts.opacity ?? 0.85;
+    m.material.depthWrite = (opts.opacity ?? 0.85) >= 0.95;
+  }
+  m.position.set(x, y, z);
+  m.rotation.set(rx, ry, rz);
+  m.castShadow = opts.cast !== false;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
 }
 
-async function loadObjRoot(objUrl, mtlUrl) {
-  const mtlLoader = new MTLLoader();
-  const materials = await mtlLoader.loadAsync(mtlUrl);
-  materials.preload();
-  const objLoader = new OBJLoader();
-  objLoader.setMaterials(materials);
-  const root = await objLoader.loadAsync(objUrl);
-  root.traverse((child) => {
-    if (!child.isMesh) return;
-    child.castShadow = true;
-    child.receiveShadow = true;
-    const mats = Array.isArray(child.material) ? child.material : [child.material];
-    for (const mat of mats) {
-      if (!mat) continue;
-      mat.side = THREE.FrontSide;
-      if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
-    }
-  });
+function finishProcBuilding(root, kind, unitHeight) {
+  root.userData.building = true;
+  root.userData.modelKind = kind;
+  root.userData.isFallback = false;
+  root.userData.keepMtlColors = true;
+  root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.unitHeight = unitHeight;
+  root.userData.procBuilding = true;
   return root;
 }
 
-function fitObjRoot(root, targetSize) {
-  // Reset local transform so bbox is in true model space.
-  root.position.set(0, 0, 0);
-  root.rotation.set(0, 0, 0);
-  root.scale.set(1, 1, 1);
-  root.updateMatrixWorld(true);
-
-  const box = new THREE.Box3().setFromObject(root);
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-  box.getSize(size);
-  box.getCenter(center);
-
-  const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const s = targetSize / maxDim;
-
-  // Three.js matrix is T*R*S — scale first, then translate by -center*s
-  // so the visual center lands on the group origin (matches STL geo.center()).
-  root.scale.setScalar(s);
-  root.position.set(-center.x * s, -center.y * s, -center.z * s);
-  root.updateMatrixWorld(true);
-
-  const grounded = new THREE.Box3().setFromObject(root);
-  root.position.y -= grounded.min.y;
-  root.updateMatrixWorld(true);
+function milPalette(accent) {
+  return {
+    accent: accent ?? 0x556b2f,
+    olive: 0x4a5538,
+    oliveDark: 0x32382a,
+    oliveLight: 0x5c6648,
+    concrete: 0x6a675c,
+    concreteDark: 0x4a4840,
+    concreteLight: 0x7e7a6e,
+    metal: 0x3a3c38,
+    metalBright: 0x5c6058,
+    rust: 0x5a4030,
+    glass: 0x1a2830,
+    sand: 0x6b6550,
+    warning: 0xb8860b,
+    black: 0x141210,
+  };
 }
 
-function makeObjTemplate(sharedRoot, targetSize) {
-  const root = sharedRoot.clone(true);
-  detachMaterials(root);
-  fitObjRoot(root, targetSize);
-  const wrapper = new THREE.Group();
-  wrapper.add(root);
-  wrapper.userData.keepMtlColors = true;
-  return wrapper;
-}
+/** Command Center — fortified HQ blockhouse + comms tower. */
+function createCommandCenterMesh(fallbackMat) {
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
 
-/** Force unique materials so opacity/ghost never leaks across buildings. */
-function detachMaterials(root) {
-  root.traverse((child) => {
-    if (!child.isMesh || !child.material) return;
-    if (Array.isArray(child.material)) {
-      child.material = child.material.map((mat) => (mat ? mat.clone() : mat));
-    } else {
-      child.material = child.material.clone();
-    }
+  // Plinth / blast apron
+  bldgPart(root, new THREE.BoxGeometry(1.95, 0.07, 1.75), p.concreteDark, 0, 0.035, 0, 0, 0, 0, {
+    roughness: 0.92,
+    metalness: 0.08,
+    cast: false,
   });
+  bldgPart(root, new THREE.BoxGeometry(1.82, 0.04, 1.62), p.concrete, 0, 0.08, 0, 0, 0, 0, {
+    roughness: 0.88,
+    metalness: 0.1,
+  });
+
+  // Main keep
+  bldgPart(root, new THREE.BoxGeometry(1.35, 0.55, 1.05), p.olive, 0, 0.38, 0.02, 0, 0, 0, {
+    roughness: 0.7,
+  });
+  bldgPart(root, new THREE.BoxGeometry(1.38, 0.06, 1.08), p.oliveDark, 0, 0.68, 0.02);
+  // Upper CIC
+  bldgPart(root, new THREE.BoxGeometry(0.95, 0.32, 0.72), p.oliveLight, 0.08, 0.9, 0.05);
+  bldgPart(root, new THREE.BoxGeometry(0.98, 0.04, 0.75), p.metal, 0.08, 1.08, 0.05, 0, 0, 0, {
+    metalness: 0.45,
+    roughness: 0.45,
+  });
+
+  // Corner bastions
+  for (const [x, z] of [
+    [-0.62, -0.42],
+    [0.62, -0.42],
+    [-0.62, 0.48],
+    [0.62, 0.48],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(0.22, 0.42, 0.22), p.oliveDark, x, 0.35, z);
+    bldgPart(root, new THREE.BoxGeometry(0.24, 0.04, 0.24), p.concreteLight, x, 0.57, z);
+  }
+
+  // Entry vestibule + door
+  bldgPart(root, new THREE.BoxGeometry(0.42, 0.38, 0.28), p.oliveDark, 0, 0.3, 0.62);
+  bldgPart(root, new THREE.BoxGeometry(0.22, 0.28, 0.04), p.black, 0, 0.28, 0.76, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.55, 0.05, 0.35), p.concrete, 0, 0.1, 0.78, 0, 0, 0, {
+    roughness: 0.9,
+    cast: false,
+  });
+
+  // Window slits of glass
+  for (const [x, y, z, w] of [
+    [-0.38, 0.48, 0.56, 0.18],
+    [0.38, 0.48, 0.56, 0.18],
+    [-0.25, 0.92, 0.42, 0.28],
+    [0.35, 0.92, 0.42, 0.22],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(w, 0.1, 0.03), p.glass, x, y, z, 0, 0, 0, {
+      metalness: 0.7,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.75,
+    });
+  }
+
+  // Comms tower
+  bldgPart(root, new THREE.BoxGeometry(0.28, 0.75, 0.28), p.metal, -0.45, 1.15, -0.25, 0, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+  bldgPart(root, new THREE.CylinderGeometry(0.03, 0.04, 0.55, 8), p.metalBright, -0.45, 1.75, -0.25, 0, 0, 0, {
+    metalness: 0.65,
+    roughness: 0.3,
+  });
+  // Dish
+  bldgPart(
+    root,
+    new THREE.CylinderGeometry(0.16, 0.02, 0.05, 12),
+    p.metalBright,
+    -0.45,
+    1.95,
+    -0.15,
+    Math.PI / 2.4,
+    0.4,
+    0,
+    { metalness: 0.55, roughness: 0.35 },
+  );
+  bldgPart(root, new THREE.SphereGeometry(0.035, 8, 8), 0xaa2200, -0.45, 2.02, -0.25, 0, 0, 0, {
+    emissive: 0x440000,
+    emissiveIntensity: 0.35,
+    cast: false,
+  });
+
+  // Side antenna farm
+  for (let i = 0; i < 4; i++) {
+    const ax = 0.35 + (i % 2) * 0.12;
+    const az = -0.35 - Math.floor(i / 2) * 0.1;
+    bldgPart(root, new THREE.CylinderGeometry(0.012, 0.015, 0.35 + i * 0.05, 6), p.metal, ax, 1.25, az, 0, 0, 0, {
+      metalness: 0.6,
+      roughness: 0.35,
+    });
+  }
+
+  // Team stripe + sandbags
+  bldgPart(root, new THREE.BoxGeometry(1.2, 0.05, 0.06), p.accent, 0, 0.55, 0.55, 0, 0, 0, {
+    metalness: 0.15,
+    roughness: 0.55,
+  });
+  for (const [sx, sz] of [
+    [-0.85, 0.55],
+    [0.85, 0.55],
+    [-0.9, -0.55],
+    [0.9, -0.55],
+    [-0.95, 0],
+    [0.95, 0],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(0.16, 0.1, 0.12), p.sand, sx, 0.14, sz, 0, sx * 0.1, 0, {
+      roughness: 0.95,
+      cast: false,
+    });
+  }
+
+  return finishProcBuilding(root, "hq", 2.05);
 }
 
-function geometryForKind(kind) {
-  return buildingGeometries[kind] || buildingGeometries.barracks || null;
+/** Barracks — Quonset hall + side annex. */
+function createBarracksMesh(fallbackMat) {
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
+
+  bldgPart(root, new THREE.BoxGeometry(1.25, 0.05, 0.85), p.concreteDark, 0, 0.025, 0, 0, 0, 0, {
+    roughness: 0.92,
+    cast: false,
+  });
+
+  // Quonset vault (approx with box + roof wedges)
+  bldgPart(root, new THREE.BoxGeometry(1.1, 0.32, 0.62), p.olive, 0, 0.24, 0);
+  bldgPart(root, new THREE.BoxGeometry(1.12, 0.08, 0.64), p.metal, 0, 0.44, 0, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.5,
+  });
+  // Arched roof strips
+  for (let i = -2; i <= 2; i++) {
+    bldgPart(
+      root,
+      new THREE.BoxGeometry(0.08, 0.14, 0.64),
+      p.oliveDark,
+      i * 0.2,
+      0.48,
+      0,
+      0,
+      0,
+      i * 0.12,
+      { metalness: 0.35, roughness: 0.55 },
+    );
+  }
+
+  // Side annex
+  bldgPart(root, new THREE.BoxGeometry(0.35, 0.28, 0.4), p.oliveLight, 0.55, 0.22, 0.15);
+  bldgPart(root, new THREE.BoxGeometry(0.12, 0.2, 0.03), p.black, 0.72, 0.2, 0.15, 0, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+
+  // Front door + steps
+  bldgPart(root, new THREE.BoxGeometry(0.2, 0.26, 0.04), p.black, -0.25, 0.2, 0.33);
+  bldgPart(root, new THREE.BoxGeometry(0.35, 0.04, 0.18), p.concrete, -0.25, 0.06, 0.4, 0, 0, 0, {
+    roughness: 0.9,
+    cast: false,
+  });
+
+  // Windows
+  for (const x of [-0.35, 0.05, 0.35]) {
+    bldgPart(root, new THREE.BoxGeometry(0.14, 0.1, 0.03), p.glass, x, 0.3, 0.32, 0, 0, 0, {
+      metalness: 0.65,
+      roughness: 0.25,
+      transparent: true,
+      opacity: 0.7,
+    });
+  }
+
+  // Chimney / stove pipe
+  bldgPart(root, new THREE.CylinderGeometry(0.035, 0.04, 0.28, 8), p.rust, 0.35, 0.62, -0.1, 0, 0, 0, {
+    metalness: 0.45,
+    roughness: 0.55,
+  });
+
+  // Accent stripe + sandbags
+  bldgPart(root, new THREE.BoxGeometry(0.9, 0.04, 0.05), p.accent, 0, 0.38, 0.32);
+  for (const [x, z] of [
+    [-0.55, 0.35],
+    [0.2, 0.38],
+    [0.55, -0.25],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(0.14, 0.08, 0.1), p.sand, x, 0.1, z, 0, 0, 0, {
+      roughness: 0.95,
+      cast: false,
+    });
+  }
+
+  return finishProcBuilding(root, "barracks", 0.7);
 }
 
-function templateForKind(kind) {
-  return buildingTemplates[kind] || null;
+/** Cold Fusion Reactor — containment drum + cooling stacks. */
+function createPowerPlantMesh(fallbackMat) {
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
+
+  bldgPart(root, new THREE.CylinderGeometry(0.72, 0.78, 0.06, 16), p.concreteDark, 0, 0.03, 0, 0, 0, 0, {
+    roughness: 0.92,
+    cast: false,
+  });
+
+  // Reactor vessel
+  bldgPart(root, new THREE.CylinderGeometry(0.42, 0.48, 0.55, 16), p.metal, 0, 0.35, 0, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+  bldgPart(root, new THREE.CylinderGeometry(0.38, 0.38, 0.12, 16), p.metalBright, 0, 0.68, 0, 0, 0, 0, {
+    metalness: 0.6,
+    roughness: 0.3,
+  });
+  // Dome
+  bldgPart(root, new THREE.SphereGeometry(0.38, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), p.concreteLight, 0, 0.72, 0, 0, 0, 0, {
+    metalness: 0.2,
+    roughness: 0.55,
+  });
+
+  // Cooling fins
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    bldgPart(
+      root,
+      new THREE.BoxGeometry(0.06, 0.4, 0.14),
+      p.oliveDark,
+      Math.cos(a) * 0.52,
+      0.35,
+      Math.sin(a) * 0.52,
+      0,
+      -a,
+      0,
+      { metalness: 0.4, roughness: 0.5 },
+    );
+  }
+
+  // Exhaust stacks
+  for (const [x, z] of [
+    [-0.55, 0.45],
+    [0.55, 0.45],
+  ]) {
+    bldgPart(root, new THREE.CylinderGeometry(0.07, 0.09, 0.7, 10), p.olive, x, 0.45, z);
+    bldgPart(root, new THREE.CylinderGeometry(0.08, 0.08, 0.06, 10), p.warning, x, 0.82, z, 0, 0, 0, {
+      metalness: 0.3,
+      roughness: 0.5,
+    });
+  }
+
+  // Control annex
+  bldgPart(root, new THREE.BoxGeometry(0.45, 0.28, 0.35), p.olive, 0.55, 0.22, -0.35);
+  bldgPart(root, new THREE.BoxGeometry(0.2, 0.1, 0.03), p.glass, 0.55, 0.28, -0.52, 0, 0, 0, {
+    metalness: 0.65,
+    roughness: 0.25,
+    transparent: true,
+    opacity: 0.7,
+  });
+
+  // Hazard rings + glow core hint
+  bldgPart(root, new THREE.TorusGeometry(0.4, 0.025, 8, 24), p.warning, 0, 0.45, 0, Math.PI / 2, 0, 0, {
+    metalness: 0.35,
+    roughness: 0.45,
+  });
+  bldgPart(root, new THREE.SphereGeometry(0.08, 10, 10), 0x88ccff, 0, 0.55, 0, 0, 0, 0, {
+    emissive: 0x226688,
+    emissiveIntensity: 0.55,
+    metalness: 0.2,
+    roughness: 0.3,
+    cast: false,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.5, 0.04, 0.05), p.accent, 0.55, 0.36, -0.35);
+
+  return finishProcBuilding(root, "power_plant", 1.05);
+}
+
+/** Supply Center — warehouse + dock + crates. */
+function createSupplyCenterMesh(fallbackMat) {
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
+
+  bldgPart(root, new THREE.BoxGeometry(1.55, 0.05, 1.15), p.concreteDark, 0, 0.025, 0, 0, 0, 0, {
+    roughness: 0.92,
+    cast: false,
+  });
+
+  // Warehouse hall
+  bldgPart(root, new THREE.BoxGeometry(1.25, 0.55, 0.85), p.olive, 0, 0.35, -0.05);
+  bldgPart(root, new THREE.BoxGeometry(1.28, 0.06, 0.88), p.metal, 0, 0.65, -0.05, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.5,
+  });
+  // Sawtooth roof ridges
+  for (let i = -2; i <= 2; i++) {
+    bldgPart(root, new THREE.BoxGeometry(0.18, 0.1, 0.88), p.oliveDark, i * 0.22, 0.72, -0.05, 0, 0, 0.25, {
+      metalness: 0.3,
+      roughness: 0.55,
+    });
+  }
+
+  // Loading dock
+  bldgPart(root, new THREE.BoxGeometry(0.7, 0.18, 0.35), p.concrete, 0, 0.14, 0.55, 0, 0, 0, {
+    roughness: 0.88,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.55, 0.42, 0.04), p.black, 0, 0.38, 0.4, 0, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+  // Roll stripes on door
+  for (let i = 0; i < 5; i++) {
+    bldgPart(root, new THREE.BoxGeometry(0.52, 0.025, 0.02), p.metalBright, 0, 0.22 + i * 0.07, 0.42, 0, 0, 0, {
+      metalness: 0.45,
+      roughness: 0.45,
+      cast: false,
+    });
+  }
+
+  // Crane gantry
+  bldgPart(root, new THREE.BoxGeometry(0.06, 0.55, 0.06), p.metal, 0.55, 0.55, 0.35, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.55, 0.05, 0.05), p.metalBright, 0.3, 0.82, 0.35, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.04, 0.2, 0.04), p.warning, 0.15, 0.7, 0.35);
+
+  // Crate stacks
+  const crate = 0x6b5a3a;
+  for (const [x, y, z, s] of [
+    [-0.55, 0.14, 0.45, 0.16],
+    [-0.55, 0.28, 0.45, 0.14],
+    [0.55, 0.12, 0.5, 0.18],
+    [-0.65, 0.12, -0.35, 0.15],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(s, s * 0.85, s), crate, x, y, z, 0, 0.2, 0, {
+      roughness: 0.85,
+      metalness: 0.1,
+    });
+  }
+
+  bldgPart(root, new THREE.BoxGeometry(1.0, 0.04, 0.05), p.accent, 0, 0.5, 0.38);
+  return finishProcBuilding(root, "supply", 0.85);
+}
+
+/** War Factory — tank hangar + assembly bay. */
+function createWarFactoryMesh(fallbackMat) {
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
+
+  bldgPart(root, new THREE.BoxGeometry(1.95, 0.06, 1.45), p.concreteDark, 0, 0.03, 0, 0, 0, 0, {
+    roughness: 0.92,
+    cast: false,
+  });
+
+  // Main hangar
+  bldgPart(root, new THREE.BoxGeometry(1.7, 0.7, 1.1), p.olive, 0, 0.42, 0);
+  bldgPart(root, new THREE.BoxGeometry(1.74, 0.08, 1.14), p.metal, 0, 0.8, 0, 0, 0, 0, {
+    metalness: 0.42,
+    roughness: 0.48,
+  });
+  // Roof ridges
+  for (let i = -3; i <= 3; i++) {
+    bldgPart(root, new THREE.BoxGeometry(0.1, 0.12, 1.14), p.oliveDark, i * 0.22, 0.9, 0, 0, 0, 0.15, {
+      metalness: 0.35,
+      roughness: 0.5,
+    });
+  }
+
+  // Giant bay door (front)
+  bldgPart(root, new THREE.BoxGeometry(0.95, 0.55, 0.05), p.black, 0, 0.38, 0.58, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.38,
+  });
+  for (let i = 0; i < 6; i++) {
+    bldgPart(root, new THREE.BoxGeometry(0.9, 0.03, 0.02), p.metalBright, 0, 0.16 + i * 0.09, 0.61, 0, 0, 0, {
+      metalness: 0.5,
+      cast: false,
+    });
+  }
+  // Door frame
+  bldgPart(root, new THREE.BoxGeometry(1.05, 0.06, 0.08), p.metal, 0, 0.68, 0.58, 0, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+
+  // Side workshop wing
+  bldgPart(root, new THREE.BoxGeometry(0.45, 0.4, 0.7), p.oliveLight, 0.95, 0.28, -0.15);
+  bldgPart(root, new THREE.BoxGeometry(0.03, 0.16, 0.28), p.glass, 1.17, 0.32, -0.15, 0, 0, 0, {
+    metalness: 0.65,
+    roughness: 0.25,
+    transparent: true,
+    opacity: 0.7,
+  });
+
+  // Smokestacks
+  for (const [x, z] of [
+    [-0.65, -0.4],
+    [-0.4, -0.45],
+  ]) {
+    bldgPart(root, new THREE.CylinderGeometry(0.08, 0.1, 0.85, 10), p.rust, x, 0.95, z, 0, 0, 0, {
+      metalness: 0.4,
+      roughness: 0.55,
+    });
+    bldgPart(root, new THREE.CylinderGeometry(0.09, 0.09, 0.05, 10), p.warning, x, 1.38, z);
+  }
+
+  // Overhead crane
+  bldgPart(root, new THREE.BoxGeometry(0.08, 0.7, 0.08), p.metal, -0.75, 0.85, 0.35, 0, 0, 0, {
+    metalness: 0.55,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.08, 0.7, 0.08), p.metal, 0.75, 0.85, 0.35, 0, 0, 0, {
+    metalness: 0.55,
+  });
+  bldgPart(root, new THREE.BoxGeometry(1.55, 0.06, 0.08), p.metalBright, 0, 1.18, 0.35, 0, 0, 0, {
+    metalness: 0.6,
+    roughness: 0.35,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.2, 0.12, 0.2), p.warning, 0.2, 1.1, 0.35);
+
+  // Ramp out
+  bldgPart(root, new THREE.BoxGeometry(0.9, 0.05, 0.35), p.concrete, 0, 0.08, 0.85, 0.15, 0, 0, {
+    roughness: 0.9,
+    cast: false,
+  });
+
+  bldgPart(root, new THREE.BoxGeometry(1.4, 0.05, 0.06), p.accent, 0, 0.55, 0.56);
+  return finishProcBuilding(root, "war_factory", 1.35);
 }
 
 function createBuildingMesh(kind, fallbackMat) {
-  if (kind === "turret") {
-    return createPatriotBatteryMesh(fallbackMat);
-  }
-  if (kind === "bunker") {
-    return createBunkerMesh(fallbackMat);
-  }
-  if (kind === "radar") {
-    return createRadarStationMesh(fallbackMat);
-  }
-  const template = templateForKind(kind);
-  if (template) {
-    const mesh = template.clone(true);
-    detachMaterials(mesh);
-    rememberBaseOpacities(mesh);
-    mesh.userData.keepMtlColors = true;
-    mesh.userData.building = true;
-    mesh.userData.modelKind = kind;
-    mesh.userData.isFallback = false;
-    mesh.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-    return mesh;
-  }
-  const geo = geometryForKind(kind);
-  if (geo) {
-    const mesh = new THREE.Mesh(geo, fallbackMat);
-    mesh.userData.building = true;
-    mesh.userData.modelKind = kind;
-    mesh.userData.isFallback = false;
-    mesh.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-    return mesh;
-  }
-  // Temporary placeholder only — replaced once models finish loading.
-  const h = kind === "hq" ? 2.6 : 1.6;
-  const w = kind === "hq" ? 2.4 : 1.4;
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), fallbackMat);
-  mesh.userData.building = true;
-  mesh.userData.modelKind = kind;
-  mesh.userData.isFallback = true;
-  mesh.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-  return mesh;
+  if (kind === "turret") return createPatriotBatteryMesh(fallbackMat);
+  if (kind === "bunker") return createBunkerMesh(fallbackMat);
+  if (kind === "radar") return createRadarStationMesh(fallbackMat);
+  if (kind === "hq") return createCommandCenterMesh(fallbackMat);
+  if (kind === "barracks") return createBarracksMesh(fallbackMat);
+  if (kind === "power_plant") return createPowerPlantMesh(fallbackMat);
+  if (kind === "supply") return createSupplyCenterMesh(fallbackMat);
+  if (kind === "war_factory") return createWarFactoryMesh(fallbackMat);
+
+  // Unknown kind — small procedural shed
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
+  bldgPart(root, new THREE.BoxGeometry(0.9, 0.45, 0.7), p.olive, 0, 0.25, 0);
+  return finishProcBuilding(root, kind, 0.5);
 }
 
 /** Hand-built MIM-104 Patriot — sized vs Crusader tank (~0.28 long) & infantry (~0.08 tall).
@@ -2334,55 +2702,8 @@ function rememberBaseOpacities(root) {
 }
 
 async function ensureBuildingModel() {
-  if (
-    buildingTemplates.hq &&
-    buildingGeometries.barracks &&
-    buildingTemplates.hq.userData?.buildingFitVersion === BUILDING_FIT_VERSION
-  ) {
-    buildingModelsReady = true;
-    return true;
-  }
-  // Force reload when footprint targets change.
-  if (buildingTemplates.hq?.userData?.buildingFitVersion !== BUILDING_FIT_VERSION) {
-    for (const key of Object.keys(buildingTemplates)) delete buildingTemplates[key];
-    for (const key of Object.keys(buildingGeometries)) delete buildingGeometries[key];
-    buildingModelsPromise = null;
-  }
-  if (buildingModelsPromise) return buildingModelsPromise;
-
-  buildingModelsPromise = (async () => {
-    const stlCache = new Map();
-    const objBaseCache = new Map();
-    for (const [kind, spec] of Object.entries(BUILDING_MODELS)) {
-      if (spec.type === "obj") {
-        const key = `${spec.obj}|${spec.mtl}`;
-        if (!objBaseCache.has(key)) {
-          objBaseCache.set(key, await loadObjRoot(spec.obj, spec.mtl));
-        }
-        const tpl = makeObjTemplate(objBaseCache.get(key), spec.target);
-        tpl.userData.buildingFitVersion = BUILDING_FIT_VERSION;
-        buildingTemplates[kind] = tpl;
-      } else {
-        const key = `${spec.url}|${spec.target}`;
-        if (!stlCache.has(key)) {
-          stlCache.set(key, prepareStlGeometry(spec.url, spec.target));
-        }
-        buildingGeometries[kind] = await stlCache.get(key);
-      }
-    }
-    buildingModelsReady = true;
-    return true;
-  })();
-
-  try {
-    return await buildingModelsPromise;
-  } catch (error) {
-    console.error(error);
-    buildingModelsPromise = null;
-    buildingModelsReady = false;
-    toast("Building models failed to load — using fallbacks");
-    return null;
-  }
+  buildingModelsReady = true;
+  return true;
 }
 
 async function loadTerrainTexture(mapSize, seed = 1) {
@@ -2841,14 +3162,13 @@ function scatterGroundDecor(scene, size) {
     flatShading: true,
   });
 
-  const tries = Math.min(420, Math.floor(size * 1.35));
+  const maxTrees = Math.min(70, Math.floor(size * 0.28));
+  const maxRocks = Math.min(40, Math.floor(size * 0.18));
+  const maxBushes = Math.min(50, Math.floor(size * 0.22));
+  const tries = Math.min(280, Math.floor(size * 0.9));
   let trees = 0;
   let rocks = 0;
   let bushes = 0;
-  const maxTrees = Math.min(160, Math.floor(size * 0.55));
-  const maxRocks = Math.min(90, Math.floor(size * 0.28));
-  const maxBushes = Math.min(120, Math.floor(size * 0.4));
-
   for (let i = 0; i < tries; i++) {
     const x = 5 + Math.random() * (size - 10);
     const z = 5 + Math.random() * (size - 10);
@@ -3062,11 +3382,7 @@ function clearGhost() {
   scene.remove(ghostMesh);
   ghostMesh.traverse((obj) => {
     if (!obj.isMesh) return;
-    // Shared STL geometries stay cached.
-    if (obj.geometry && !Object.values(buildingGeometries).includes(obj.geometry)) {
-      obj.geometry.dispose?.();
-    }
-    // Only dispose materials we created for ghost (not shared template mats).
+    obj.geometry?.dispose?.();
     if (ghostMesh.userData.disposeMaterials && obj.material) {
       if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose?.());
       else obj.material.dispose?.();
@@ -3118,17 +3434,8 @@ function ensureGhost(kind) {
 }
 
 function buildingRadius(kind) {
-  // Half-footprint from BUILDING_MODELS target (must match server building_radius).
-  const visual = {
-    hq: 2.15,
-    war_factory: 2.1,
-    barracks: 1.35,
-    power_plant: 1.7,
-    supply: 1.7,
-    turret: 0.55,
-    bunker: 0.34,
-    radar: 0.85,
-  }[kind] ?? 1.35;
+  // Half-footprint from BUILDING_VISUAL (must match server building_radius).
+  const visual = BUILDING_VISUAL[kind] ?? 1.35;
   return visual * 0.42;
 }
 
@@ -3836,6 +4143,9 @@ function unitDims(kind) {
   if (k.includes("mlrs")) {
     return { w: 0.2, h: 0.16, d: 0.32 };
   }
+  if (k.includes("abrams")) {
+    return { w: 0.21, h: 0.14, d: 0.33 };
+  }
   if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
     // Half prior tank size — closer to infantry / building proportions.
     return { w: 0.18, h: 0.12, d: 0.28 };
@@ -4164,15 +4474,17 @@ function createMortarMesh(teamColor) {
   return g;
 }
 
-function createTankMesh(teamColor) {
+function createTankMesh(teamColor, opts = {}) {
+  const heavy = !!opts.heavy;
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.tintParts = [];
-  g.userData.tankRigVersion = 5;
+  g.userData.tankRigVersion = 6;
+  g.userData.isAbrams = heavy;
 
-  const hull = 0x4a5538;
-  const hullDark = 0x353c2c;
-  const hullLight = 0x5a6648;
+  const hull = heavy ? 0x3f4634 : 0x4a5538;
+  const hullDark = heavy ? 0x2c3224 : 0x353c2c;
+  const hullLight = heavy ? 0x525a42 : 0x5a6648;
   const track = 0x1a1814;
   const rubber = 0x11100e;
   const metal = 0x2a2a26;
@@ -4381,14 +4693,20 @@ function createTankMesh(teamColor) {
   add(turret, new THREE.CylinderGeometry(0.006, 0.006, 0.09, 5), matStd(0x111110), 0.045, 0.2, 0.155, Math.PI / 2, 0, 0);
 
   g.add(turret);
-  g.userData.unitHeight = 0.16;
+  g.userData.unitHeight = heavy ? 0.19 : 0.16;
   g.userData.isTank = true;
-  g.userData.hullTurnRate = 1.05;
-  g.userData.turretTurnRate = 1.25;
+  g.userData.hullTurnRate = heavy ? 0.85 : 1.05;
+  g.userData.turretTurnRate = heavy ? 1.05 : 1.25;
   g.userData.barrelRecoil = 0;
   g.userData.tankRigVersion = 6;
-  // Half visual size vs prior rig (matches unitDims / server radius).
-  g.scale.setScalar(0.5);
+  // Half visual size vs prior rig; Abrams slightly larger silhouette.
+  g.scale.setScalar(heavy ? 0.59 : 0.5);
+  if (heavy) {
+    // Reactive armor bricks on the turret cheeks
+    add(turret, new THREE.BoxGeometry(0.06, 0.04, 0.1), matStd(0x5a5038, { metalness: 0.35 }), -0.12, 0.22, 0.02, 0, 0, 0, true);
+    add(turret, new THREE.BoxGeometry(0.06, 0.04, 0.1), matStd(0x5a5038, { metalness: 0.35 }), 0.12, 0.22, 0.02, 0, 0, 0, true);
+    tip.position.set(0, 0, 0.52);
+  }
   return g;
 }
 
@@ -4547,11 +4865,12 @@ function createMlrsMesh(teamColor) {
 function createUnitMesh(kind, teamColor) {
   const k = String(kind || "");
   if (k.includes("mlrs")) return createMlrsMesh(teamColor);
+  if (k.includes("abrams")) return createTankMesh(teamColor, { heavy: true });
   if (k.includes("tank")) return createTankMesh(teamColor);
-  if (k.includes("mortar")) return createMortarMesh(teamColor);
-  if (k.includes("missile")) return createMortarMesh(teamColor);
+  if (k.includes("mortar") || k.includes("missile")) return createMortarMesh(teamColor);
   return createRangerMesh(teamColor);
 }
+
 
 function tintUnitMesh(mesh, colors) {
   const parts = mesh.userData.tintParts;
@@ -4581,8 +4900,16 @@ function disposeMeshTree(mesh) {
 }
 
 function buildingHasProperModel(kind) {
-  if (kind === "turret" || kind === "bunker" || kind === "radar") return true;
-  return Boolean(templateForKind(kind) || geometryForKind(kind));
+  return (
+    kind === "turret" ||
+    kind === "bunker" ||
+    kind === "radar" ||
+    kind === "hq" ||
+    kind === "barracks" ||
+    kind === "power_plant" ||
+    kind === "supply" ||
+    kind === "war_factory"
+  );
 }
 
 function upsertMesh(entity) {
@@ -4591,7 +4918,7 @@ function upsertMesh(entity) {
   let mesh = state.meshes.get(entity.id);
   const colors = entityColors(entity);
 
-  // Replace temporary building boxes once real OBJ/STL templates are ready.
+  // Replace old OBJ/STL or outdated procedural buildings.
   if (mesh && entity.building && mesh.userData.isFallback && buildingHasProperModel(entity.kind)) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
@@ -4660,7 +4987,9 @@ function upsertMesh(entity) {
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
-          (mesh.userData.tankRigVersion || 0) < 6)) ||
+          (mesh.userData.tankRigVersion || 0) < 6 ||
+          (kind.includes("abrams") && !mesh.userData.isAbrams) ||
+          (!kind.includes("abrams") && mesh.userData.isAbrams))) ||
       (isMortar && !mesh.userData.isMortar) ||
       (!isTank &&
         !isMlrs &&
@@ -5098,6 +5427,16 @@ function updateInfantryDrive(mesh, dt) {
 
 function updateInfantryWalk(mesh, dt, now) {
   if (!mesh?.userData?.isInfantry) return;
+  // Far from camera: skip skeletal swing (big win with many soldiers).
+  if (camera) {
+    const dx = mesh.position.x - camera.position.x;
+    const dz = mesh.position.z - camera.position.z;
+    if (dx * dx + dz * dz > 55 * 55) {
+      mesh.userData.walkLodSkip = true;
+      return;
+    }
+  }
+  mesh.userData.walkLodSkip = false;
   let walk = mesh.userData.walk;
   if (!walk?.leftLeg || !walk?.rightLeg) {
     walk = {
@@ -5971,8 +6310,8 @@ function spawnPatriotImpact(at) {
   });
 }
 
-const TANK_WRECK_MS = 10_000;
-const BUILDING_WRECK_MS = 10_000;
+const TANK_WRECK_MS = 6_000;
+const BUILDING_WRECK_MS = 6_000;
 
 function clearDamageFire(mesh) {
   const fire = mesh?.userData?.damageFire;
@@ -6619,8 +6958,8 @@ $("#btn-create").addEventListener("click", () => {
   send({ t: "set_faction", faction: state.faction });
   send({
     t: "create_lobby",
-    max_players: Number($("#max-players").value) || 10,
-    map_size: Number($("#map-size").value) || 192,
+    max_players: Number($("#max-players").value) || 50,
+    map_size: Number($("#map-size").value) || 128,
     ffa: $("#ffa").checked,
   });
   toast("Starting match…");

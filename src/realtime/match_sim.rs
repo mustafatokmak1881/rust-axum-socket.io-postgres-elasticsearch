@@ -14,7 +14,19 @@ use super::protocol::{
 
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
-pub const MAX_PLAYERS: u8 = 10;
+pub const MAX_PLAYERS: u8 = 50;
+
+/// Soft population caps — keep lobbies tank-heavy and FPS-friendly.
+pub fn army_cap_for(unit: &str) -> usize {
+    match unit {
+        "ranger" => 10,
+        "mortar" => 3,
+        "tank" => 14,
+        "abrams_tank" => 8,
+        "mlrs" => 5,
+        _ => 12,
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PlayerState {
@@ -285,7 +297,7 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_supplies: 120,
             cost_fuel: 0,
             cost_munitions: 40,
-            train_ms: 3_500,
+            train_ms: 6_500,
             // A few connecting rifle rounds drop a soldier.
             hp: 280.0,
             damage: 85.0,
@@ -316,7 +328,7 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_supplies: 2_200,
             cost_fuel: 900,
             cost_munitions: 700,
-            train_ms: 48_000,
+            train_ms: 36_000,
             // MBT-class hull — benchmark armor.
             hp: 7_200.0,
             // APFSDS / HE: ~12 shells to kill peer armor (not 18+).
@@ -324,6 +336,21 @@ pub fn trainables() -> &'static [UnitDef] {
             speed: 0.58,
             range: 8.5,
             attack_ms: 4_800,
+        },
+        UnitDef {
+            // Missing niche: breakthrough / brawler MBT — trades speed for punch & plate.
+            unit: "abrams_tank",
+            name: "Abrams Assault Tank",
+            from_building: "war_factory",
+            cost_supplies: 3_200,
+            cost_fuel: 1_200,
+            cost_munitions: 1_100,
+            train_ms: 52_000,
+            hp: 11_500.0,
+            damage: 820.0,
+            speed: 0.46,
+            range: 9.2,
+            attack_ms: 5_400,
         },
         UnitDef {
             // M270 MLRS — soft-skin launcher, long-range rocket ripple (not a tank).
@@ -467,9 +494,18 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         }
     } else if armored && attacker_kind.contains("mortar") {
         (base * 0.22).max(55.0)
+    } else if armored && attacker_kind.contains("abrams") {
+        // DU / heavy APFSDS — designed to crack peer armor.
+        if soft_vehicle {
+            (base * 2.4).max(base)
+        } else {
+            (base * 1.28).max(base)
+        }
     } else if armored && attacker_kind.contains("tank") && soft_vehicle {
         // Tank gun vs soft launcher — catastrophic.
         (base * 2.1).max(base)
+    } else if target.building && attacker_kind.contains("abrams") {
+        (base * 1.15).max(base)
     } else if target.building && attacker_kind == "turret" {
         (base * 0.85).max(400.0)
     } else if target.building && attacker_kind.contains("mlrs") {
@@ -615,7 +651,8 @@ fn formation_slot(index: usize, count: usize, radius: f32) -> (f32, f32) {
     (ang.cos() * r, ang.sin() * r)
 }
 
-/// Dense opening-army pack — keeps the starting blob next to the HQ.
+/// Dense opening-army pack — kept for potential future spawn layouts.
+#[allow(dead_code)]
 fn tight_pack_slot(index: usize, radius: f32) -> (f32, f32) {
     if index == 0 {
         return (0.0, 0.0);
@@ -896,15 +933,15 @@ impl MatchSim {
             (sx / n, sy / n)
         };
 
-        // Was 12 tiles (~one base length). Triple so commanders start a real march apart.
-        const MIN_SEP: f32 = 36.0;
+        // Close enough that opening waves meet within ~1 min at infantry speed.
+        const MIN_SEP: f32 = 18.0;
         const GOLDEN: f32 = 2.399_963;
 
         for k in 0..160 {
             let r = if hq_positions.is_empty() {
                 0.0
             } else {
-                MIN_SEP + (k as f32).sqrt() * 10.5
+                MIN_SEP + (k as f32).sqrt() * 6.5
             };
             let angle = k as f32 * GOLDEN;
             let x = (bx + angle.cos() * r).clamp(4.0, map - 5.0);
@@ -976,35 +1013,26 @@ impl MatchSim {
         self.players.values().filter(|p| !p.is_bot()).count()
     }
 
-    /// Light opening squad — keeps entity count low for 10-commander matches.
+    /// Light opening force — one Crusader so 50-player lobbies stay tank-first.
     fn spawn_starting_force(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
-        let ranger = trainables()
+        let tank = trainables()
             .iter()
-            .find(|u| u.unit == "ranger")
-            .expect("ranger def");
+            .find(|u| u.unit == "tank")
+            .expect("tank def");
         let hq_r = building_radius("hq");
-        let r = unit_radius(ranger.unit);
+        let tr = unit_radius(tank.unit);
         let map = self.map_size as f32;
-        let pack_x = (hx + hq_r + r + 0.28).clamp(0.5, map - 0.5);
+        let pack_x = (hx + hq_r + tr + 0.35).clamp(0.5, map - 0.5);
         let pack_y = hy.clamp(0.5, map - 0.5);
-        const N: usize = 5;
-        for i in 0..N {
-            let (ox, oy) = tight_pack_slot(i, r);
-            let mut sx = (pack_x + ox).clamp(0.5, map - 0.5);
-            let mut sy = (pack_y + oy).clamp(0.5, map - 0.5);
-            if self.collides_at(Uuid::nil(), sx, sy, r, None, true)
-                || self.point_hits_solid(sx, sy, r, hx, hy, hq_r)
-            {
-                (sx, sy) = self.find_free_spawn_near(
-                    pack_x,
-                    pack_y,
-                    r,
-                    Uuid::nil(),
-                    Some((hx, hy, hq_r)),
-                );
-            }
-            self.insert_unit(user_id, team, ranger, sx, sy);
+        let mut sx = pack_x;
+        let mut sy = pack_y;
+        if self.collides_at(Uuid::nil(), sx, sy, tr, None, true)
+            || self.point_hits_solid(sx, sy, tr, hx, hy, hq_r)
+        {
+            (sx, sy) =
+                self.find_free_spawn_near(pack_x, pack_y, tr, Uuid::nil(), Some((hx, hy, hq_r)));
         }
+        self.insert_unit(user_id, team, tank, sx, sy);
     }
 
     fn point_hits_solid(&self, x: f32, y: f32, r: f32, sx: f32, sy: f32, sr: f32) -> bool {
@@ -1215,7 +1243,9 @@ impl MatchSim {
 
     /// First five minutes of the match: full map intel for every commander.
     pub fn global_vision_active(&self) -> bool {
-        self.created_at.elapsed() < Duration::from_secs(aoi::GLOBAL_VISION_SECS)
+        // DEV: keep the full map open. Re-enable FoW later via GLOBAL_VISION_SECS.
+        true
+        // self.created_at.elapsed() < Duration::from_secs(aoi::GLOBAL_VISION_SECS)
     }
 
     pub fn place_building(
@@ -1403,6 +1433,12 @@ impl MatchSim {
             return Err("Wrong building type");
         }
 
+        let cap = army_cap_for(def.unit);
+        let owned = self.count_unit_kind_with_queue(user_id, def.unit);
+        if owned >= cap {
+            return Err("Army cap reached");
+        }
+
         let player = self.players.get_mut(&user_id).unwrap();
         if player.resources.supplies < def.cost_supplies
             || player.resources.fuel < def.cost_fuel
@@ -1422,6 +1458,21 @@ impl MatchSim {
         });
         building.dirty = true;
         Ok(())
+    }
+
+    fn count_unit_kind_with_queue(&self, owner: Uuid, unit: &str) -> usize {
+        let living = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.unit && e.hp > 0.0 && e.kind == unit)
+            .count();
+        let queued = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.building && e.hp > 0.0)
+            .map(|e| e.train_queue.iter().filter(|j| j.unit == unit).count())
+            .sum::<usize>();
+        living + queued
     }
 
     pub fn move_units(&mut self, user_id: Uuid, ids: &[Uuid], x: f32, y: f32) {

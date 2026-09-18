@@ -7,8 +7,8 @@ use uuid::Uuid;
 use super::grid::MAX_ENTITY_RADIUS;
 use super::match_sim::{building_radius, MatchSim, MAX_PLAYERS};
 
-/// Fill a solo create toward a full 10-commander lobby (1 human + 9 bots).
-pub const OPENING_BOT_COUNT: usize = 9;
+/// Seed bots up toward a full lobby (human already seated when MatchSim::new runs).
+pub const OPENING_BOT_TARGET: usize = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotStyle {
@@ -43,7 +43,7 @@ struct BotProfile {
     style: BotStyle,
 }
 
-const PROFILES: [BotProfile; OPENING_BOT_COUNT] = [
+const PROFILES: [BotProfile; 9] = [
     BotProfile {
         name: "Reeves",
         country: "USA",
@@ -191,31 +191,51 @@ impl BotStyle {
 
     fn ranger_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 70,
-            BotStyle::Aggressive => 68,
-            BotStyle::Balanced => 60,
-            BotStyle::Defensive => 48,
-            BotStyle::Counter => 58,
+            BotStyle::Reckless => 10,
+            BotStyle::Aggressive => 8,
+            BotStyle::Balanced => 8,
+            BotStyle::Defensive => 10,
+            BotStyle::Counter => 8,
         }
     }
 
     fn mortar_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 4,
-            BotStyle::Aggressive => 6,
-            BotStyle::Balanced => 8,
-            BotStyle::Defensive => 12,
-            BotStyle::Counter => 8,
+            BotStyle::Reckless => 2,
+            BotStyle::Aggressive => 2,
+            BotStyle::Balanced => 3,
+            BotStyle::Defensive => 3,
+            BotStyle::Counter => 2,
         }
     }
 
     fn tank_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 5,
-            BotStyle::Aggressive => 6,
+            BotStyle::Reckless => 16,
+            BotStyle::Aggressive => 14,
+            BotStyle::Balanced => 14,
+            BotStyle::Defensive => 12,
+            BotStyle::Counter => 14,
+        }
+    }
+
+    fn abrams_cap(self) -> usize {
+        match self {
+            BotStyle::Reckless => 8,
+            BotStyle::Aggressive => 8,
+            BotStyle::Balanced => 6,
+            BotStyle::Defensive => 5,
+            BotStyle::Counter => 7,
+        }
+    }
+
+    fn mlrs_cap(self) -> usize {
+        match self {
+            BotStyle::Reckless => 4,
+            BotStyle::Aggressive => 5,
             BotStyle::Balanced => 5,
             BotStyle::Defensive => 3,
-            BotStyle::Counter => 5,
+            BotStyle::Counter => 4,
         }
     }
 
@@ -262,18 +282,22 @@ impl BotStyle {
 }
 
 pub fn seed_opening_bots(sim: &mut MatchSim) {
-    for profile in &PROFILES {
-        if sim.players.len() >= MAX_PLAYERS as usize {
-            break;
-        }
+    let target = OPENING_BOT_TARGET.min(MAX_PLAYERS as usize);
+    let mut n = 0usize;
+    while sim.players.len() < target {
+        let profile = &PROFILES[n % PROFILES.len()];
+        let batch = n / PROFILES.len();
         let id = Uuid::new_v4();
-        // FFA: unique team per bot. Allied: placeholder — MatchSim rebalances after seed.
         let team = if sim.ffa {
             80 + sim.players.values().filter(|p| p.is_bot()).count() as u8
         } else {
             0
         };
-        let name = format!("{} · {}", profile.name, profile.country);
+        let name = if batch == 0 {
+            format!("{} · {}", profile.name, profile.country)
+        } else {
+            format!("{} {} · {}", profile.name, batch + 1, profile.country)
+        };
         sim.spawn_commander(
             id,
             name,
@@ -290,6 +314,10 @@ pub fn seed_opening_bots(sim: &mut MatchSim) {
                 rebuild_hold: HashMap::new(),
             }),
         );
+        n += 1;
+        if n > 200 {
+            break;
+        }
     }
 }
 
@@ -524,6 +552,13 @@ fn command_squad(
         if let Some(en) = strongest_cluster(&front) {
             (en.x, en.y, 3.6)
         } else {
+            // Still no contact — lock onto the enemy HQ and march/fight it.
+            if let Some(hq_id) = hq_id_of(sim, w.owner) {
+                for u in squad {
+                    order_attack(sim, bot_id, u, hq_id);
+                }
+                return;
+            }
             (w.x, w.y, 4.4)
         }
     } else {
@@ -706,7 +741,15 @@ fn command_home(
         return false;
     }
     let (tx, ty) = war.map(|w| (w.x, w.y)).unwrap_or((face.0, face.1));
-    // Aim at the enemy HQ itself — previous standoff left infantry parked near home.
+    // Prefer a hard attack order on the enemy HQ so units chase and shoot it.
+    if let Some(w) = war {
+        if let Some(hq_id) = hq_id_of(sim, w.owner) {
+            for u in &commit {
+                order_attack(sim, bot_id, u, hq_id);
+            }
+            return true;
+        }
+    }
     let (ax, ay) = approach_point(hx, hy, tx, ty, 2.0, flank_sign(bot_id, style));
     assign_combined_arms(sim, bot_id, &commit, ax, ay, None);
     true
@@ -983,6 +1026,16 @@ fn own_hq(sim: &MatchSim, owner: Uuid) -> Option<(Uuid, f32, f32, f32, f32)> {
     })
 }
 
+fn hq_id_of(sim: &MatchSim, owner: Uuid) -> Option<Uuid> {
+    sim.entities.values().find_map(|e| {
+        if e.owner == owner && e.kind == "hq" && e.hp > 0.0 {
+            Some(e.id)
+        } else {
+            None
+        }
+    })
+}
+
 fn pick_war_target(
     sim: &MatchSim,
     team: u8,
@@ -1160,29 +1213,27 @@ fn expand_base(
     let army = count_units(sim, bot_id, |_| true);
     let need = if threatened {
         // Fight first. Only replace a missing production building in the rear.
-        if barracks == 0 && army < 8 && !held("barracks") {
+        if factory == 0 && !held("war_factory") {
+            Some(("war_factory", 3.8))
+        } else if barracks == 0 && army < 6 && !held("barracks") {
             Some(("barracks", 3.4))
         } else if plants == 0 && !held("power_plant") {
             Some(("power_plant", 3.2))
         } else {
             None
         }
-    } else if barracks == 0 && !held("barracks") {
-        Some(("barracks", 3.2))
     } else if plants == 0 && !held("power_plant") {
         Some(("power_plant", 2.8))
+    } else if factory == 0 && !held("war_factory") {
+        Some(("war_factory", 3.6))
+    } else if barracks == 0 && !held("barracks") {
+        Some(("barracks", 3.2))
     } else if supply == 0 && !held("supply") {
         Some(("supply", 3.4))
-    } else if factory == 0 && !held("war_factory") {
-        Some(("war_factory", 3.8))
+    } else if factory < 2 && now > 180 && !held("war_factory") {
+        Some(("war_factory", 4.2))
     } else if plants < 2 && now > 220 && !held("power_plant") {
         Some(("power_plant", 4.2))
-    } else if barracks < 2
-        && matches!(style, BotStyle::Reckless | BotStyle::Aggressive)
-        && now > 160
-        && !held("barracks")
-    {
-        Some(("barracks", 4.0))
     } else if radars < style.radars() && now > 280 && !held("radar") {
         Some(("radar", 5.5))
     } else if bunkers < style.bunkers() && !held("bunker") {
@@ -1271,7 +1322,9 @@ fn try_place_away(
 fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: bool) {
     let rangers = count_units(sim, bot_id, |k| k == "ranger");
     let mortars = count_units(sim, bot_id, |k| k.contains("mortar"));
-    let tanks = count_units(sim, bot_id, |k| k.contains("tank") || k.contains("mlrs"));
+    let crusaders = count_units(sim, bot_id, |k| k == "tank");
+    let abrams = count_units(sim, bot_id, |k| k.contains("abrams"));
+    let mlrs = count_units(sim, bot_id, |k| k.contains("mlrs"));
 
     let barracks: Vec<Uuid> = sim
         .entities
@@ -1298,19 +1351,30 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
         .map(|e| e.id)
         .collect();
 
-    // Combined arms: AT and tanks before another ranger blob.
+    // Armor first — Abrams breakthrough, Crusader mass, then MLRS.
     for id in factories {
-        if tanks < style.tank_cap() {
-            let _ = sim.train_unit(bot_id, id, if tanks % 3 == 1 { "mlrs" } else { "tank" });
+        if abrams < style.abrams_cap() && (threatened || crusaders >= 2 || abrams + 1 <= crusaders) {
+            if sim.train_unit(bot_id, id, "abrams_tank").is_ok() {
+                continue;
+            }
+        }
+        if crusaders < style.tank_cap() {
+            if sim.train_unit(bot_id, id, "tank").is_ok() {
+                continue;
+            }
+        }
+        if mlrs < style.mlrs_cap() && (crusaders + abrams) >= 3 {
+            let _ = sim.train_unit(bot_id, id, "mlrs");
         }
     }
     for id in barracks {
         let want_mortar = mortars < style.mortar_cap()
-            && (threatened || tanks > 0 || mortars + 1 <= (rangers / 6).max(1));
+            && (threatened || (crusaders + abrams) > 0 || mortars < 1);
         if want_mortar && sim.train_unit(bot_id, id, "mortar").is_ok() {
             continue;
         }
-        if rangers < style.ranger_cap() {
+        // Only top up a thin scout screen — never mass infantry.
+        if rangers < style.ranger_cap() && (crusaders + abrams) >= rangers {
             let _ = sim.train_unit(bot_id, id, "ranger");
         }
     }

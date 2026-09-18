@@ -13,6 +13,8 @@ pub const VISION_UNIT: f32 = 11.0;
 pub const VISION_RADAR: f32 = 38.0;
 
 /// Opening window where every commander sees the whole map.
+/// Currently unused while DEV keeps global vision always on (`global_vision_active`).
+#[allow(dead_code)]
 pub const GLOBAL_VISION_SECS: u64 = 5 * 60;
 
 pub fn entity_provides_vision(entity: &Entity) -> bool {
