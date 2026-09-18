@@ -468,7 +468,9 @@ function renderBuildList(items) {
       (item, index) => `
       <button type="button" class="build-item" data-kind="${escapeHtml(item.kind)}" data-hotkey="${index + 1}">
         <strong><span class="hotkey">${index + 1}</span> ${escapeHtml(item.name)}</strong>
-        <small>${item.cost_supplies}/${item.cost_fuel}/${item.cost_munitions} · ${Math.round(item.build_ms / 1000)}s</small>
+        <small>${item.cost_gold ?? 0}g · ${Math.round(item.build_ms / 1000)}s${
+          item.power ? ` · ${item.power > 0 ? "+" : ""}${item.power}pwr` : ""
+        }</small>
       </button>`,
     )
     .join("");
@@ -511,7 +513,7 @@ function refreshTrainablePanel() {
             (item) => `
       <button type="button" class="unit-item" data-unit="${escapeHtml(item.unit)}" data-from="${escapeHtml(item.from_building)}">
         <strong>${escapeHtml(item.name)}</strong>
-        <small>${item.cost_supplies}s/${item.cost_fuel}f/${item.cost_munitions || 0}m · ${Math.round((item.train_ms || 0) / 1000)}s</small>
+        <small>${item.cost_gold ?? 0}g · ${Math.round((item.train_ms || 0) / 1000)}s</small>
       </button>`,
           )
           .join("")
