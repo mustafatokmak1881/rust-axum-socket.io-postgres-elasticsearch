@@ -393,10 +393,10 @@ fn think(sim: &mut MatchSim, bot_id: Uuid) {
         command_squad(sim, bot_id, team, style, hx, hy, &squad, war.as_ref());
     }
 
-    // 3) Home: rally new troops; only commit a formed squad, never a lone barracks spawn.
+    // 3) Home: rally idle troops; commit a wave without recalling outbound marchers.
     let strategic = sim.tick.saturating_sub(last_move) >= style.react_ticks();
     if strategic {
-        command_home(
+        let pushed = command_home(
             sim,
             bot_id,
             team,
@@ -411,13 +411,16 @@ fn think(sim: &mut MatchSim, bot_id: Uuid) {
         if let Some(player) = sim.players.get_mut(&bot_id) {
             if let Some(mind) = player.bot.as_mut() {
                 mind.last_move = sim.tick;
-                if sim.tick >= next_wave {
+                if pushed {
                     mind.next_wave = sim.tick + style.rest_ticks();
+                } else if sim.tick >= next_wave {
+                    // Retry soon if the squad wasn't formed yet.
+                    mind.next_wave = sim.tick + 20;
                 }
             }
         }
     } else if threatened || !home_fight.is_empty() {
-        command_home(
+        let _ = command_home(
             sim,
             bot_id,
             team,
@@ -600,9 +603,9 @@ fn command_home(
     threatened: bool,
     ready_wave: bool,
     war: Option<&HqMark>,
-) {
+) -> bool {
     if home.is_empty() {
-        return;
+        return false;
     }
     let face = war
         .as_ref()
@@ -614,53 +617,79 @@ fn command_home(
     let rally_x = hx + dx / len * 4.1;
     let rally_y = hy + dy / len * 4.1;
 
+    // Already ordered out on a push — never yank them back to the rally.
+    let idle: Vec<&OwnedUnit> = home
+        .iter()
+        .filter(|u| {
+            if u.target.is_some() {
+                return false;
+            }
+            if let Some((mx, my)) = u.dest {
+                // Destination well away from HQ = outbound march.
+                if dist2(mx, my, hx, hy) > 12.0 * 12.0 {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
     if threatened {
-        let intercept: Vec<Uuid> = home.iter().map(|u| u.id).collect();
-        let n_guard = ((home.len() as f32) * (1.0 - style.assault_ratio(true, true))).round() as usize;
-        let n_guard = n_guard.clamp(1, home.len().saturating_sub(1).max(1));
+        let intercept: Vec<Uuid> = idle.iter().map(|u| u.id).collect();
+        if intercept.is_empty() {
+            return false;
+        }
+        let n_guard =
+            ((intercept.len() as f32) * (1.0 - style.assault_ratio(true, true))).round() as usize;
+        let n_guard = n_guard.clamp(1, intercept.len().saturating_sub(1).max(1));
         let (guard, sorties) = intercept.split_at(n_guard.min(intercept.len()));
         hold_facing(sim, bot_id, hx, hy, face.0, face.1, guard);
         if !sorties.is_empty() {
             let (ax, ay) = approach_point(hx, hy, face.0, face.1, 2.6, 0.0);
             for id in sorties {
-                if let Some(u) = home.iter().find(|u| u.id == *id) {
+                if let Some(u) = idle.iter().find(|u| u.id == *id) {
                     order_move(sim, bot_id, u, ax, ay, 2.0);
                 }
             }
         }
-        return;
-    }
-
-    // Park fresh spawns at the rally — do not yeet a single ranger across the map.
-    for u in home {
-        if dist2(u.x, u.y, rally_x, rally_y) > 2.4 * 2.4 {
-            order_move(sim, bot_id, u, rally_x, rally_y, 1.4);
-        }
+        return false;
     }
 
     if !ready_wave {
-        return;
+        // Only park idle fresh troops — do not cancel an outbound march.
+        for u in &idle {
+            if dist2(u.x, u.y, rally_x, rally_y) > 2.4 * 2.4 {
+                order_move(sim, bot_id, u, rally_x, rally_y, 1.4);
+            }
+        }
+        return false;
     }
-    let ready: Vec<&OwnedUnit> = home
+
+    // Wave: take everyone idle at home (rally proximity is soft — small armies must leave).
+    let ready: Vec<&OwnedUnit> = idle
         .iter()
-        .filter(|u| dist2(u.x, u.y, rally_x, rally_y) <= 3.2 * 3.2)
+        .copied()
+        .filter(|u| {
+            dist2(u.x, u.y, rally_x, rally_y) <= 5.5 * 5.5
+                || dist2(u.x, u.y, hx, hy) <= 7.0 * 7.0
+        })
         .collect();
     let power: f32 = ready.iter().map(|u| unit_power(u)).sum();
     let tanks = ready.iter().filter(|u| u.tank).count();
     let inf = ready.iter().filter(|u| !u.tank).count();
     let min_n = style.min_push_squad();
-    // Small opening armies must still march — don't wait for a full combined-arms blob.
     let formed = ready.len() >= min_n
-        && (power >= style.min_push_power()
-            || tanks >= 1
-            || inf >= min_n);
+        && (power >= style.min_push_power() || tanks >= 1 || inf >= min_n);
     if !formed {
-        return;
+        for u in &idle {
+            if dist2(u.x, u.y, rally_x, rally_y) > 2.4 * 2.4 {
+                order_move(sim, bot_id, u, rally_x, rally_y, 1.4);
+            }
+        }
+        return false;
     }
 
-    // Commit one squad; leave a thin garrison when possible.
-    let keep = ((ready.len() as f32) * (1.0 - style.assault_ratio(false, false)))
-        .round() as usize;
+    let keep = ((ready.len() as f32) * (1.0 - style.assault_ratio(false, false))).round() as usize;
     let keep = keep.min(ready.len().saturating_sub(2));
     let mut ranked = ready;
     ranked.sort_by(|a, b| {
@@ -674,11 +703,13 @@ fn command_home(
         .map(|u| (*u).clone())
         .collect();
     if commit.is_empty() {
-        return;
+        return false;
     }
     let (tx, ty) = war.map(|w| (w.x, w.y)).unwrap_or((face.0, face.1));
-    let (ax, ay) = approach_point(hx, hy, tx, ty, 4.0, flank_sign(bot_id, style));
+    // Aim at the enemy HQ itself — previous standoff left infantry parked near home.
+    let (ax, ay) = approach_point(hx, hy, tx, ty, 2.0, flank_sign(bot_id, style));
     assign_combined_arms(sim, bot_id, &commit, ax, ay, None);
+    true
 }
 
 fn role_push(u: &OwnedUnit) -> f32 {
