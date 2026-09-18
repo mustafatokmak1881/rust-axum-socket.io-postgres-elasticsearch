@@ -265,9 +265,9 @@ function renderScoreboard() {
       const status = r.alive
         ? `<span class="status on">ACTIVE</span>`
         : `<span class="status off">DEAD</span>`;
-      const hqX = r.hq_x != null ? Number(r.hq_x) : "";
-      const hqY = r.hq_y != null ? Number(r.hq_y) : "";
-      return `<tr class="${cls}" data-owner="${escapeHtml(r.id || "")}" data-hq-x="${hqX}" data-hq-y="${hqY}" title="Command Center'a git">
+      const hqX = r.hq_x != null && Number.isFinite(Number(r.hq_x)) ? Number(r.hq_x) : "";
+      const hqY = r.hq_y != null && Number.isFinite(Number(r.hq_y)) ? Number(r.hq_y) : "";
+      return `<tr class="${cls}" data-owner="${escapeHtml(String(r.id || ""))}" data-hq-x="${hqX}" data-hq-y="${hqY}" title="Command Center'a git">
         <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
         <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag} · ${teamLabel}</small></div></td>
         <td>${status}</td>
@@ -283,12 +283,21 @@ function renderScoreboard() {
 
 function centerCameraOnOwner(ownerId, hqX, hqY) {
   if (!controls || !camera || !state.match) return;
-  let x = Number(hqX);
-  let y = Number(hqY);
+  const owner = String(ownerId || "");
+  let x = hqX === "" || hqX == null ? NaN : Number(hqX);
+  let y = hqY === "" || hqY == null ? NaN : Number(hqY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    // Prefer live scoreboard coords (works even when HQ is outside AOI).
+    const row = (state.scoreboard || []).find((r) => String(r.id) === owner);
+    if (row && row.hq_x != null && row.hq_y != null) {
+      x = Number(row.hq_x);
+      y = Number(row.hq_y);
+    }
+  }
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     let hq = null;
     for (const entity of state.entities.values()) {
-      if (entity.owner === ownerId && entity.kind === "hq") {
+      if (String(entity.owner) === owner && entity.kind === "hq" && (entity.hp ?? 1) > 0) {
         hq = entity;
         break;
       }
@@ -301,7 +310,7 @@ function centerCameraOnOwner(ownerId, hqX, hqY) {
     y = hq.y;
   }
   panCameraTo(x, y);
-  const row = (state.scoreboard || []).find((r) => r.id === ownerId);
+  const row = (state.scoreboard || []).find((r) => String(r.id) === owner);
   const label = row
     ? `${String(row.faction || "").toUpperCase()} · ${row.name || "HQ"}`
     : "Command Center";
@@ -8957,8 +8966,35 @@ $("#scoreboard-body")?.addEventListener("pointerdown", (event) => {
   event.stopPropagation();
   const owner = row.dataset.owner;
   if (!owner) return;
-  centerCameraOnOwner(owner, row.dataset.hqX, row.dataset.hqY);
+  const hx = row.getAttribute("data-hq-x");
+  const hy = row.getAttribute("data-hq-y");
+  centerCameraOnOwner(
+    owner,
+    hx === null || hx === "" ? null : hx,
+    hy === null || hy === "" ? null : hy,
+  );
 });
+
+// Capture clicks even if a child remounts mid-frame; keep Tab held usable.
+$("#scoreboard")?.addEventListener(
+  "click",
+  (event) => {
+    const row = event.target.closest?.("tr[data-owner]");
+    if (!row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const owner = row.dataset.owner;
+    if (!owner) return;
+    const hx = row.getAttribute("data-hq-x");
+    const hy = row.getAttribute("data-hq-y");
+    centerCameraOnOwner(
+      owner,
+      hx === null || hx === "" ? null : hx,
+      hy === null || hy === "" ? null : hy,
+    );
+  },
+  true,
+);
 
 $("#store-items").addEventListener("click", async (event) => {
   const btn = event.target.closest("[data-item]");

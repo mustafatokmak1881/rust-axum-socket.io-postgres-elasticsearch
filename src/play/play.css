@@ -443,6 +443,7 @@ input, select {
   background: linear-gradient(180deg, #121a10f5, #0a0e08f2);
   border: 1px solid #6a8a3a;
   box-shadow: 0 12px 40px #000a;
+  /* Overlay is non-blocking except the scroll/table hit targets below. */
   pointer-events: none;
 }
 
@@ -454,6 +455,7 @@ input, select {
   justify-content: space-between;
   padding: 12px 18px 8px;
   border-bottom: 1px solid #3a4a28;
+  pointer-events: none;
 }
 
 .scoreboard h2 {
@@ -475,12 +477,14 @@ input, select {
   overflow: auto;
   flex: 1;
   padding: 0 8px 12px;
+  pointer-events: auto;
 }
 
 .scoreboard table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  pointer-events: auto;
 }
 
 .scoreboard th {
