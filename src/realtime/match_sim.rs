@@ -296,6 +296,14 @@ fn is_air_kind(kind: &str) -> bool {
 }
 
 #[inline]
+fn is_air_bomb_kind(kind: &str) -> bool {
+    kind.contains("raptor")
+        || kind.contains("mig")
+        || kind.contains("comanche")
+        || kind.contains("helix")
+}
+
+#[inline]
 fn is_soft_unit(kind: &str) -> bool {
     !is_vehicle_kind(kind)
 }
@@ -1670,6 +1678,95 @@ impl MatchSim {
         })
     }
 
+    /// After HQ loss (or gain), snap queues/construction back under the new x+x/2 caps.
+    fn enforce_budgets_for(&mut self, owner: Uuid) {
+        self.trim_train_queues_to_budget(owner);
+        self.trim_buildings_to_budget(owner);
+    }
+
+    fn trim_train_queues_to_budget(&mut self, owner: Uuid) {
+        let budget = self.unit_budget_for(owner);
+        let living = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.unit && e.hp > 0.0)
+            .count();
+        let mut room = budget.saturating_sub(living);
+
+        let mut building_ids: Vec<Uuid> = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.building && e.hp > 0.0 && !e.train_queue.is_empty())
+            .map(|e| e.id)
+            .collect();
+        // Drop newest queued jobs first (back of each queue, later buildings last).
+        building_ids.sort_by_key(|id| *id);
+
+        let mut refund_gold = 0i32;
+        for id in building_ids.iter().rev() {
+            let Some(building) = self.entities.get_mut(id) else {
+                continue;
+            };
+            while building.train_queue.len() > room {
+                if let Some(job) = building.train_queue.pop_back() {
+                    if let Some(def) = trainables().iter().find(|u| u.unit == job.unit) {
+                        refund_gold = refund_gold.saturating_add(def.cost_gold);
+                    }
+                    building.dirty = true;
+                } else {
+                    break;
+                }
+            }
+            room = room.saturating_sub(building.train_queue.len());
+        }
+
+        if refund_gold > 0 {
+            if let Some(player) = self.players.get_mut(&owner) {
+                player.resources.gold = player.resources.gold.saturating_add(refund_gold);
+            }
+        }
+    }
+
+    fn trim_buildings_to_budget(&mut self, owner: Uuid) {
+        let budget = self.building_budget_for(owner);
+        let mut count = self.count_buildings_for(owner);
+        if count <= budget {
+            return;
+        }
+
+        // Cancel unfinished builds first, then oldest finished non-HQ if still over.
+        let mut constructing: Vec<Uuid> = self
+            .entities
+            .values()
+            .filter(|e| {
+                e.owner == owner
+                    && e.building
+                    && e.hp > 0.0
+                    && e.kind != "hq"
+                    && e.build_remaining_ms > 0
+            })
+            .map(|e| e.id)
+            .collect();
+        constructing.sort_by_key(|id| *id);
+        for id in constructing.into_iter().rev() {
+            if count <= budget {
+                break;
+            }
+            if let Some(e) = self.take_entity(id) {
+                self.refund_building_economy(&e);
+                // Partial gold refund for cancelled construction.
+                if let Some(def) = buildables().iter().find(|b| b.kind == e.kind) {
+                    if let Some(player) = self.players.get_mut(&owner) {
+                        player.resources.gold =
+                            player.resources.gold.saturating_add(def.cost_gold / 2);
+                    }
+                }
+                self.removed.push(id);
+                count -= 1;
+            }
+        }
+    }
+
     pub fn move_units(&mut self, user_id: Uuid, ids: &[Uuid], x: f32, y: f32) {
         let map = self.map_size as f32;
         let tx = x.clamp(0.5, map - 0.5);
@@ -1882,7 +1979,22 @@ impl MatchSim {
                     entity.dirty = true;
                     if job.remaining_ms == 0 {
                         let unit_kind = entity.train_queue.pop_front().unwrap().unit;
-                        if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
+                        let owner = entity.owner;
+                        let living = self
+                            .entities
+                            .values()
+                            .filter(|e| e.owner == owner && e.unit && e.hp > 0.0)
+                            .count();
+                        let budget = self.unit_budget_for(owner);
+                        if living >= budget {
+                            // HQ loss shrank the cap mid-train — refund, don't spawn.
+                            if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
+                                if let Some(player) = self.players.get_mut(&owner) {
+                                    player.resources.gold =
+                                        player.resources.gold.saturating_add(def.cost_gold);
+                                }
+                            }
+                        } else if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
                             let uid = Uuid::new_v4();
                             let (sx, sy) = if is_air_kind(def.unit) {
                                 self.find_air_spawn_near(
@@ -2400,6 +2512,8 @@ impl MatchSim {
                         });
                         if hit && kind.contains("mlrs") {
                             self.apply_mlrs_blast(team, attacker_owner, fx, fy, ix, iy, tid);
+                        } else if hit && is_air_bomb_kind(&kind) {
+                            self.apply_air_bomb_blast(team, attacker_owner, fx, fy, ix, iy, tid);
                         } else if hit && kind.contains("tank") && !kind.contains("mg") {
                             self.apply_shell_blast(team, attacker_owner, fx, fy, tx, ty, tid);
                         } else if hit && kind.contains("mortar") {
@@ -2523,6 +2637,9 @@ impl MatchSim {
             player.colonies = remaining_hq.saturating_sub(1) as u32;
         }
 
+        // Cap shrinks with lost HQs — drop queued trains / builds that no longer fit.
+        self.enforce_budgets_for(former);
+
         if let Some(conqueror) = self.resolve_conqueror(&hq) {
             self.grant_colony_hq(conqueror, hx, hy);
         }
@@ -2630,6 +2747,76 @@ impl MatchSim {
             player.resources.power = player.resources.power.saturating_add(40);
         }
         self.reveal_vision_for(owner);
+    }
+
+    /// Air strike splash — jets drop bombs, attack helos fire rockets.
+    fn apply_air_bomb_blast(
+        &mut self,
+        team: u8,
+        attacker: Uuid,
+        from_x: f32,
+        from_y: f32,
+        x: f32,
+        y: f32,
+        primary: Uuid,
+    ) {
+        const RADIUS: f32 = 1.55;
+        let mut victims: Vec<(Uuid, f32, bool)> = Vec::new();
+        self.grid.for_each_nearby(x, y, RADIUS + MAX_ENTITY_RADIUS, |id| {
+            let Some(e) = self.entities.get(&id) else {
+                return false;
+            };
+            if e.hp <= 0.0 || !(e.unit || e.building) {
+                return false;
+            }
+            if e.team == team && e.id != primary {
+                return false;
+            }
+            let dx = e.x - x;
+            let dy = e.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > RADIUS {
+                return false;
+            }
+            victims.push((e.id, dist, e.unit && is_soft_unit(&e.kind)));
+            false
+        });
+
+        let inx = x - from_x;
+        let iny = y - from_y;
+        let in_len = (inx * inx + iny * iny).sqrt().max(0.001);
+        let iux = inx / in_len;
+        let iuy = iny / in_len;
+
+        for (id, dist, is_infantry) in victims {
+            if id == primary {
+                continue;
+            }
+            let Some(victim) = self.entities.get(&id) else {
+                continue;
+            };
+            if !is_infantry && self.blast_blocked(primary, x, y, iux, iuy, victim) {
+                continue;
+            }
+            let falloff = 1.0 - (dist / RADIUS).clamp(0.0, 1.0);
+            let dmg = if victim.building {
+                95.0 + 140.0 * falloff
+            } else if is_infantry {
+                55.0 + 90.0 * falloff
+            } else if is_air_kind(&victim.kind) {
+                35.0 * falloff
+            } else {
+                70.0 + 110.0 * falloff
+            };
+            if let Some(v) = self.entities.get_mut(&id) {
+                v.hp -= dmg;
+                v.last_hit_by = Some(attacker);
+                v.dirty = true;
+                if v.unit && is_soft_unit(&v.kind) {
+                    v.prone_until_tick = v.prone_until_tick.max(self.tick + 36);
+                }
+            }
+        }
     }
 
     /// Mortar bomb splash — smaller than tank HE, lethal to nearby infantry.
@@ -4319,6 +4506,8 @@ impl MatchSim {
                 || entity.kind.contains("mlrs")
                 || entity.kind == "turret"
                 || entity.kind == "bunker"
+                || entity.kind == "firebase"
+                || entity.kind == "gatling_cannon"
             {
                 entity.target
             } else {
@@ -4328,6 +4517,8 @@ impl MatchSim {
                 || entity.kind.contains("mlrs")
                 || entity.kind == "turret"
                 || entity.kind == "bunker"
+                || entity.kind == "firebase"
+                || entity.kind == "gatling_cannon"
             {
                 Some(entity.aim_yaw)
             } else {

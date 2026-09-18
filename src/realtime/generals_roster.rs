@@ -421,7 +421,9 @@ pub fn trainables() -> &'static [UnitDef] {
             range: 8.5,
             attack_ms: 9_200,
         },
-        // ——— USA air (ground-sim for now; client flies them) ———
+        // ——— USA air ———
+        // Speeds scaled vs Crusader tank 0.58 ≈ 50 km/h cross-country:
+        // jet ~950 km/h (~19×), attack heli ~270 (~5.4×), transport ~240 (~4.8×).
         UnitDef {
             unit: "raptor",
             name: "Raptor",
@@ -430,10 +432,10 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_gold: 2_500,
             train_ms: 20_000,
             hp: 1_600.0,
-            damage: 380.0,
-            speed: 1.15,
-            range: 10.0,
-            attack_ms: 2_200,
+            damage: 420.0,
+            speed: 11.0,
+            range: 9.0,
+            attack_ms: 3_800,
         },
         UnitDef {
             unit: "comanche",
@@ -443,10 +445,10 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_gold: 2_700,
             train_ms: 22_000,
             hp: 1_400.0,
-            damage: 320.0,
-            speed: 0.95,
+            damage: 280.0,
+            speed: 3.15,
             range: 7.5,
-            attack_ms: 900,
+            attack_ms: 1_100,
         },
         UnitDef {
             unit: "chinook",
@@ -457,7 +459,7 @@ pub fn trainables() -> &'static [UnitDef] {
             train_ms: 18_000,
             hp: 2_000.0,
             damage: 40.0,
-            speed: 0.70,
+            speed: 2.8,
             range: 3.0,
             attack_ms: 2_000,
         },
@@ -614,10 +616,10 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_gold: 2_200,
             train_ms: 18_000,
             hp: 1_400.0,
-            damage: 400.0,
-            speed: 1.20,
-            range: 9.5,
-            attack_ms: 2_400,
+            damage: 440.0,
+            speed: 11.6,
+            range: 8.5,
+            attack_ms: 3_600,
         },
         UnitDef {
             unit: "helix",
@@ -627,10 +629,10 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_gold: 2_350,
             train_ms: 22_000,
             hp: 2_200.0,
-            damage: 280.0,
-            speed: 0.75,
+            damage: 260.0,
+            speed: 2.9,
             range: 7.0,
-            attack_ms: 1_100,
+            attack_ms: 1_200,
         },
         // ——— GLA infantry ———
         UnitDef {

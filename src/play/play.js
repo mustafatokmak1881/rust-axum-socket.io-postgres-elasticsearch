@@ -2222,7 +2222,8 @@ function createBuildingMesh(kind, fallbackMat) {
     m.scale.setScalar(0.55);
     return m;
   }
-  if (kind === "radar" || kind === "firebase") return createRadarStationMesh(fallbackMat);
+  if (kind === "radar") return createRadarStationMesh(fallbackMat);
+  if (kind === "firebase") return createFirebaseMesh(fallbackMat);
   if (kind === "hq") return createCommandCenterMesh(fallbackMat);
   if (
     kind === "strategy_center" ||
@@ -2886,6 +2887,231 @@ function createRadarStationMesh(fallbackMat) {
     metalness: 0.3,
     roughness: 0.4,
     cast: false,
+  });
+
+  return root;
+}
+
+/** USA Fire Base — howitzer pit + sandbags (not a radar dish). */
+function createFirebaseMesh(fallbackMat) {
+  const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
+  const olive = 0x4a5538;
+  const oliveDark = 0x343c2c;
+  const oliveLight = 0x5a6648;
+  const concrete = 0x5a5848;
+  const concreteDark = 0x3e3c34;
+  const metal = 0x2a2c28;
+  const metalBright = 0x4a4e48;
+  const barrel = 0x3a3e38;
+  const sand = 0x7a7058;
+  const sandDark = 0x5a5240;
+  const crate = 0x5a4830;
+
+  const root = new THREE.Group();
+  root.userData.building = true;
+  root.userData.isFirebase = true;
+  root.userData.isBunker = true; // reuse aim/slew path
+  root.userData.firebaseRigVersion = 1;
+  root.userData.modelKind = "firebase";
+  root.userData.isFallback = false;
+  root.userData.keepMtlColors = true;
+  root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.unitHeight = 0.55;
+  root.userData.scanRate = 0.45;
+  root.userData.turretTurnRate = 0.85;
+
+  const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
+    const m = new THREE.Mesh(
+      geo,
+      matStd(color, {
+        metalness: opts.metalness ?? 0.22,
+        roughness: opts.roughness ?? 0.72,
+      }),
+    );
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = opts.cast !== false;
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  };
+
+  // Raised earth / concrete revetment ring (open toward muzzle)
+  add(root, new THREE.CylinderGeometry(0.48, 0.52, 0.04, 18), concreteDark, 0, 0.02, 0, 0, 0, 0, {
+    roughness: 0.95,
+    cast: false,
+  });
+  add(root, new THREE.CylinderGeometry(0.36, 0.38, 0.05, 16), concrete, 0, 0.045, 0, 0, 0, 0, {
+    roughness: 0.9,
+    cast: false,
+  });
+
+  // Sandbag berm — horseshoe (gap at +Z for barrel)
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2 + 0.35;
+    // Leave frontal firing arc open
+    if (a > 5.2 || a < 1.15) continue;
+    const h = 0.07 + (i % 3) * 0.012;
+    add(
+      root,
+      new THREE.BoxGeometry(0.09, h, 0.055),
+      i % 2 === 0 ? sand : sandDark,
+      Math.cos(a) * 0.4,
+      0.04 + h * 0.5,
+      Math.sin(a) * 0.38,
+      0,
+      -a,
+      0,
+      { roughness: 0.94, cast: false },
+    );
+  }
+  // Second sandbag course
+  for (let i = 0; i < 10; i++) {
+    const a = 1.4 + (i / 10) * 3.6;
+    add(
+      root,
+      new THREE.BoxGeometry(0.08, 0.04, 0.05),
+      sandDark,
+      Math.cos(a) * 0.36,
+      0.1,
+      Math.sin(a) * 0.34,
+      0,
+      -a,
+      0,
+      { roughness: 0.94, cast: false },
+    );
+  }
+
+  // Fire-direction ramp / blast pad
+  add(root, new THREE.BoxGeometry(0.22, 0.02, 0.28), concreteDark, 0, 0.03, 0.28, 0, 0, 0, {
+    roughness: 0.92,
+    cast: false,
+  });
+
+  // Ammo bunker / dugout
+  add(root, new THREE.BoxGeometry(0.28, 0.14, 0.22), oliveDark, -0.28, 0.09, -0.12);
+  add(root, new THREE.BoxGeometry(0.3, 0.025, 0.24), olive, -0.28, 0.17, -0.12);
+  add(root, new THREE.BoxGeometry(0.26, 0.02, 0.04), accent, -0.28, 0.175, 0.0, 0, 0, 0, {
+    metalness: 0.25,
+    roughness: 0.55,
+  });
+  add(root, new THREE.BoxGeometry(0.06, 0.08, 0.01), 0x1a2018, -0.28, 0.1, 0.0);
+
+  // Shell crates
+  for (const [cx, cz] of [
+    [0.28, -0.18],
+    [0.34, -0.08],
+    [0.26, -0.02],
+  ]) {
+    add(root, new THREE.BoxGeometry(0.08, 0.055, 0.06), crate, cx, 0.05, cz, 0, 0.3, 0, {
+      roughness: 0.85,
+    });
+  }
+  // Propellant tubes
+  for (let i = 0; i < 3; i++) {
+    add(
+      root,
+      new THREE.CylinderGeometry(0.012, 0.012, 0.1, 6),
+      metalBright,
+      0.22 + i * 0.03,
+      0.04,
+      0.08,
+      Math.PI / 2,
+      0.2,
+      0,
+      { metalness: 0.55, roughness: 0.4 },
+    );
+  }
+
+  // Camouflage net poles
+  add(root, new THREE.CylinderGeometry(0.008, 0.01, 0.22, 5), oliveLight, -0.38, 0.14, 0.2, 0.2, 0, 0.1);
+  add(root, new THREE.CylinderGeometry(0.008, 0.01, 0.2, 5), oliveLight, 0.18, 0.13, -0.32, -0.15, 0, -0.1);
+
+  // Howitzer on traverse ring
+  const traverse = new THREE.Group();
+  traverse.name = "muzzleRoot";
+  traverse.position.set(0, 0.06, -0.02);
+  root.add(traverse);
+
+  add(traverse, new THREE.CylinderGeometry(0.09, 0.1, 0.04, 14), metal, 0, 0.02, 0, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  add(traverse, new THREE.CylinderGeometry(0.06, 0.06, 0.03, 12), oliveDark, 0, 0.045, 0, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.5,
+  });
+
+  // Carriage / cradle
+  const elev = new THREE.Group();
+  elev.position.set(0, 0.08, 0);
+  elev.rotation.x = -0.35;
+  traverse.add(elev);
+
+  add(elev, new THREE.BoxGeometry(0.14, 0.08, 0.18), olive, 0, 0.02, -0.02, 0, 0, 0, {
+    metalness: 0.35,
+    roughness: 0.55,
+  });
+  add(elev, new THREE.BoxGeometry(0.16, 0.04, 0.08), metalBright, 0, 0.06, -0.04, 0, 0, 0, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+  // Recoil slides
+  for (const sx of [-0.05, 0.05]) {
+    add(elev, new THREE.BoxGeometry(0.02, 0.03, 0.22), metal, sx, 0.05, 0.06, 0, 0, 0, {
+      metalness: 0.6,
+      roughness: 0.35,
+    });
+  }
+
+  // Long howitzer tube
+  add(elev, new THREE.CylinderGeometry(0.028, 0.034, 0.48, 10), barrel, 0, 0.05, 0.28, Math.PI / 2, 0, 0, {
+    metalness: 0.7,
+    roughness: 0.28,
+  });
+  add(elev, new THREE.CylinderGeometry(0.036, 0.04, 0.08, 10), metalBright, 0, 0.05, 0.08, Math.PI / 2, 0, 0, {
+    metalness: 0.65,
+    roughness: 0.3,
+  });
+  add(elev, new THREE.CylinderGeometry(0.032, 0.038, 0.05, 10), metal, 0, 0.05, 0.48, Math.PI / 2, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+  // Muzzle brake
+  add(elev, new THREE.BoxGeometry(0.07, 0.04, 0.05), metalBright, 0, 0.05, 0.54, 0, 0, 0, {
+    metalness: 0.6,
+    roughness: 0.32,
+  });
+  add(elev, new THREE.BoxGeometry(0.09, 0.02, 0.02), metal, 0, 0.05, 0.57, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+
+  const muzzle = new THREE.Object3D();
+  muzzle.name = "muzzle";
+  muzzle.position.set(0, 0.05, 0.6);
+  elev.add(muzzle);
+
+  // Breech / loading tray
+  add(elev, new THREE.BoxGeometry(0.1, 0.06, 0.1), oliveDark, 0, 0.04, -0.14, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.5,
+  });
+  add(elev, new THREE.CylinderGeometry(0.02, 0.02, 0.06, 6), metal, 0.06, 0.08, -0.12, 0, 0, 0.4, {
+    metalness: 0.5,
+    roughness: 0.4,
+  });
+
+  // Spotter scope
+  add(traverse, new THREE.CylinderGeometry(0.012, 0.014, 0.08, 6), metalBright, 0.08, 0.12, -0.06, Math.PI / 2, 0.2, 0, {
+    metalness: 0.55,
+    roughness: 0.35,
+  });
+
+  // Team stripe on berm
+  add(root, new THREE.BoxGeometry(0.2, 0.02, 0.04), accent, -0.28, 0.18, -0.02, 0, 0, 0, {
+    metalness: 0.2,
+    roughness: 0.55,
   });
 
   return root;
@@ -5628,6 +5854,8 @@ function createMlrsMesh(teamColor) {
   return g;
 }
 
+const AIR_RIG_VERSION = 3;
+
 function isAirUnitKind(kind) {
   const k = String(kind || "");
   return (
@@ -5637,6 +5865,11 @@ function isAirUnitKind(kind) {
     k.includes("helix") ||
     k.includes("chinook")
   );
+}
+
+function isJetKind(kind) {
+  const k = String(kind || "");
+  return k.includes("raptor") || k.includes("mig");
 }
 
 function isHeavyTankKind(kind) {
@@ -5655,101 +5888,267 @@ function createAirMesh(teamColor, kind = "") {
     k.includes("comanche") ||
     k.includes("helix") ||
     k.includes("chinook");
+  const china = k.includes("mig") || k.includes("helix");
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isAir = true;
   g.userData.isHeli = heli;
-  g.userData.airAltitude = heli ? 0.72 : 0.95;
+  g.userData.isJet = !heli;
+  g.userData.airAltitude = heli ? 1.85 : 2.65;
+  g.userData.airRigVersion = AIR_RIG_VERSION;
   g.userData.tintParts = [];
-  g.userData.unitHeight = heli ? 0.55 : 0.45;
+  g.userData.unitHeight = heli ? 1.95 : 2.75;
   g.userData.kind = k;
+  g.userData.bank = 0;
+  g.userData.prevFaceYaw = 0;
+  g.rotation.order = "YXZ";
+
   const accent = teamColor >>> 0;
-  const metal = 0x3a3c38;
-  const dark = 0x2a2c28;
+  const hull = china ? 0x5a6068 : 0x6a7078;
+  const hullDark = china ? 0x2e343c : 0x3a4048;
+  const panel = 0x8a929a;
+  const glass = 0x152028;
+
+  const metal = (color, m = 0.82, r = 0.28) => matStd(color, { metalness: m, roughness: r });
+  const gloss = (color) => matStd(color, { metalness: 0.9, roughness: 0.18 });
 
   if (heli) {
-    // Fuselage
+    // Attack / transport helicopter — metallic fuselage
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 0.07, 0.34),
-      matStd(metal, { metalness: 0.4, roughness: 0.45 }),
+      new THREE.CapsuleGeometry(0.055, 0.28, 4, 8),
+      metal(hull, 0.78, 0.32),
     );
-    body.position.y = 0.04;
+    body.rotation.x = Math.PI / 2;
+    body.position.y = 0.06;
     g.add(body);
     g.userData.tintParts.push(body);
-    const nose = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 0.05, 0.1),
-      matStd(accent, { metalness: 0.35, roughness: 0.5 }),
-    );
-    nose.position.set(0, 0.04, 0.2);
+
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.12, 8), gloss(hullDark));
+    nose.rotation.x = -Math.PI / 2;
+    nose.position.set(0, 0.055, 0.22);
     g.add(nose);
     g.userData.tintParts.push(nose);
-    // Main rotor
+
+    const cockpit = new THREE.Mesh(
+      new THREE.SphereGeometry(0.048, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+      matStd(glass, { metalness: 0.35, roughness: 0.12 }),
+    );
+    cockpit.rotation.x = Math.PI * 0.15;
+    cockpit.position.set(0, 0.09, 0.1);
+    g.add(cockpit);
+
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.02, 0.025, 0.22),
+      gloss(accent),
+    );
+    stripe.position.set(0.045, 0.06, 0.02);
+    g.add(stripe);
+    g.userData.tintParts.push(stripe);
+
+    // Stub wings + rocket pods
+    const stub = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.014, 0.08), metal(panel, 0.85, 0.25));
+    stub.position.set(0, 0.04, 0.02);
+    g.add(stub);
+    for (const side of [-1, 1]) {
+      const pod = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.018, 0.02, 0.14, 8),
+        metal(hullDark, 0.7, 0.35),
+      );
+      pod.rotation.x = Math.PI / 2;
+      pod.position.set(side * 0.16, 0.02, 0.02);
+      g.add(pod);
+    }
+
+    const boom = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.02, 0.28, 6),
+      metal(hull, 0.75, 0.3),
+    );
+    boom.rotation.x = Math.PI / 2;
+    boom.position.set(0, 0.07, -0.26);
+    g.add(boom);
+
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.1, 0.07), metal(hullDark));
+    fin.position.set(0, 0.11, -0.38);
+    g.add(fin);
+
     const hub = new THREE.Group();
     hub.name = "airRotor";
-    hub.position.set(0, 0.12, 0);
+    hub.position.set(0, 0.16, 0.02);
     g.add(hub);
-    const blade = new THREE.Mesh(
-      new THREE.BoxGeometry(0.55, 0.008, 0.04),
-      matStd(dark, { metalness: 0.5, roughness: 0.4 }),
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.014, 0.06, 6), metal(0x222428));
+    mast.position.y = -0.02;
+    hub.add(mast);
+    for (let i = 0; i < 4; i++) {
+      const blade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.72, 0.006, 0.035),
+        metal(0x1a1c1e, 0.55, 0.4),
+      );
+      blade.rotation.y = (i * Math.PI) / 2;
+      blade.position.y = 0.02;
+      hub.add(blade);
+    }
+    // Soft rotor disc
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(0.34, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0x889090,
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
     );
-    hub.add(blade);
-    const blade2 = blade.clone();
-    blade2.rotation.y = Math.PI / 2;
-    hub.add(blade2);
-    // Tail
-    const boom = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, 0.03, 0.22),
-      matStd(metal, { metalness: 0.4, roughness: 0.45 }),
-    );
-    boom.position.set(0, 0.05, -0.24);
-    g.add(boom);
-    const tailRotor = new THREE.Mesh(
-      new THREE.BoxGeometry(0.02, 0.12, 0.03),
-      matStd(dark, { metalness: 0.45, roughness: 0.4 }),
-    );
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = 0.025;
+    hub.add(disc);
+
+    const tailRotor = new THREE.Group();
     tailRotor.name = "airTailRotor";
-    tailRotor.position.set(0.04, 0.08, -0.34);
+    tailRotor.position.set(0.03, 0.1, -0.4);
     g.add(tailRotor);
+    for (let i = 0; i < 2; i++) {
+      const tb = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.008, 0.02),
+        metal(0x1a1c1e, 0.5, 0.4),
+      );
+      tb.rotation.z = (i * Math.PI) / 2;
+      tailRotor.add(tb);
+    }
+
     if (k.includes("chinook")) {
-      const rearRotor = hub.clone();
-      rearRotor.position.set(0, 0.12, -0.18);
-      g.add(rearRotor);
-      body.scale.set(1.15, 1.1, 1.25);
+      body.scale.set(1.25, 1.15, 1.35);
+      const rear = hub.clone();
+      rear.position.set(0, 0.16, -0.2);
+      g.add(rear);
     }
   } else {
-    // Jet fighter silhouette
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(0.09, 0.045, 0.38),
-      matStd(metal, { metalness: 0.5, roughness: 0.4 }),
+    // Jet fighter — swept delta, metallic skin, underwing bombs
+    const fuse = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.038, 0.36, 4, 10),
+      metal(hull, 0.88, 0.22),
     );
-    body.position.y = 0.03;
-    g.add(body);
-    g.userData.tintParts.push(body);
-    const wing = new THREE.Mesh(
-      new THREE.BoxGeometry(0.42, 0.012, 0.12),
-      matStd(accent, { metalness: 0.4, roughness: 0.45 }),
-    );
-    wing.position.set(0, 0.03, -0.02);
-    g.add(wing);
-    g.userData.tintParts.push(wing);
-    const tail = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, 0.09, 0.08),
-      matStd(dark, { metalness: 0.45, roughness: 0.4 }),
-    );
-    tail.position.set(0, 0.07, -0.16);
-    g.add(tail);
+    fuse.rotation.x = Math.PI / 2;
+    fuse.position.y = 0.04;
+    g.add(fuse);
+    g.userData.tintParts.push(fuse);
+
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.14, 10), gloss(panel));
+    nose.rotation.x = -Math.PI / 2;
+    nose.position.set(0, 0.04, 0.28);
+    g.add(nose);
+
     const canopy = new THREE.Mesh(
-      new THREE.BoxGeometry(0.05, 0.03, 0.08),
-      matStd(0x1a2830, { metalness: 0.2, roughness: 0.25 }),
+      new THREE.SphereGeometry(0.036, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.5),
+      matStd(glass, { metalness: 0.4, roughness: 0.1 }),
     );
-    canopy.position.set(0, 0.06, 0.08);
+    canopy.position.set(0, 0.075, 0.08);
+    canopy.scale.set(1, 0.7, 1.3);
     g.add(canopy);
+
+    // Swept wings
+    const wingShape = new THREE.Shape();
+    wingShape.moveTo(0, 0.08);
+    wingShape.lineTo(0.32, -0.06);
+    wingShape.lineTo(0.3, -0.12);
+    wingShape.lineTo(0, -0.04);
+    wingShape.lineTo(0, 0.08);
+    const wingGeo = new THREE.ExtrudeGeometry(wingShape, {
+      depth: 0.012,
+      bevelEnabled: false,
+    });
+    const wingMat = metal(hullDark, 0.85, 0.24);
+    const wingL = new THREE.Mesh(wingGeo, wingMat);
+    wingL.rotation.x = -Math.PI / 2;
+    wingL.rotation.z = Math.PI;
+    wingL.position.set(0, 0.035, 0.02);
+    g.add(wingL);
+    const wingR = wingL.clone();
+    wingR.scale.x = -1;
+    g.add(wingR);
+    g.userData.tintParts.push(wingL, wingR);
+
+    // Accent leading-edge strip
+    const ledge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.006, 0.018),
+      gloss(accent),
+    );
+    ledge.position.set(0, 0.042, 0.04);
+    ledge.rotation.x = 0.08;
+    g.add(ledge);
+    g.userData.tintParts.push(ledge);
+
+    // Twin intakes / engines
+    for (const side of [-1, 1]) {
+      const intake = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.016, 0.02, 0.1, 8),
+        metal(0x1c2024, 0.6, 0.4),
+      );
+      intake.rotation.x = Math.PI / 2;
+      intake.position.set(side * 0.045, 0.03, -0.12);
+      g.add(intake);
+      const nozzle = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.014, 0.018, 0.04, 8),
+        matStd(0x221810, {
+          metalness: 0.5,
+          roughness: 0.35,
+          emissive: 0xff6622,
+          emissiveIntensity: 0.35,
+        }),
+      );
+      nozzle.name = "airAfterburner";
+      nozzle.rotation.x = Math.PI / 2;
+      nozzle.position.set(side * 0.04, 0.03, -0.22);
+      g.add(nozzle);
+    }
+
+    // Vertical + horizontal stabilizers
+    const vStab = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.11, 0.1), metal(hull, 0.85, 0.25));
+    vStab.position.set(0, 0.1, -0.18);
+    vStab.rotation.x = -0.15;
+    g.add(vStab);
+    const hStab = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.01, 0.06), metal(hullDark));
+    hStab.position.set(0, 0.05, -0.2);
+    g.add(hStab);
+
+    // Underwing bombs / pylons
+    for (const side of [-1, 1]) {
+      const pylon = new THREE.Mesh(
+        new THREE.BoxGeometry(0.012, 0.04, 0.04),
+        metal(0x2a2e32),
+      );
+      pylon.position.set(side * 0.14, 0.01, 0.0);
+      g.add(pylon);
+      const bomb = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.012, 0.06, 3, 6),
+        metal(0x2a3028, 0.7, 0.35),
+      );
+      bomb.name = "airBombStore";
+      bomb.rotation.x = Math.PI / 2;
+      bomb.position.set(side * 0.14, -0.015, 0.0);
+      g.add(bomb);
+    }
   }
 
   const muzzle = new THREE.Object3D();
   muzzle.name = "muzzle";
-  muzzle.position.set(0, 0.02, 0.2);
+  muzzle.position.set(0, heli ? 0.02 : -0.02, heli ? 0.18 : 0.05);
   g.add(muzzle);
+
+  // Shadow blob on ground (child at -altitude so it sits on terrain)
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(heli ? 0.22 : 0.28, 16),
+    new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+    }),
+  );
+  shadow.name = "airShadow";
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = -(g.userData.airAltitude || 2);
+  g.add(shadow);
+
   return g;
 }
 
@@ -5959,6 +6358,17 @@ function upsertMesh(entity) {
     mesh = null;
   }
 
+  if (
+    mesh &&
+    entity.kind === "firebase" &&
+    (!mesh.userData.isFirebase || (mesh.userData.firebaseRigVersion || 0) < 1)
+  ) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
   // Refit buildings after scale pass.
   if (
     mesh &&
@@ -5994,6 +6404,7 @@ function upsertMesh(entity) {
       !mesh.userData.isUnitRig ||
       (isAir &&
         (!mesh.userData.isAir ||
+          (mesh.userData.airRigVersion || 0) < AIR_RIG_VERSION ||
           mesh.userData.airAltitude == null ||
           !mesh.getObjectByName("muzzle"))) ||
       (isMlrs &&
@@ -6065,7 +6476,9 @@ function upsertMesh(entity) {
   } else if (mesh.userData.isUnitRig) {
     applyUnitMotion(mesh, entity);
     if (mesh.userData.isAir || isAirUnitKind(entity.kind)) {
-      mesh.position.y = mesh.userData.airAltitude || 0.85;
+      mesh.position.y = mesh.userData.airAltitude || 2.4;
+      const shadow = mesh.getObjectByName("airShadow");
+      if (shadow) shadow.position.y = -mesh.position.y + 0.02;
     }
     if (mesh.userData.lastTint !== colors[0]) {
       tintUnitMesh(mesh, colors);
@@ -6189,10 +6602,14 @@ function shortestAngle(from, to) {
 
 function clientMoveSpeed(kind) {
   const k = String(kind || "");
+  // Tank 0.58 ≈ 50 km/h; air scaled from real cruise km/h.
   if (isAirUnitKind(k)) {
-    if (k.includes("raptor") || k.includes("mig")) return 1.15;
-    if (k.includes("chinook")) return 0.7;
-    return 0.95;
+    if (k.includes("mig")) return 11.6; // ~1000 km/h
+    if (k.includes("raptor")) return 11.0; // ~950 km/h
+    if (k.includes("comanche")) return 3.15; // ~270 km/h
+    if (k.includes("helix")) return 2.9; // ~250 km/h
+    if (k.includes("chinook")) return 2.8; // ~240 km/h
+    return 3.0;
   }
   // Match generals_roster speeds so slideToward doesn't ice-skate.
   if (k.includes("humvee") || k.includes("rocket_buggy") || k.includes("buggy")) return 0.72;
@@ -6494,22 +6911,58 @@ function updateInfantryDrive(mesh, dt) {
 
 function updateAirDrive(mesh, dt) {
   if (!mesh?.userData?.isAir || mesh.userData.knock) return;
-  if (mesh.userData.destX == null || mesh.userData.destZ == null) return;
-  const alt = mesh.userData.airAltitude || 0.85;
-  slideToward(mesh, dt);
-  mesh.position.y = alt;
+  const alt = mesh.userData.airAltitude || 2.4;
+  const bob = Math.sin(performance.now() * 0.002 + (mesh.userData.id || "").length) * 0.04;
+  if (mesh.userData.destX != null && mesh.userData.destZ != null) {
+    slideToward(mesh, dt);
+  }
+  mesh.position.y = alt + bob;
+
+  const shadow = mesh.getObjectByName("airShadow");
+  if (shadow) shadow.position.y = -mesh.position.y + 0.02;
+
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
   if (speed > 0.05) {
-    mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+    const yaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+    mesh.userData.faceYaw = yaw;
     mesh.userData.moving = true;
+    // Bank into turns
+    let dyaw = yaw - (mesh.userData.prevFaceYaw || yaw);
+    while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+    while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    const wantBank = THREE.MathUtils.clamp(-dyaw * 4.5, -0.55, 0.55);
+    mesh.userData.bank = (mesh.userData.bank || 0) * 0.85 + wantBank * 0.15;
+    mesh.userData.prevFaceYaw = yaw;
   } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 280) {
     mesh.userData.moving = false;
+    mesh.userData.bank = (mesh.userData.bank || 0) * 0.9;
   }
+
+  mesh.rotation.order = "YXZ";
+  mesh.rotation.z = mesh.userData.bank || 0;
+  mesh.rotation.x = mesh.userData.isJet
+    ? mesh.userData.moving
+      ? -0.12
+      : -0.04
+    : mesh.userData.moving
+      ? 0.06
+      : 0.02;
+
+  // Afterburner flicker for jets
+  if (mesh.userData.isJet) {
+    mesh.traverse((obj) => {
+      if (obj.name === "airAfterburner" && obj.material) {
+        obj.material.emissiveIntensity =
+          (mesh.userData.moving ? 0.55 : 0.2) + Math.sin(performance.now() * 0.02) * 0.12;
+      }
+    });
+  }
+
   // Spin rotors
-  const spin = (mesh.userData.moving ? 18 : 10) * dt;
+  const spin = (mesh.userData.moving ? 22 : 14) * dt;
   mesh.traverse((obj) => {
     if (obj.name === "airRotor") obj.rotation.y += spin;
-    if (obj.name === "airTailRotor") obj.rotation.x += spin * 1.6;
+    if (obj.name === "airTailRotor") obj.rotation.x += spin * 1.8;
   });
 }
 
@@ -6597,10 +7050,21 @@ function spawnShotFx(shot) {
   const isMlrs = kind.includes("mlrs") || !!fromMesh?.userData?.isMlrs;
   const isTankCannon = kind.includes("tank") && !kind.includes("mg") && !isMlrs;
   const isMortar = kind.includes("mortar");
+  const isAirBomb =
+    !!fromMesh?.userData?.isJet ||
+    kind.includes("raptor") ||
+    kind.includes("mig");
+  const isAirRocket =
+    !isAirBomb &&
+    (!!fromMesh?.userData?.isHeli ||
+      kind.includes("comanche") ||
+      kind.includes("helix"));
   const isMissile =
     !isMortar &&
     !isBunkerMg &&
     !isMlrs &&
+    !isAirBomb &&
+    !isAirRocket &&
     (kind.includes("missile") || kind.includes("patriot") || kind === "turret");
 
   if (isTankMg && fromMesh) {
@@ -6609,21 +7073,34 @@ function spawnShotFx(shot) {
     if (dx * dx + dz * dz > 1e-6) {
       fromMesh.userData.mgAimYaw = Math.atan2(dx, dz);
     }
-  } else {
+  } else if (!isAirBomb) {
     faceMeshToward(fromMesh, shot.x1, shot.y1);
   }
 
+  const airAlt = fromMesh?.userData?.airAltitude || (isAirBomb || isAirRocket ? 2.4 : 0);
   const start = fromMesh
     ? worldMuzzlePoint(
         fromMesh,
         isTankMg && fromMesh.getObjectByName("mgMuzzle") ? "mgMuzzle" : "muzzle",
       )
-    : new THREE.Vector3(shot.x0, isMortar ? 0.1 : isBunkerMg ? 0.12 : isMlrs ? 0.22 : 0.12, shot.y0);
+    : new THREE.Vector3(
+        shot.x0,
+        isAirBomb || isAirRocket
+          ? airAlt
+          : isMortar
+            ? 0.1
+            : isBunkerMg
+              ? 0.12
+              : isMlrs
+                ? 0.22
+                : 0.12,
+        shot.y0,
+      );
   // Always use server impact point so misses fly wide of the mesh.
   const endY = didHit
     ? (toMesh?.userData?.unitHeight || (toMesh?.userData?.building ? 0.6 : 0.12) || 0.12) * 0.55
     : 0.04;
-  const end = new THREE.Vector3(shot.x1, endY, shot.y1);
+  const end = new THREE.Vector3(shot.x1, isAirBomb ? 0.05 : endY, shot.y1);
 
   const dir = new THREE.Vector3().subVectors(end, start);
   const dist = Math.max(0.05, dir.length());
@@ -6631,28 +7108,78 @@ function spawnShotFx(shot) {
 
   const now = performance.now();
   const fx = {
-    type: isTankCannon
-      ? "shell"
-      : isMlrs
-        ? "mlrs"
-        : isMortar
-          ? "mortar"
-          : isMissile
-            ? "missile"
-            : "bullet",
+    type: isAirBomb
+      ? "air_bomb"
+      : isAirRocket
+        ? "air_rocket"
+        : isTankCannon
+          ? "shell"
+          : isMlrs
+            ? "mlrs"
+            : isMortar
+              ? "mortar"
+              : isMissile
+                ? "missile"
+                : "bullet",
     born: now,
-    life: isTankCannon ? 380 : isMlrs ? 720 : isMortar ? 780 : isMissile ? 520 : 90,
+    life: isAirBomb ? 900 : isAirRocket ? 650 : isTankCannon ? 380 : isMlrs ? 720 : isMortar ? 780 : isMissile ? 520 : 90,
     start: start.clone(),
     end: end.clone(),
     dir: dir.clone(),
     dist,
-    arc: isMortar ? Math.max(0.45, dist * 0.28) : isMlrs ? Math.max(0.55, dist * 0.18) : 0,
+    arc: isAirBomb
+      ? Math.max(0.35, dist * 0.12)
+      : isMortar
+        ? Math.max(0.45, dist * 0.28)
+        : isMlrs
+          ? Math.max(0.55, dist * 0.18)
+          : 0,
     fromMesh: fromMesh || null,
     hit: didHit,
     parts: [],
   };
 
-  if (isMlrs) {
+  if (isAirBomb) {
+    // Hide one underwing store briefly for "drop" feel
+    const stores = [];
+    fromMesh?.traverse((o) => {
+      if (o.name === "airBombStore") stores.push(o);
+    });
+    if (stores.length) {
+      const store = stores[Math.floor(Math.random() * stores.length)];
+      store.visible = false;
+      setTimeout(() => {
+        if (store) store.visible = true;
+      }, 2200);
+    }
+    const bomb = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.018, 0.07, 4, 6),
+      matStd(0x2a3028, { metalness: 0.65, roughness: 0.35 }),
+    );
+    bomb.position.copy(start);
+    scene.add(bomb);
+    fx.parts.push({ mesh: bomb, role: "projectile" });
+  } else if (isAirRocket) {
+    const rocket = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.016, 0.1, 6),
+      matStd(0xccc8b8, { metalness: 0.7, roughness: 0.3, emissive: 0xff4400, emissiveIntensity: 0.4 }),
+    );
+    rocket.position.copy(start);
+    scene.add(rocket);
+    fx.parts.push({ mesh: rocket, role: "projectile" });
+    const trail = new THREE.Mesh(
+      new THREE.SphereGeometry(0.03, 6, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0xff8844,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+      }),
+    );
+    trail.position.copy(start);
+    scene.add(trail);
+    fx.parts.push({ mesh: trail, role: "trail" });
+  } else if (isMlrs) {
     // Exhaust bloom from the pod face
     const blast = new THREE.Mesh(
       new THREE.SphereGeometry(0.045, 8, 8),
@@ -7007,37 +7534,64 @@ function updateCombatFx(now) {
     const fx = activeFx[i];
     const t = Math.min(1, (now - fx.born) / fx.life);
     const pos = fx.start.clone().lerp(fx.end, t);
-    if ((fx.type === "mortar" || fx.type === "patriot" || fx.type === "mlrs") && fx.arc) {
+    if (
+      (fx.type === "mortar" ||
+        fx.type === "patriot" ||
+        fx.type === "mlrs" ||
+        fx.type === "air_bomb") &&
+      fx.arc
+    ) {
       // Patriot: boost loft early then flatten onto the intercept.
       // MLRS rockets: ballistic loft then flatten into the beaten zone.
+      // Air bombs: drop from altitude — mostly fall, slight forward arc.
       const loft =
         fx.type === "patriot"
           ? 4 * t * (1 - t) * (1 - t * 0.35)
           : fx.type === "mlrs"
             ? 4 * t * (1 - t) * (0.85 + t * 0.15)
-            : 4 * t * (1 - t);
-      pos.y += loft * fx.arc;
+            : fx.type === "air_bomb"
+              ? -t * t * 0.15
+              : 4 * t * (1 - t);
+      pos.y += loft * (fx.type === "air_bomb" ? fx.start.y : fx.arc);
+    }
+    if (fx.type === "air_bomb") {
+      // Interpolate height from release altitude down to ground.
+      pos.y = fx.start.y * (1 - t) * (1 - t * 0.35) + fx.end.y * t;
     }
 
     for (const part of fx.parts) {
       if (part.role === "projectile") {
         part.mesh.position.copy(pos);
-        if (fx.type === "mortar" || fx.type === "patriot" || fx.type === "mlrs") {
+        if (
+          fx.type === "mortar" ||
+          fx.type === "patriot" ||
+          fx.type === "mlrs" ||
+          fx.type === "air_bomb" ||
+          fx.type === "air_rocket"
+        ) {
           const t2 = Math.min(1, t + 0.025);
           const next = fx.start.clone().lerp(fx.end, t2);
-          const loft2 =
-            fx.type === "patriot"
-              ? 4 * t2 * (1 - t2) * (1 - t2 * 0.35)
-              : fx.type === "mlrs"
-                ? 4 * t2 * (1 - t2) * (0.85 + t2 * 0.15)
-                : 4 * t2 * (1 - t2);
-          next.y += loft2 * (fx.arc || 0);
+          if (fx.type === "air_bomb") {
+            next.y = fx.start.y * (1 - t2) * (1 - t2 * 0.35) + fx.end.y * t2;
+          } else {
+            const loft2 =
+              fx.type === "patriot"
+                ? 4 * t2 * (1 - t2) * (1 - t2 * 0.35)
+                : fx.type === "mlrs"
+                  ? 4 * t2 * (1 - t2) * (0.85 + t2 * 0.15)
+                  : 4 * t2 * (1 - t2);
+            next.y += loft2 * (fx.arc || 0);
+          }
           const v = next.sub(pos);
           if (v.lengthSq() > 1e-8) {
             v.normalize();
             part.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v);
           }
         }
+      } else if (part.role === "trail") {
+        part.mesh.position.copy(pos);
+        part.mesh.material.opacity = 0.65 * (1 - t);
+        part.mesh.scale.setScalar(1 + t * 3);
       } else if (part.role === "tracer") {
         if (fx.type === "mortar") {
           part.mesh.position.copy(pos);
@@ -7136,11 +7690,13 @@ function updateCombatFx(now) {
         }
       } else if (fx.type === "bullet") {
         spawnMissImpact(fx.end, fx.hit === false);
-      } else if (
+      } else       if (
         fx.type === "missile" ||
         fx.type === "mortar" ||
         fx.type === "patriot" ||
-        fx.type === "mlrs"
+        fx.type === "mlrs" ||
+        fx.type === "air_bomb" ||
+        fx.type === "air_rocket"
       ) {
         if (fx.hit !== false) {
           if (fx.type === "patriot") {
@@ -7151,7 +7707,15 @@ function updateCombatFx(now) {
             applyBlastKnock(
               fx.end.x,
               fx.end.z,
-              fx.type === "mlrs" ? 1.75 : fx.type === "mortar" ? 0.95 : 0.85,
+              fx.type === "air_bomb"
+                ? 1.9
+                : fx.type === "air_rocket"
+                  ? 1.35
+                  : fx.type === "mlrs"
+                    ? 1.75
+                    : fx.type === "mortar"
+                      ? 0.95
+                      : 0.85,
             );
           }
         } else {
