@@ -5,12 +5,9 @@ fn default_faction() -> String {
     "usa".into()
 }
 
-pub fn normalize_faction(faction: &str) -> String {
-    match faction.to_ascii_lowercase().as_str() {
-        "china" => "china".into(),
-        "gla" => "gla".into(),
-        _ => "usa".into(),
-    }
+pub fn normalize_faction(_faction: &str) -> String {
+    // Locked to USA while the roster is rebuilt country-by-country.
+    "usa".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

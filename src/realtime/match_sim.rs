@@ -252,9 +252,9 @@ fn attack_cooldown_for(kind: &str) -> u32 {
 
 const RIFLE_MAG: u8 = 30;
 const RIFLE_RELOAD_MS: u32 = 5_000;
-/// Generals Patriot: strong vs vehicles/air, weak vs infantry. Range ~225 logic ≈ 9.0 wu.
-const PATRIOT_RANGE: f32 = 9.0;
-const PATRIOT_DAMAGE: f32 = 520.0;
+/// MIM-104 class engagement bubble — long-range guided intercept (early USA tuning).
+const PATRIOT_RANGE: f32 = 17.0;
+const PATRIOT_DAMAGE: f32 = 780.0;
 /// China Gattling: shreds soft targets, weak vs heavy armor. Range ~225 ≈ 8.0.
 const GATLING_RANGE: f32 = 8.0;
 const GATLING_DAMAGE: f32 = 42.0;
@@ -497,7 +497,7 @@ fn shot_hit_chance(
     let weapon_near = if attacker_kind.contains("tank") {
         0.86
     } else if attacker_kind == "turret" || attacker_kind.contains("missile") {
-        0.84
+        0.92
     } else if attacker_kind.contains("mlrs") {
         0.70
     } else if attacker_kind == "bunker" {
@@ -1068,60 +1068,28 @@ impl MatchSim {
         self.players.values().filter(|p| !p.is_bot()).count()
     }
 
-    /// Faction opening base + army (same package for humans and bots).
-    /// Buildings match that faction's roster (USA / China / GLA).
+    /// Opening base + army (USA roster for everyone while factions are locked).
     fn spawn_starting_force(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
-        let faction = self
-            .players
-            .get(&user_id)
-            .map(|p| p.faction.as_str())
-            .unwrap_or("usa")
-            .to_string();
-
-        // HQ provides a small base load; plants/reactors add the rest.
+        let faction = "usa".to_string();
         if let Some(player) = self.players.get_mut(&user_id) {
+            player.faction = faction.clone();
             player.resources.power = player.resources.power.saturating_add(40);
         }
 
-        let (power_kind, supply_kind, factory_kind, tank_unit, infantry_unit) =
-            match faction.as_str() {
-                "china" => (
-                    Some("nuclear_reactor"),
-                    "supply",
-                    "war_factory",
-                    "battlemaster",
-                    "red_guard",
-                ),
-                "gla" => (None, "supply_stash", "arms_dealer", "scorpion_tank", "rebel"),
-                _ => (
-                    Some("power_plant"),
-                    "supply",
-                    "war_factory",
-                    "tank",
-                    "ranger",
-                ),
-            };
-
         // Ring of finished starter structures around the Command Center.
-        let mut slots: Vec<(&str, f32, f32)> = Vec::new();
-        if let Some(pk) = power_kind {
-            slots.push((pk, 3.2, 0.4));
-        }
-        slots.push((supply_kind, 2.6, 2.0));
-        slots.push(("barracks", 0.2, 3.4));
-        slots.push((factory_kind, -2.8, 2.2));
+        let slots: [(&str, f32, f32); 4] = [
+            ("power_plant", 3.2, 0.4),
+            ("supply", 2.6, 2.0),
+            ("barracks", 0.2, 3.4),
+            ("war_factory", -2.8, 2.2),
+        ];
 
         for (kind, ox, oy) in slots {
             self.spawn_finished_building(user_id, team, &faction, kind, hx + ox, hy + oy);
         }
 
-        let tank = trainables()
-            .iter()
-            .find(|u| u.unit == tank_unit && faction_ok(u.faction, &faction))
-            .or_else(|| trainables().iter().find(|u| u.unit == "tank"));
-        let infantry = trainables()
-            .iter()
-            .find(|u| u.unit == infantry_unit && faction_ok(u.faction, &faction));
+        let tank = trainables().iter().find(|u| u.unit == "tank");
+        let infantry = trainables().iter().find(|u| u.unit == "ranger");
 
         let hq_r = building_radius("hq");
         let unit_offsets: &[(f32, f32)] = &[

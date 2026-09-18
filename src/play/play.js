@@ -206,7 +206,7 @@ function joinMatchId(raw) {
     return;
   }
   $("#lobby-id").value = lobby_id;
-  send({ t: "join_lobby", lobby_id, faction: state.faction || "usa" });
+  send({ t: "join_lobby", lobby_id, faction: "usa" });
   toast("Joining match…");
 }
 
@@ -9095,12 +9095,12 @@ function animate() {
 
 /* ---------- UI events ---------- */
 
-$("#faction-row").addEventListener("click", (event) => {
+$("#faction-row")?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-faction]");
   if (!btn) return;
-  state.faction = btn.dataset.faction;
+  state.faction = "usa";
   syncFactionButtons();
-  send({ t: "set_faction", faction: state.faction });
+  send({ t: "set_faction", faction: "usa" });
 });
 
 $("#btn-create").addEventListener("click", () => {
@@ -9110,9 +9110,9 @@ $("#btn-create").addEventListener("click", () => {
     max_players: Number($("#max-players").value) || 32,
     map_size: Number($("#map-size").value) || 128,
     ffa: ($("#match-mode")?.value || "ally") === "alone",
-    faction: state.faction || "usa",
+    faction: "usa",
   });
-  toast(`Starting ${String(state.faction || "usa").toUpperCase()} match…`);
+  toast(`Starting USA match…`);
 });
 
 $("#btn-join").addEventListener("click", () => {
