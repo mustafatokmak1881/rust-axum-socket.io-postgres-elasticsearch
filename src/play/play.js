@@ -22,6 +22,7 @@ const state = {
   reconnectAttempt: 0,
   matchEnded: false,
   scoreboard: [],
+  resources: null,
 };
 
 const factionColors = {
@@ -433,17 +434,42 @@ function panCameraTo(lookX, lookZ, quiet) {
 
 function updateResources(res) {
   if (!res) return;
+  state.resources = res;
   $("#res-gold").textContent = res.gold;
   const pwrEl = $("#res-power");
   pwrEl.textContent = `${res.power_used}/${res.power}`;
   pwrEl.classList.toggle("brownout", (res.power_used || 0) > (res.power || 0));
+  const armyEl = $("#res-army");
+  if (armyEl) {
+    armyEl.textContent = `${res.units ?? 0}/${res.units_cap ?? 0}`;
+    armyEl.classList.toggle("cap-full", (res.units ?? 0) >= (res.units_cap ?? 0) && (res.units_cap ?? 0) > 0);
+  }
+  const baseEl = $("#res-base");
+  if (baseEl) {
+    baseEl.textContent = `${res.buildings ?? 0}/${res.buildings_cap ?? 0}`;
+    baseEl.classList.toggle(
+      "cap-full",
+      (res.buildings ?? 0) >= (res.buildings_cap ?? 0) && (res.buildings_cap ?? 0) > 0,
+    );
+  }
+  const totalEl = $("#army-total");
+  if (totalEl && res.units_cap != null) {
+    totalEl.textContent = `${res.units ?? 0}/${res.units_cap}`;
+  }
+  const bldEl = $("#army-buildings");
+  if (bldEl && res.buildings_cap != null) {
+    bldEl.textContent = `${res.buildings ?? 0}/${res.buildings_cap}`;
+  }
+  const basesEl = $("#army-bases");
+  if (basesEl && res.bases != null) {
+    basesEl.textContent = String(res.bases);
+  }
 }
 
 function updateArmyCounts() {
   const you = state.match?.you;
   const infEl = $("#army-inf");
   const tankEl = $("#army-tank");
-  const totalEl = $("#army-total");
   if (!infEl || !tankEl) return;
   let inf = 0;
   let tanks = 0;
@@ -460,7 +486,6 @@ function updateArmyCounts() {
   }
   infEl.textContent = inf;
   tankEl.textContent = tanks;
-  if (totalEl) totalEl.textContent = inf + tanks;
 }
 
 function formatBuildingEconomy(item) {
@@ -567,16 +592,87 @@ function mergeDelta(into, extra) {
   into.tick = extra.tick;
   if (extra.resources) into.resources = extra.resources;
   if (extra.focus_hint) into.focus_hint = extra.focus_hint;
+
+  const gone = new Set([...(into.removed || []), ...(into.died || [])]);
+  for (const id of extra.removed || []) gone.add(id);
+  for (const id of extra.died || []) gone.add(id);
+
   const latest = new Map();
-  for (const entity of into.entities || []) latest.set(entity.id, entity);
-  for (const entity of extra.entities || []) latest.set(entity.id, entity);
+  for (const entity of into.entities || []) {
+    if (!gone.has(entity.id)) latest.set(entity.id, entity);
+  }
+  for (const entity of extra.entities || []) {
+    // Removals/deaths win over stale upserts in the same RAF batch.
+    if (gone.has(entity.id)) continue;
+    latest.set(entity.id, entity);
+  }
   into.entities = [...latest.values()];
+
+  const died = new Set(into.died || []);
+  for (const id of extra.died || []) died.add(id);
+  into.died = [...died];
+
   const removed = new Set(into.removed || []);
   for (const id of extra.removed || []) removed.add(id);
+  for (const id of died) removed.delete(id);
   into.removed = [...removed];
+
   into.shots = [...(into.shots || []), ...(extra.shots || [])];
   if (extra.scoreboard) into.scoreboard = extra.scoreboard;
   if (typeof extra.global_vision === "boolean") into.global_vision = extra.global_vision;
+}
+
+function dropEntityVisual(id, { wreck = false } = {}) {
+  const prev = state.entities.get(id);
+  state.entities.delete(id);
+  const mesh = state.meshes.get(id);
+  const kind = String(prev?.kind || mesh?.userData?.kind || "");
+  if (!mesh) {
+    Sfx.stopBuild(id);
+    Sfx.stopEngine(id);
+    return;
+  }
+  if (wreck) {
+    if (mesh.userData.isInfantry) {
+      mesh.userData.corpse = true;
+      mesh.userData.corpseAt = performance.now();
+      mesh.userData.moving = false;
+      Sfx.stopBuild(id);
+      Sfx.stopEngine(id);
+      return;
+    }
+    if (
+      mesh.userData.isTank ||
+      kind.includes("tank") ||
+      kind.includes("mlrs") ||
+      kind.includes("tomahawk") ||
+      kind.includes("inferno") ||
+      kind.includes("scud") ||
+      kind.includes("overlord") ||
+      kind.includes("battlemaster") ||
+      kind.includes("scorpion") ||
+      kind.includes("paladin") ||
+      kind.includes("marauder")
+    ) {
+      beginTankWreck(mesh, prev?.x ?? mesh.position.x, prev?.y ?? mesh.position.z);
+      Sfx.stopBuild(id);
+      Sfx.stopEngine(id);
+      return;
+    }
+    if (prev?.building || mesh.userData.building) {
+      beginBuildingWreck(
+        mesh,
+        prev?.x ?? mesh.position.x,
+        prev?.y ?? mesh.position.z,
+        kind,
+      );
+      Sfx.stopBuild(id);
+      return;
+    }
+  }
+  reapUnitMesh(mesh);
+  Sfx.stopBuild(id);
+  Sfx.stopEngine(id);
 }
 
 function applyDelta(msg) {
@@ -604,56 +700,38 @@ function applyDelta(msg) {
   }
   applyExploredNew(msg.explored_new);
 
-  const tankHits = (msg.shots || []).filter(
-    (s) => s.hit !== false && String(s.kind || "").includes("tank") && s.x1 != null && s.y1 != null,
-  );
-  for (const id of msg.removed || []) {
-    const prev = state.entities.get(id);
-    state.entities.delete(id);
-    const mesh = state.meshes.get(id);
-    const kind = String(prev?.kind || mesh?.userData?.kind || "");
-    const nearHe =
-      mesh?.userData?.isInfantry &&
-      tankHits.some((s) => Math.hypot(mesh.position.x - s.x1, mesh.position.z - s.y1) <= 1.35);
-    if (nearHe) {
-      mesh.userData.corpse = true;
-      mesh.userData.corpseAt = performance.now();
-      mesh.userData.moving = false;
-      continue;
-    }
-    if (mesh && (mesh.userData.isTank || kind.includes("tank") || kind.includes("mlrs"))) {
-      beginTankWreck(mesh, prev?.x ?? mesh.position.x, prev?.y ?? mesh.position.z);
-      Sfx.stopBuild(id);
-      Sfx.stopEngine(id);
-      continue;
-    }
-    if (mesh && (prev?.building || mesh.userData.building)) {
-      beginBuildingWreck(
-        mesh,
-        prev?.x ?? mesh.position.x,
-        prev?.y ?? mesh.position.z,
-        kind,
-      );
-      Sfx.stopBuild(id);
-      continue;
-    }
-    reapUnitMesh(mesh);
-    Sfx.stopBuild(id);
-    Sfx.stopEngine(id);
-  }
-  // Collapse SFX is triggered inside beginBuildingWreck.
+  const diedSet = new Set(msg.died || []);
+  const removedSet = new Set(msg.removed || []);
+  const gone = new Set([...diedSet, ...removedSet]);
 
-  if (msg.removed?.length) {
-    const dead = new Set(msg.removed);
+  for (const id of diedSet) {
+    dropEntityVisual(id, { wreck: true });
+  }
+  for (const id of removedSet) {
+    if (diedSet.has(id)) continue;
+    dropEntityVisual(id, { wreck: false });
+  }
+
+  if (gone.size) {
     const before = state.selectedUnits.length;
-    state.selectedUnits = state.selectedUnits.filter((id) => !dead.has(id));
+    state.selectedUnits = state.selectedUnits.filter((id) => !gone.has(id));
     if (state.selectedUnits.length !== before) syncSelectionMarkers();
-    if (dead.has(state.selectedBuilding)) {
+    if (gone.has(state.selectedBuilding)) {
       state.selectedBuilding = null;
       refreshTrainablePanel();
     }
   }
   for (const entity of msg.entities || []) {
+    if (gone.has(entity.id)) continue;
+    if (entity.hp != null && entity.hp <= 0) {
+      dropEntityVisual(entity.id, { wreck: true });
+      continue;
+    }
+    // Revive path: clear stale wreck/corpse flags if server still has the unit.
+    const existing = state.meshes.get(entity.id);
+    if (existing?.userData?.wreck || existing?.userData?.corpse) {
+      reapUnitMesh(existing);
+    }
     const prev = state.entities.get(entity.id);
     state.entities.set(entity.id, entity);
     if (scene) upsertMesh(entity);
@@ -7921,6 +7999,18 @@ function animate() {
   updateTankCrushVisuals(now);
   const reap = [];
   for (const mesh of state.meshes.values()) {
+    const mid = mesh.userData?.id;
+    // Orphan meshes: server entity gone, not a timed wreck/corpse FX.
+    if (
+      mid &&
+      !state.entities.has(mid) &&
+      !mesh.userData.wreck &&
+      !mesh.userData.corpse &&
+      !mesh.userData.knock
+    ) {
+      reap.push(mesh);
+      continue;
+    }
     if (mesh.userData.knock) {
       updateKnockPhysics(mesh, dt);
       if (mesh.userData.corpse && !mesh.userData.knock) reap.push(mesh);

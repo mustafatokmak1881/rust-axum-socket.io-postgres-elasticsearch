@@ -94,7 +94,11 @@ pub enum ServerMsg {
     Delta {
         tick: u64,
         entities: Vec<EntityView>,
+        /// Left this viewer's FOW / AOI (hide mesh — not a death).
         removed: Vec<Uuid>,
+        /// Actually destroyed this tick (wreck FX). Distinct from FOW leave.
+        #[serde(default)]
+        died: Vec<Uuid>,
         resources: Option<ResourcesView>,
         focus_hint: Option<[f32; 2]>,
         /// Newly explored cell indices (y * map_size + x).
@@ -211,6 +215,21 @@ pub struct ResourcesView {
     pub gold: i32,
     pub power: i32,
     pub power_used: i32,
+    /// Living + queued army size.
+    #[serde(default)]
+    pub units: u32,
+    /// Max army from owned HQs: home + home/2 per extra base.
+    #[serde(default)]
+    pub units_cap: u32,
+    /// Non-HQ buildings (finished + under construction).
+    #[serde(default)]
+    pub buildings: u32,
+    /// Max structures from owned HQs (same x + x/2 rule).
+    #[serde(default)]
+    pub buildings_cap: u32,
+    /// Living command centers owned.
+    #[serde(default)]
+    pub bases: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

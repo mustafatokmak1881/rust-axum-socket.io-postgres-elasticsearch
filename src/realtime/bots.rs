@@ -1379,6 +1379,13 @@ fn try_place_away(
 }
 
 fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: bool) {
+    // At most one unit in training across the whole base.
+    if sim.entities.values().any(|e| {
+        e.owner == bot_id && e.building && e.hp > 0.0 && !e.train_queue.is_empty()
+    }) {
+        return;
+    }
+
     let faction = sim
         .players
         .get(&bot_id)
@@ -1444,7 +1451,7 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
                 && e.kind == inf_bldg
                 && e.build_remaining_ms == 0
                 && e.hp > 0.0
-                && e.train_queue.len() < 2
+                && e.train_queue.is_empty()
         })
         .map(|e| e.id)
         .collect();
@@ -1465,16 +1472,18 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
         let heavies = count_units(sim, bot_id, |k| k == heavy_unit);
         if heavies < style.abrams_cap() && (threatened || mbt >= 2) {
             if sim.train_unit(bot_id, id, heavy_unit).is_ok() {
-                continue;
+                return;
             }
         }
         if mbt < style.tank_cap() {
             if sim.train_unit(bot_id, id, mbt_unit).is_ok() {
-                continue;
+                return;
             }
         }
         if support < style.mlrs_cap() && mbt >= 3 {
-            let _ = sim.train_unit(bot_id, id, arty_unit);
+            if sim.train_unit(bot_id, id, arty_unit).is_ok() {
+                return;
+            }
         }
     }
     for id in barracks {
@@ -1488,11 +1497,12 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
                 _ => "missile_defender",
             };
             if sim.train_unit(bot_id, id, rocket_unit).is_ok() {
-                continue;
+                return;
             }
         }
         if infantry < style.ranger_cap() && mbt >= infantry {
             let _ = sim.train_unit(bot_id, id, scout_unit);
+            return;
         }
     }
 }

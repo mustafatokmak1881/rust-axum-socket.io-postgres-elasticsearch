@@ -204,8 +204,9 @@ input {
 
 .army-stat { color: #8a9a78; }
 .army-stat b { color: #fff4ce; margin-left: 5px; font-size: 16px; }
-.army-stat.total { color: var(--warn); }
-.army-stat.total b { color: var(--warn); }
+.top-hud .resources b.cap-full {
+  color: #ff8866;
+}
 
 #viewport {
   position: absolute;

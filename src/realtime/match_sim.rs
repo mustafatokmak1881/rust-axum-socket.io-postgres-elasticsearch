@@ -18,10 +18,14 @@ pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 16;
 
-/// Total living+queued units at the home HQ.
+/// Total living+queued units with a single home HQ.
 pub const HOME_UNIT_BUDGET: usize = 36;
-/// Extra total units unlocked per captured colony HQ.
-pub const COLONY_UNIT_BUDGET: usize = 18;
+/// Extra units per captured colony HQ (= half of home → x + x/2 + x/2 …).
+pub const COLONY_UNIT_BUDGET: usize = HOME_UNIT_BUDGET / 2;
+/// Non-HQ structures allowed at the home base.
+pub const HOME_BUILDING_BUDGET: usize = 12;
+/// Extra structures unlocked per captured colony HQ (= half of home).
+pub const COLONY_BUILDING_BUDGET: usize = HOME_BUILDING_BUDGET / 2;
 /// Wipe / claim radius around a fallen HQ (city footprint).
 pub const CITY_CLAIM_RADIUS: f32 = 14.0;
 
@@ -129,6 +133,11 @@ impl Resources {
             gold: self.gold,
             power: self.power,
             power_used: self.power_used,
+            units: 0,
+            units_cap: 0,
+            buildings: 0,
+            buildings_cap: 0,
+            bases: 0,
         }
     }
 }
@@ -822,10 +831,6 @@ impl MatchSim {
             last_hit_by: None,
         });
         self.spawn_starting_force(user_id, team, x, y);
-        // Command Center base power — enough for a barracks + supply before a plant.
-        if let Some(player) = self.players.get_mut(&user_id) {
-            player.resources.power = player.resources.power.saturating_add(40);
-        }
         self.reveal_vision_for(user_id);
     }
 
@@ -929,37 +934,171 @@ impl MatchSim {
         self.players.values().filter(|p| !p.is_bot()).count()
     }
 
-    /// Light opening force — faction MBT so lobbies stay tank-first.
+    /// Faction opening base + army (same package for humans and bots).
+    /// Buildings match that faction's roster (USA / China / GLA).
     fn spawn_starting_force(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
         let faction = self
             .players
             .get(&user_id)
             .map(|p| p.faction.as_str())
-            .unwrap_or("usa");
-        let starter = match faction {
-            "china" => "battlemaster",
-            "gla" => "scorpion_tank",
-            _ => "tank",
-        };
+            .unwrap_or("usa")
+            .to_string();
+
+        // HQ provides a small base load; plants/reactors add the rest.
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.resources.power = player.resources.power.saturating_add(40);
+        }
+
+        let (power_kind, supply_kind, factory_kind, tank_unit, infantry_unit) =
+            match faction.as_str() {
+                "china" => (
+                    Some("nuclear_reactor"),
+                    "supply",
+                    "war_factory",
+                    "battlemaster",
+                    "red_guard",
+                ),
+                "gla" => (None, "supply_stash", "arms_dealer", "scorpion_tank", "rebel"),
+                _ => (
+                    Some("power_plant"),
+                    "supply",
+                    "war_factory",
+                    "tank",
+                    "ranger",
+                ),
+            };
+
+        // Ring of finished starter structures around the Command Center.
+        let mut slots: Vec<(&str, f32, f32)> = Vec::new();
+        if let Some(pk) = power_kind {
+            slots.push((pk, 3.2, 0.4));
+        }
+        slots.push((supply_kind, 2.6, 2.0));
+        slots.push(("barracks", 0.2, 3.4));
+        slots.push((factory_kind, -2.8, 2.2));
+
+        for (kind, ox, oy) in slots {
+            self.spawn_finished_building(user_id, team, &faction, kind, hx + ox, hy + oy);
+        }
+
         let tank = trainables()
             .iter()
-            .find(|u| u.unit == starter && faction_ok(u.faction, faction))
-            .or_else(|| trainables().iter().find(|u| u.unit == "tank"))
-            .expect("starter tank def");
+            .find(|u| u.unit == tank_unit && faction_ok(u.faction, &faction))
+            .or_else(|| trainables().iter().find(|u| u.unit == "tank"));
+        let infantry = trainables()
+            .iter()
+            .find(|u| u.unit == infantry_unit && faction_ok(u.faction, &faction));
+
         let hq_r = building_radius("hq");
-        let tr = unit_radius(tank.unit);
-        let map = self.map_size as f32;
-        let pack_x = (hx + hq_r + tr + 0.35).clamp(0.5, map - 0.5);
-        let pack_y = hy.clamp(0.5, map - 0.5);
-        let mut sx = pack_x;
-        let mut sy = pack_y;
-        if self.collides_at(Uuid::nil(), sx, sy, tr, None, true)
-            || self.point_hits_solid(sx, sy, tr, hx, hy, hq_r)
-        {
-            (sx, sy) =
-                self.find_free_spawn_near(pack_x, pack_y, tr, Uuid::nil(), Some((hx, hy, hq_r)));
+        let unit_offsets: &[(f32, f32)] = &[
+            (4.0, 0.0),
+            (4.2, 1.1),
+            (3.6, -1.0),
+            (5.0, 0.5),
+            (4.6, -0.8),
+        ];
+        for (i, &(ox, oy)) in unit_offsets.iter().enumerate() {
+            let def = if i == 0 {
+                tank
+            } else {
+                infantry.or(tank)
+            };
+            let Some(def) = def else { continue };
+            let tr = unit_radius(def.unit);
+            let map = self.map_size as f32;
+            let pack_x = (hx + ox).clamp(0.5, map - 0.5);
+            let pack_y = (hy + oy).clamp(0.5, map - 0.5);
+            let (sx, sy) = if self.collides_at(Uuid::nil(), pack_x, pack_y, tr, None, true)
+                || self.point_hits_solid(pack_x, pack_y, tr, hx, hy, hq_r)
+            {
+                self.find_free_spawn_near(
+                    pack_x,
+                    pack_y,
+                    tr,
+                    Uuid::nil(),
+                    Some((hx, hy, hq_r)),
+                )
+            } else {
+                (pack_x, pack_y)
+            };
+            self.insert_unit(user_id, team, def, sx, sy);
         }
-        self.insert_unit(user_id, team, tank, sx, sy);
+    }
+
+    /// Instant finished building for opening bases (no gold charge).
+    fn spawn_finished_building(
+        &mut self,
+        owner: Uuid,
+        team: u8,
+        faction: &str,
+        kind: &str,
+        x: f32,
+        y: f32,
+    ) {
+        let Some(def) = buildables()
+            .iter()
+            .find(|b| b.kind == kind && faction_ok(b.faction, faction))
+        else {
+            return;
+        };
+        let map = self.map_size as f32;
+        let br = building_radius(kind);
+        let fx = x.clamp(1.0, map - 1.0);
+        let fy = y.clamp(1.0, map - 1.0);
+        let (px, py) = if self.collides_at(Uuid::nil(), fx, fy, br, None, true) {
+            self.find_free_spawn_near(fx, fy, br, Uuid::nil(), None)
+        } else {
+            (fx, fy)
+        };
+
+        let flag = self.players.get(&owner).and_then(|p| p.flag.clone());
+        let id = Uuid::new_v4();
+        let (damage, range, mag) = match def.kind {
+            "turret" | "stinger_site" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
+            "bunker" | "tunnel_network" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
+            "gatling_cannon" | "firebase" => (55.0, 9.0, 60u8),
+            _ => (0.0, 0.0, 0u8),
+        };
+        self.put_entity(Entity {
+            id,
+            kind: def.kind.into(),
+            owner,
+            team,
+            x: px,
+            y: py,
+            hp: def.hp,
+            max_hp: def.hp,
+            building: true,
+            unit: false,
+            flag,
+            build_remaining_ms: 0,
+            train_queue: VecDeque::new(),
+            target: None,
+            move_to: None,
+            speed: 0.0,
+            damage,
+            range,
+            attack_cooldown_ms: 0,
+            mag_ammo: mag,
+            dirty: true,
+            stuck_frames: 0,
+            detour: None,
+            detour_ttl: 0,
+            last_escape_ang: 0.0,
+            prone: false,
+            prone_until_tick: 0,
+            aim_yaw: 0.0,
+            mg_cooldown_ms: 0,
+            last_hit_by: None,
+        });
+
+        if let Some(player) = self.players.get_mut(&owner) {
+            if def.power > 0 {
+                player.resources.power = player.resources.power.saturating_add(def.power);
+            } else if def.power < 0 {
+                player.resources.power_used += -def.power;
+            }
+        }
     }
 
     fn point_hits_solid(&self, x: f32, y: f32, r: f32, sx: f32, sy: f32, sr: f32) -> bool {
@@ -1077,7 +1216,7 @@ impl MatchSim {
             global_vision: self.player_has_global_vision(user_id),
             focus,
             explored: player.explored.to_bytes(),
-            resources: player.resources.view(),
+            resources: self.resources_view_for(user_id).unwrap_or_else(|| player.resources.view()),
             entities,
             buildable: Self::buildable_info_for(&player.faction),
             trainable: Self::trainable_info_for(&player.faction),
@@ -1223,11 +1362,13 @@ impl MatchSim {
             .ok_or("Unknown building")?;
         let my_team = self.players.get(&user_id).map(|p| p.team).unwrap_or(0);
 
-        // One construction at a time — bots and humans both.
-        if self.entities.values().any(|e| {
-            e.owner == user_id && e.building && e.hp > 0.0 && e.build_remaining_ms > 0
-        }) {
-            return Err("Already constructing a building");
+        // One construction at a time — bots and humans both (Generals dozer rule).
+        if self
+            .entities
+            .values()
+            .any(|e| e.owner == user_id && e.building && e.hp > 0.0 && e.build_remaining_ms > 0)
+        {
+            return Err("Already constructing — finish the current building first");
         }
 
         let fx = x as f32 + 0.5;
@@ -1312,6 +1453,12 @@ impl MatchSim {
         });
         if in_enemy_land {
             return Err("Enemy territory");
+        }
+
+        let buildings = self.count_buildings_for(user_id);
+        let building_cap = self.building_budget_for(user_id);
+        if buildings >= building_cap {
+            return Err("Building limit — capture another HQ for more slots");
         }
 
         let player = self.players.get_mut(&user_id).ok_or("Not in match")?;
@@ -1422,7 +1569,7 @@ impl MatchSim {
         let budget = self.unit_budget_for(user_id);
         let total = self.count_all_units_with_queue(user_id);
         if total >= budget {
-            return Err("Colony unit budget full");
+            return Err("Unit limit — capture another HQ for more army slots");
         }
 
         let player = self.players.get_mut(&user_id).unwrap();
@@ -1474,17 +1621,53 @@ impl MatchSim {
         living + queued
     }
 
-    /// Home 50 + 25 per extra HQ (colony).
-    pub fn unit_budget_for(&self, owner: Uuid) -> usize {
-        let hqs = self
-            .entities
+    fn count_buildings_for(&self, owner: Uuid) -> usize {
+        self.entities
+            .values()
+            .filter(|e| {
+                e.owner == owner && e.building && e.hp > 0.0 && e.kind != "hq"
+            })
+            .count()
+    }
+
+    fn hq_count_for(&self, owner: Uuid) -> usize {
+        self.entities
             .values()
             .filter(|e| e.owner == owner && e.kind == "hq" && e.hp > 0.0)
-            .count();
+            .count()
+    }
+
+    /// Home X + X/2 per extra HQ (colony). No HQ → no train rights.
+    pub fn unit_budget_for(&self, owner: Uuid) -> usize {
+        let hqs = self.hq_count_for(owner);
         if hqs == 0 {
             return 0;
         }
         HOME_UNIT_BUDGET + COLONY_UNIT_BUDGET.saturating_mul(hqs.saturating_sub(1))
+    }
+
+    /// Same x + x/2 rule for non-HQ structures.
+    pub fn building_budget_for(&self, owner: Uuid) -> usize {
+        let hqs = self.hq_count_for(owner);
+        if hqs == 0 {
+            return 0;
+        }
+        HOME_BUILDING_BUDGET + COLONY_BUILDING_BUDGET.saturating_mul(hqs.saturating_sub(1))
+    }
+
+    pub fn resources_view_for(&self, user_id: Uuid) -> Option<ResourcesView> {
+        let player = self.players.get(&user_id)?;
+        let bases = self.hq_count_for(user_id);
+        Some(ResourcesView {
+            gold: player.resources.gold,
+            power: player.resources.power,
+            power_used: player.resources.power_used,
+            units: self.count_all_units_with_queue(user_id) as u32,
+            units_cap: self.unit_budget_for(user_id) as u32,
+            buildings: self.count_buildings_for(user_id) as u32,
+            buildings_cap: self.building_budget_for(user_id) as u32,
+            bases: bases as u32,
+        })
     }
 
     pub fn move_units(&mut self, user_id: Uuid, ids: &[Uuid], x: f32, y: f32) {
@@ -3980,6 +4163,7 @@ impl MatchSim {
     ) -> (
         Vec<EntityView>,
         Vec<Uuid>,
+        Vec<Uuid>,
         Option<ResourcesView>,
         Vec<u16>,
         Vec<ShotEvent>,
@@ -3992,10 +4176,10 @@ impl MatchSim {
             explored_new.truncate(MAX_EXPLORED_NEW);
         }
 
+        let resources = self.resources_view_for(user_id);
         let Some(player) = self.players.get_mut(&user_id) else {
-            return (vec![], vec![], None, explored_new, vec![]);
+            return (vec![], vec![], vec![], None, explored_new, vec![]);
         };
-        let resources = Some(player.resources.view());
         let previously_known = std::mem::take(&mut player.aoi_known);
 
         let visible_ids = self.visible_ids_for(user_id);
@@ -4016,16 +4200,21 @@ impl MatchSim {
             }
         }
 
-        // Only report removals the client could have known about (FOW-aware).
-        let mut removed = Vec::new();
+        // Deaths vs FOW leave must stay distinct — client wrecks only real kills.
+        let death_set: HashSet<Uuid> = self.removed.iter().copied().collect();
+        let mut died = Vec::new();
         for id in &self.removed {
             if previously_known.contains(id) {
-                removed.push(*id);
+                died.push(*id);
             }
         }
+        let mut removed = Vec::new();
         for id in previously_known.difference(&visible_ids) {
             // Keep own units in AOI set even if somehow filtered — never ghost-drop them.
             if self.entities.get(id).is_some_and(|e| e.owner == user_id) {
+                continue;
+            }
+            if death_set.contains(id) {
                 continue;
             }
             removed.push(*id);
@@ -4052,7 +4241,7 @@ impl MatchSim {
             player.aoi_known = known;
         }
 
-        (entities, removed, resources, explored_new, shots)
+        (entities, removed, died, resources, explored_new, shots)
     }
 
     /// After reconnect, force the next deltas to re-send everything currently visible.

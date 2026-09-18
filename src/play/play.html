@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a2614'/%3E%3Cpath d='M8 22 V10 h4 l4 8 4-8 h4 v12 h-3.2 V14.5 L16.5 22 h-1L11.2 14.5 V22z' fill='%237cfc00'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/play.css?v=buildCostHud">
+  <link rel="stylesheet" href="/assets/play.css?v=armyCapHud">
   <script type="importmap">
   {
     "imports": {
@@ -24,6 +24,8 @@
       <div class="resources" id="resources">
         <span>GOLD <b id="res-gold">—</b></span>
         <span>PWR <b id="res-power">—</b></span>
+        <span title="Army slots · +half per captured HQ">ARMY <b id="res-army">—</b></span>
+        <span title="Building slots · +half per captured HQ">BASE <b id="res-base">—</b></span>
       </div>
       <div class="user-chip">
         <span id="user-name">Commander</span>
@@ -81,7 +83,9 @@
       <div class="army-hud" id="army-hud" aria-label="Own army">
         <span class="army-stat">ASK <b id="army-inf">0</b></span>
         <span class="army-stat">TANK <b id="army-tank">0</b></span>
-        <span class="army-stat total">TOPLAM <b id="army-total">0</b></span>
+        <span class="army-stat total">BİRİM <b id="army-total">0/36</b></span>
+        <span class="army-stat">BİNA <b id="army-buildings">0/12</b></span>
+        <span class="army-stat">ÜS <b id="army-bases">1</b></span>
       </div>
 
       <div class="match-dock">
@@ -137,6 +141,6 @@
     </section>
   </div>
 
-  <script type="module" src="/assets/play.js?v=tankTurnFix2"></script>
+  <script type="module" src="/assets/play.js?v=armyCapHud"></script>
 </body>
 </html>

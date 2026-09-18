@@ -253,13 +253,13 @@ impl MatchHub {
                     .get(&match_id)
                     .map(|e| e.clone())
                     .ok_or("Match missing")?;
-                let (tick, entities, removed, resources, explored_new, shots, global_vision) = {
+                let (tick, entities, removed, died, resources, explored_new, shots, global_vision) = {
                     let mut rt = runtime.write().await;
                     let on = rt.sim.toggle_debug_vision(user_id);
                     let tick = rt.sim.tick;
-                    let (entities, removed, resources, explored_new, shots) =
+                    let (entities, removed, died, resources, explored_new, shots) =
                         rt.sim.delta_for(user_id);
-                    (tick, entities, removed, resources, explored_new, shots, on)
+                    (tick, entities, removed, died, resources, explored_new, shots, on)
                 };
                 self.send(
                     user_id,
@@ -267,6 +267,7 @@ impl MatchHub {
                         tick,
                         entities,
                         removed,
+                        died,
                         resources,
                         focus_hint: None,
                         explored_new,
@@ -481,7 +482,7 @@ impl MatchHub {
                                 // Offline commanders: no WS payload, no vision stamp.
                                 continue;
                             }
-                            let (entities, removed, resources, explored_new, shots) =
+                            let (entities, removed, died, resources, explored_new, shots) =
                                 rt.sim.delta_for(uid);
                             // Scoreboard is Tab-only chrome — every 2s is enough.
                             let scoreboard = if tick % (match_sim::TICK_HZ as u64 * 2) == 0 {
@@ -493,6 +494,7 @@ impl MatchHub {
                             // Skip empty heartbeats when nothing in this FOW window changed.
                             if entities.is_empty()
                                 && removed.is_empty()
+                                && died.is_empty()
                                 && explored_new.is_empty()
                                 && shots.is_empty()
                                 && scoreboard.is_none()
@@ -509,6 +511,7 @@ impl MatchHub {
                                     tick,
                                     entities,
                                     removed,
+                                    died,
                                     resources,
                                     focus_hint: None,
                                     explored_new,

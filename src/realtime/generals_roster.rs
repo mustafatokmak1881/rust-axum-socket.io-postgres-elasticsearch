@@ -392,7 +392,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_800.0,
             damage: 520.0,
             speed: 0.38,
-            range: 16.0,
+            range: 8.0,
             attack_ms: 8_500,
         },
         UnitDef {
@@ -418,7 +418,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_200.0,
             damage: 420.0,
             speed: 0.42,
-            range: 17.0,
+            range: 8.5,
             attack_ms: 9_200,
         },
         // ——— USA air (ground-sim for now; client flies them) ———
@@ -564,7 +564,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_000.0,
             damage: 480.0,
             speed: 0.36,
-            range: 14.0,
+            range: 7.0,
             attack_ms: 6_500,
         },
         UnitDef {
@@ -787,7 +787,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_600.0,
             damage: 600.0,
             speed: 0.34,
-            range: 15.0,
+            range: 7.5,
             attack_ms: 9_000,
         },
         UnitDef {
