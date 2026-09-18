@@ -821,7 +821,8 @@ pub fn trainables() -> &'static [UnitDef] {
     ]
 }
 
-/// Soft population caps — keep lobbies tank-heavy (tuned for ~8 AI).
+/// Soft per-type caps (unused for training — HQ army budget is the sole gate).
+#[allow(dead_code)]
 pub fn army_cap_for(unit: &str) -> usize {
     match unit {
         "ranger" | "red_guard" | "rebel" => 8,

@@ -12,8 +12,6 @@ use super::protocol::{
     BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
 };
 
-pub use generals_roster::army_cap_for;
-
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 16;
@@ -1569,11 +1567,7 @@ impl MatchSim {
             return Err("Wrong building type");
         }
 
-        let cap = army_cap_for(def.unit);
-        let owned = self.count_unit_kind_with_queue(user_id, def.unit);
-        if owned >= cap {
-            return Err("Army cap reached");
-        }
+        // Only HQ-scaled army budget (shown on HUD as units/units_cap).
         let budget = self.unit_budget_for(user_id);
         let total = self.count_all_units_with_queue(user_id);
         if total >= budget {
@@ -1597,21 +1591,6 @@ impl MatchSim {
         });
         building.dirty = true;
         Ok(())
-    }
-
-    fn count_unit_kind_with_queue(&self, owner: Uuid, unit: &str) -> usize {
-        let living = self
-            .entities
-            .values()
-            .filter(|e| e.owner == owner && e.unit && e.hp > 0.0 && e.kind == unit)
-            .count();
-        let queued = self
-            .entities
-            .values()
-            .filter(|e| e.owner == owner && e.building && e.hp > 0.0)
-            .map(|e| e.train_queue.iter().filter(|j| j.unit == unit).count())
-            .sum::<usize>();
-        living + queued
     }
 
     fn count_all_units_with_queue(&self, owner: Uuid) -> usize {
