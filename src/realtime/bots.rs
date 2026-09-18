@@ -1,13 +1,14 @@
-//! Opening computer commanders: five nations that attack and defend on their own.
+//! Opening computer commanders that attack and defend on their own.
 
 use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
 use super::grid::MAX_ENTITY_RADIUS;
-use super::match_sim::{building_radius, MatchSim};
+use super::match_sim::{building_radius, MatchSim, MAX_PLAYERS};
 
-pub const OPENING_BOT_COUNT: usize = 5;
+/// Fill a solo create toward a full 10-commander lobby (1 human + 9 bots).
+pub const OPENING_BOT_COUNT: usize = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotStyle {
@@ -72,6 +73,30 @@ const PROFILES: [BotProfile; OPENING_BOT_COUNT] = [
         country: "Russia",
         faction: "china",
         style: BotStyle::Counter,
+    },
+    BotProfile {
+        name: "Okada",
+        country: "Japan",
+        faction: "usa",
+        style: BotStyle::Balanced,
+    },
+    BotProfile {
+        name: "Moreau",
+        country: "France",
+        faction: "china",
+        style: BotStyle::Aggressive,
+    },
+    BotProfile {
+        name: "Hassan",
+        country: "GLA",
+        faction: "gla",
+        style: BotStyle::Defensive,
+    },
+    BotProfile {
+        name: "Novak",
+        country: "Serbia",
+        faction: "china",
+        style: BotStyle::Reckless,
     },
 ];
 
@@ -229,7 +254,7 @@ impl BotStyle {
 
 pub fn seed_opening_bots(sim: &mut MatchSim) {
     for profile in &PROFILES {
-        if sim.players.len() >= 100 {
+        if sim.players.len() >= MAX_PLAYERS as usize {
             break;
         }
         let id = Uuid::new_v4();

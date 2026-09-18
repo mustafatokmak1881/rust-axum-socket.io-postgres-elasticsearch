@@ -14,7 +14,7 @@ use super::protocol::{
 
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
-pub const MAX_PLAYERS: u8 = 100;
+pub const MAX_PLAYERS: u8 = 10;
 
 #[derive(Clone, Debug)]
 pub struct PlayerState {
@@ -976,83 +976,19 @@ impl MatchSim {
         self.players.values().filter(|p| !p.is_bot()).count()
     }
 
-    /// Opening force: mixed army + finished defense ring around the HQ.
+    /// Light opening squad — keeps entity count low for 10-commander matches.
     fn spawn_starting_force(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
         let ranger = trainables()
             .iter()
             .find(|u| u.unit == "ranger")
             .expect("ranger def");
-        let mortar = trainables()
-            .iter()
-            .find(|u| u.unit == "mortar")
-            .expect("mortar def");
-        let tank = trainables()
-            .iter()
-            .find(|u| u.unit == "tank")
-            .expect("tank def");
-        let mlrs = trainables()
-            .iter()
-            .find(|u| u.unit == "mlrs")
-            .expect("mlrs def");
-
-        // Defense buildings first so the unit packs fill gaps around them.
-        self.spawn_starting_defenses(user_id, team, hx, hy);
-
         let hq_r = building_radius("hq");
+        let r = unit_radius(ranger.unit);
         let map = self.map_size as f32;
-        let east = (hx + hq_r + 0.55).clamp(0.5, map - 0.5);
-        let north = (hy + hq_r + 0.55).clamp(0.5, map - 0.5);
-        let west = (hx - hq_r - 0.55).clamp(0.5, map - 0.5);
-        let south = (hy - hq_r - 0.55).clamp(0.5, map - 0.5);
-
-        self.spawn_unit_batch(user_id, team, ranger, 30, east, hy, hx, hy, hq_r);
-        self.spawn_unit_batch(user_id, team, mortar, 20, hx, south, hx, hy, hq_r);
-        self.spawn_unit_batch(user_id, team, tank, 20, west, north, hx, hy, hq_r);
-        self.spawn_unit_batch(user_id, team, mlrs, 5, west, hy, hx, hy, hq_r);
-    }
-
-    /// 3× Patriot + 3× MG bunker + 3× radar, finished and powered, in a ring around HQ.
-    fn spawn_starting_defenses(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
-        const KINDS: [&str; 3] = ["turret", "bunker", "radar"];
-        const EACH: usize = 3;
-        let hq_r = building_radius("hq");
-        let map = self.map_size as f32;
-        let total = KINDS.len() * EACH;
-        for (slot, &kind) in KINDS.iter().cycle().take(total).enumerate() {
-            let def = buildables()
-                .iter()
-                .find(|b| b.kind == kind)
-                .expect("defense build def");
-            let br = building_radius(kind);
-            let ring = hq_r + br + 1.35 + (slot % EACH) as f32 * 0.55;
-            let ang = (slot as f32) * (std::f32::consts::TAU / total as f32) + 0.35;
-            let mut sx = (hx + ang.cos() * ring).clamp(1.0, map - 1.0);
-            let mut sy = (hy + ang.sin() * ring).clamp(1.0, map - 1.0);
-            if self.collides_at(Uuid::nil(), sx, sy, br, None, true)
-                || self.point_hits_solid(sx, sy, br, hx, hy, hq_r)
-            {
-                (sx, sy) =
-                    self.find_free_spawn_near(sx, sy, br, Uuid::nil(), Some((hx, hy, hq_r)));
-            }
-            self.insert_finished_building(user_id, team, def, sx, sy);
-        }
-    }
-
-    fn spawn_unit_batch(
-        &mut self,
-        user_id: Uuid,
-        team: u8,
-        def: &UnitDef,
-        count: usize,
-        pack_x: f32,
-        pack_y: f32,
-        hx: f32,
-        hy: f32,
-        hq_r: f32,
-    ) {
-        let r = unit_radius(def.unit);
-        let map = self.map_size as f32;
-        for i in 0..count {
+        let pack_x = (hx + hq_r + r + 0.28).clamp(0.5, map - 0.5);
+        let pack_y = hy.clamp(0.5, map - 0.5);
+        const N: usize = 5;
+        for i in 0..N {
             let (ox, oy) = tight_pack_slot(i, r);
             let mut sx = (pack_x + ox).clamp(0.5, map - 0.5);
             let mut sy = (pack_y + oy).clamp(0.5, map - 0.5);
@@ -1067,61 +1003,8 @@ impl MatchSim {
                     Some((hx, hy, hq_r)),
                 );
             }
-            self.insert_unit(user_id, team, def, sx, sy);
+            self.insert_unit(user_id, team, ranger, sx, sy);
         }
-    }
-
-    fn insert_finished_building(
-        &mut self,
-        owner: Uuid,
-        team: u8,
-        def: &BuildDef,
-        x: f32,
-        y: f32,
-    ) {
-        if def.power < 0 {
-            if let Some(player) = self.players.get_mut(&owner) {
-                player.resources.power_used += -def.power;
-            }
-        }
-        let flag = self.players.get(&owner).and_then(|p| p.flag.clone());
-        let (damage, range, mag) = match def.kind {
-            "turret" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
-            "bunker" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
-            _ => (0.0, 0.0, 0u8),
-        };
-        let id = Uuid::new_v4();
-        self.put_entity(Entity {
-            id,
-            kind: def.kind.into(),
-            owner,
-            team,
-            x,
-            y,
-            hp: def.hp,
-            max_hp: def.hp,
-            building: true,
-            unit: false,
-            flag,
-            build_remaining_ms: 0,
-            train_queue: VecDeque::new(),
-            target: None,
-            move_to: None,
-            speed: 0.0,
-            damage,
-            range,
-            attack_cooldown_ms: 0,
-            mag_ammo: mag,
-            dirty: true,
-            stuck_frames: 0,
-            detour: None,
-            detour_ttl: 0,
-            last_escape_ang: 0.0,
-            prone: false,
-            prone_until_tick: 0,
-            aim_yaw: 0.0,
-            mg_cooldown_ms: 0,
-        });
     }
 
     fn point_hits_solid(&self, x: f32, y: f32, r: f32, sx: f32, sy: f32, sr: f32) -> bool {

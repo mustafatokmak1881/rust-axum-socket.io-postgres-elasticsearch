@@ -6619,7 +6619,7 @@ $("#btn-create").addEventListener("click", () => {
   send({ t: "set_faction", faction: state.faction });
   send({
     t: "create_lobby",
-    max_players: Number($("#max-players").value) || 16,
+    max_players: Number($("#max-players").value) || 10,
     map_size: Number($("#map-size").value) || 192,
     ffa: $("#ffa").checked,
   });
