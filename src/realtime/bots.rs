@@ -251,7 +251,7 @@ pub fn seed_opening_bots(sim: &mut MatchSim, target_players: usize) {
         let team = if sim.ffa {
             80 + sim.players.values().filter(|p| p.is_bot()).count() as u8
         } else {
-            // Balance toward 50/50 — final west/east split happens in rebalance_allied_teams.
+            // Balance toward 50/50 — final random team split happens in rebalance_allied_teams.
             sim.pick_allied_team()
         };
         let name = if batch == 0 {

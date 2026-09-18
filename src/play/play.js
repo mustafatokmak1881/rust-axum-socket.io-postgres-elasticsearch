@@ -24,6 +24,7 @@ const state = {
   scoreboard: [],
   resources: null,
   ponds: [],
+  mountains: [],
 };
 
 const factionColors = {
@@ -357,6 +358,7 @@ function enterMatch(snapshot) {
   state.match = snapshot;
   state.scoreboard = snapshot.scoreboard || [];
   state.ponds = Array.isArray(snapshot.ponds) ? snapshot.ponds : [];
+  state.mountains = Array.isArray(snapshot.mountains) ? snapshot.mountains : [];
   if (snapshot.you_faction) {
     state.faction = snapshot.you_faction;
     syncFactionButtons();
@@ -1736,9 +1738,11 @@ const GATLING_DEF_VERSION = 1;
 /** Strategy Center / tech building mesh revision. */
 const STRATEGY_RIG_VERSION = 1;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
-const TANK_RIG_VERSION = 10;
+const TANK_RIG_VERSION = 11;
 /** Infantry mesh revision. */
-const INFANTRY_RIG_VERSION = 6;
+const INFANTRY_RIG_VERSION = 7;
+/** MLRS mesh revision. */
+const MLRS_RIG_VERSION = 2;
 
 function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) {
   const m = new THREE.Mesh(
@@ -3593,40 +3597,63 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
     }
   }
 
-  // Paint impassable ponds (world coords from snapshot).
+  // Paint impassable lakes — irregular shore, mud bank, deep water.
   const ponds = state.ponds || [];
   for (const pond of ponds) {
     const cx = (pond.x / mapSize) * size;
     const cy = (pond.y / mapSize) * size;
     const pr = (pond.r / mapSize) * size;
-    const r0 = Math.max(2, Math.floor(pr));
-    const x0 = Math.max(0, Math.floor(cx - r0 - 2));
-    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + 2));
-    const y0 = Math.max(0, Math.floor(cy - r0 - 2));
-    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + 2));
-    const deep = [28, 62, 78];
-    const mid = [42, 92, 108];
-    const rim = [72, 98, 78];
+    const r0 = Math.max(3, Math.floor(pr));
+    const mudW = Math.max(3, r0 * 0.18);
+    const x0 = Math.max(0, Math.floor(cx - r0 - mudW - 2));
+    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + mudW + 2));
+    const y0 = Math.max(0, Math.floor(cy - r0 - mudW - 2));
+    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + mudW + 2));
+    const deep = [18, 48, 62];
+    const mid = [36, 88, 98];
+    const shallow = [58, 118, 112];
+    const mud = [78, 68, 42];
+    const wetSand = [98, 88, 58];
+    const seed = ((pond.x * 17) ^ (pond.y * 31) ^ (pond.r * 13)) | 0;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx;
         const dy = y + 0.5 - cy;
+        const ang = Math.atan2(dy, dx);
+        // Soft irregular shoreline (not a hard circle).
+        const warp =
+          Math.sin(ang * 3.0 + seed * 0.01) * 0.07 +
+          Math.sin(ang * 5.0 - seed * 0.02) * 0.045 +
+          fbm2(x * 0.04 + seed, y * 0.04, seed + 7, 2) * 0.1 -
+          0.05;
+        const shoreR = r0 * (1 + warp);
         const d = Math.hypot(dx, dy);
-        if (d > r0 + 1.5) continue;
+        if (d > shoreR + mudW) continue;
         const o = (y * size + x) * 4;
+        const under = [px[o], px[o + 1], px[o + 2]];
         let col;
-        if (d > r0 * 0.92) {
-          const t = (d - r0 * 0.92) / (r0 * 0.2 + 1.5);
-          col = lerpColor(mid, rim, Math.min(1, t));
-          // Soft blend into soil under rim
-          const under = [px[o], px[o + 1], px[o + 2]];
-          col = lerpColor(col, under, Math.min(1, t * 0.65));
+        if (d > shoreR) {
+          // Wet mud / damp soil ring
+          const t = (d - shoreR) / mudW;
+          col = lerpColor(mud, wetSand, Math.min(1, t * 0.7));
+          col = lerpColor(col, under, Math.min(1, t * t * 0.85));
         } else {
-          const t = d / (r0 * 0.92);
-          col = lerpColor(deep, mid, t * t);
-          // Specular shimmer
-          const shimmer = Math.sin(x * 0.08 + y * 0.05) * 8;
-          col = [col[0] + shimmer, col[1] + shimmer * 1.1, col[2] + shimmer * 1.2];
+          const t = d / Math.max(0.001, shoreR);
+          if (t < 0.45) {
+            col = lerpColor(deep, mid, (t / 0.45) * (t / 0.45));
+          } else if (t < 0.82) {
+            col = lerpColor(mid, shallow, (t - 0.45) / 0.37);
+          } else {
+            // Soft foam / reed-tinted shallows into mud
+            const u = (t - 0.82) / 0.18;
+            col = lerpColor(shallow, mud, Math.min(1, u));
+            col = lerpColor(col, under, u * 0.35);
+          }
+          // Gentle caustic shimmer (low contrast — no hard stripes)
+          const shimmer =
+            Math.sin(x * 0.055 + y * 0.04 + seed) * 5 +
+            Math.sin(x * 0.12 - y * 0.09) * 3;
+          col = [col[0] + shimmer, col[1] + shimmer * 1.05, col[2] + shimmer * 0.9];
         }
         px[o] = Math.max(0, Math.min(255, col[0]));
         px[o + 1] = Math.max(0, Math.min(255, col[1]));
@@ -3986,31 +4013,50 @@ function scatterGroundDecor(scene, size) {
     flatShading: true,
   });
   const waterMat = new THREE.MeshStandardMaterial({
-    color: 0x2a6880,
-    roughness: 0.18,
-    metalness: 0.55,
+    color: 0x2e8490,
+    roughness: 0.08,
+    metalness: 0.35,
     transparent: true,
-    opacity: 0.78,
+    opacity: 0.68,
+    envMapIntensity: 1.3,
   });
   const waterDeep = new THREE.MeshStandardMaterial({
-    color: 0x1a4058,
-    roughness: 0.22,
-    metalness: 0.45,
+    color: 0x143848,
+    roughness: 0.14,
+    metalness: 0.28,
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.86,
+    envMapIntensity: 1.0,
+  });
+  const waterShore = new THREE.MeshStandardMaterial({
+    color: 0x4a7060,
+    roughness: 0.5,
+    metalness: 0.15,
+    transparent: true,
+    opacity: 0.42,
   });
 
-  // Impassable pond discs (visual layer above baked texture).
+  // Soft lake discs — slight oval stretch, soft shore ring (no hard circle edge).
   for (const pond of state.ponds || []) {
-    const r = Math.max(1.2, Number(pond.r) || 3);
-    const deep = new THREE.Mesh(new THREE.CircleGeometry(r * 0.72, 28), waterDeep);
+    const r = Math.max(1.4, Number(pond.r) || 3);
+    const stretch = 0.82 + ((Math.abs(pond.x * 13 + pond.y) * 0.01) % 1) * 0.32;
+    const lake = new THREE.Group();
+    lake.position.set(pond.x, 0.028, pond.y);
+    lake.rotation.y = (pond.x + pond.y) * 0.15;
+    lake.scale.set(stretch, 1, 1 / stretch);
+
+    const deep = new THREE.Mesh(new THREE.CircleGeometry(r * 0.62, 48), waterDeep);
     deep.rotation.x = -Math.PI / 2;
-    deep.position.set(pond.x, 0.03, pond.y);
-    group.add(deep);
-    const rim = new THREE.Mesh(new THREE.RingGeometry(r * 0.7, r * 1.02, 36), waterMat);
-    rim.rotation.x = -Math.PI / 2;
-    rim.position.set(pond.x, 0.035, pond.y);
-    group.add(rim);
+    lake.add(deep);
+    const mid = new THREE.Mesh(new THREE.RingGeometry(r * 0.55, r * 0.92, 48), waterMat);
+    mid.rotation.x = -Math.PI / 2;
+    mid.position.y = 0.004;
+    lake.add(mid);
+    const shore = new THREE.Mesh(new THREE.RingGeometry(r * 0.88, r * 1.08, 48), waterShore);
+    shore.rotation.x = -Math.PI / 2;
+    shore.position.y = 0.006;
+    lake.add(shore);
+    group.add(lake);
   }
 
   const nearPond = (x, z, pad = 1.2) => {
@@ -4103,19 +4149,21 @@ function initThree(size, terrainTexture, home) {
     controls?.dispose();
   }
 
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
   // Cap DPR hard — 8GB / integrated GPUs choke above 1x on big maps.
-  const dprCap = (navigator.deviceMemory && navigator.deviceMemory <= 8) ? 1 : 1.15;
+  const dprCap = (navigator.deviceMemory && navigator.deviceMemory <= 8) ? 1 : 1.25;
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, dprCap));
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
   // Soft sun shadows — modest map for integrated GPUs.
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x221810);
-  // Warm soil haze matching brown dirt terrain.
-  scene.fog = new THREE.Fog(0x3a2e20, Math.max(80, aoiRadius * 2.4), Math.max(140, aoiRadius * 5));
+  // Warm soil haze matching brown dirt terrain — soft far fade (less hard silhouette).
+  scene.fog = new THREE.Fog(0x3e3226, Math.max(90, aoiRadius * 2.6), Math.max(155, aoiRadius * 5.2));
 
   camera = new THREE.PerspectiveCamera(
     CAMERA_FOV,
@@ -4150,9 +4198,9 @@ function initThree(size, terrainTexture, home) {
   controls.maxPolarAngle = CAMERA_PITCH;
   controls.update();
 
-  const hemi = new THREE.HemisphereLight(0xfff0d8, 0x3a2818, 0.95);
+  const hemi = new THREE.HemisphereLight(0xfff2e0, 0x3a3020, 1.05);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffe8c4, 1.35);
+  const sun = new THREE.DirectionalLight(0xffeed8, 1.15);
   sun.position.set(48, 78, 32);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
@@ -4164,12 +4212,13 @@ function initThree(size, terrainTexture, home) {
   sun.shadow.camera.top = shadowSpan;
   sun.shadow.camera.bottom = -shadowSpan;
   sun.shadow.bias = -0.0008;
-  sun.shadow.normalBias = 0.03;
+  sun.shadow.normalBias = 0.04;
+  sun.shadow.radius = 3.5;
   scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xb8d0e8, 0.32);
+  const fill = new THREE.DirectionalLight(0xc8daf0, 0.48);
   fill.position.set(-40, 35, -50);
   scene.add(fill);
-  const rim = new THREE.DirectionalLight(0xffcc88, 0.22);
+  const rim = new THREE.DirectionalLight(0xffd8a8, 0.28);
   rim.position.set(-20, 18, 55);
   scene.add(rim);
 
@@ -5177,6 +5226,29 @@ function matStd(color, opts = {}) {
     roughness: opts.roughness ?? 0.7,
     emissive: opts.emissive ?? 0x000000,
     emissiveIntensity: opts.emissiveIntensity ?? 0,
+    envMapIntensity: opts.envMapIntensity ?? 1,
+  });
+}
+
+/** Polished armor / vehicle plate — soft specular, less chalky box edges. */
+function matArmor(color, opts = {}) {
+  return matStd(color, {
+    metalness: opts.metalness ?? 0.92,
+    roughness: opts.roughness ?? 0.16,
+    envMapIntensity: opts.envMapIntensity ?? 1.45,
+    emissive: opts.emissive,
+    emissiveIntensity: opts.emissiveIntensity,
+  });
+}
+
+/** Soft satin metal (infantry kit / painted steel). */
+function matSatin(color, opts = {}) {
+  return matStd(color, {
+    metalness: opts.metalness ?? 0.72,
+    roughness: opts.roughness ?? 0.32,
+    envMapIntensity: opts.envMapIntensity ?? 1.15,
+    emissive: opts.emissive,
+    emissiveIntensity: opts.emissiveIntensity,
   });
 }
 
@@ -5192,9 +5264,9 @@ function createRangerMesh(teamColor, opts = {}) {
   g.userData.factionStyle = style;
   g.rotation.order = "YXZ";
 
-  let camo = 0x4f6340;
-  let camoDark = 0x3a4a30;
-  let vest = 0x2c3326;
+  let camo = 0x5a6e4c;
+  let camoDark = 0x4a5a40;
+  let vest = 0x3a4236;
   if (style === "china") {
     camo = 0x6a4030;
     camoDark = 0x4a2818;
@@ -5204,12 +5276,12 @@ function createRangerMesh(teamColor, opts = {}) {
     camoDark = 0x5a4a30;
     vest = 0x4a3a28;
   }
-  const boot = 0x1a1612;
+  const boot = 0x2a2620;
   const leather = 0x3b2a1c;
   const skin = 0xc9a882;
-  const gun = 0x2a2a28;
-  const gunMetal = 0x4a4a46;
-  const plastic = 0x1c1c1a;
+  const gun = 0x3a3a38;
+  const gunMetal = 0x6a6e68;
+  const plastic = 0x2c2c2a;
   const accent = teamColor >>> 0;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
@@ -5227,14 +5299,14 @@ function createRangerMesh(teamColor, opts = {}) {
     leg.name = name;
     leg.position.set(hx, 0.078, 0);
     // thigh
-    add(leg, new THREE.BoxGeometry(0.03, 0.045, 0.034), matStd(camo), 0, -0.022, 0.002);
+    add(leg, new THREE.BoxGeometry(0.03, 0.045, 0.034), matSatin(camo), 0, -0.022, 0.002);
     // knee pad
-    add(leg, new THREE.BoxGeometry(0.032, 0.016, 0.028), matStd(vest), 0, -0.042, 0.01);
+    add(leg, new THREE.BoxGeometry(0.032, 0.016, 0.028), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0, -0.042, 0.01);
     // calf
-    add(leg, new THREE.BoxGeometry(0.028, 0.04, 0.03), matStd(camoDark), 0, -0.062, 0);
+    add(leg, new THREE.BoxGeometry(0.028, 0.04, 0.03), matSatin(camoDark), 0, -0.062, 0);
     // boot
-    add(leg, new THREE.BoxGeometry(0.032, 0.018, 0.046), matStd(boot), 0, -0.082, 0.008);
-    add(leg, new THREE.BoxGeometry(0.03, 0.01, 0.018), matStd(0x0e0c0a), 0, -0.088, 0.02);
+    add(leg, new THREE.BoxGeometry(0.032, 0.018, 0.046), matSatin(boot, { metalness: 0.62 }), 0, -0.082, 0.008);
+    add(leg, new THREE.BoxGeometry(0.03, 0.01, 0.018), matSatin(0x1a1814, { metalness: 0.55 }), 0, -0.088, 0.02);
     g.add(leg);
     return leg;
   };
@@ -5246,23 +5318,23 @@ function createRangerMesh(teamColor, opts = {}) {
   torso.name = "torso";
 
   // hips / belt
-  add(torso, new THREE.BoxGeometry(0.078, 0.022, 0.05), matStd(camoDark), 0, 0.09, 0);
-  add(torso, new THREE.BoxGeometry(0.082, 0.012, 0.052), matStd(leather), 0, 0.1, 0.002);
+  add(torso, new THREE.BoxGeometry(0.078, 0.022, 0.05), matSatin(camoDark), 0, 0.09, 0);
+  add(torso, new THREE.BoxGeometry(0.082, 0.012, 0.052), matSatin(leather, { metalness: 0.55 }), 0, 0.1, 0.002);
   // belt pouches
-  add(torso, new THREE.BoxGeometry(0.018, 0.02, 0.014), matStd(vest), -0.03, 0.095, 0.028);
-  add(torso, new THREE.BoxGeometry(0.018, 0.02, 0.014), matStd(vest), 0.03, 0.095, 0.028);
-  add(torso, new THREE.BoxGeometry(0.022, 0.018, 0.012), matStd(0x24301c), 0, 0.094, 0.03);
+  add(torso, new THREE.BoxGeometry(0.018, 0.02, 0.014), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), -0.03, 0.095, 0.028);
+  add(torso, new THREE.BoxGeometry(0.018, 0.02, 0.014), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0.03, 0.095, 0.028);
+  add(torso, new THREE.BoxGeometry(0.022, 0.018, 0.012), matSatin(0x343c2e), 0, 0.094, 0.03);
 
   // chest / jacket
-  add(torso, new THREE.BoxGeometry(0.076, 0.07, 0.048), matStd(camo), 0, 0.138, 0);
+  add(torso, new THREE.BoxGeometry(0.076, 0.07, 0.048), matSatin(camo), 0, 0.138, 0);
   // plate carrier
-  add(torso, new THREE.BoxGeometry(0.07, 0.055, 0.03), matStd(vest), 0, 0.14, 0.018);
+  add(torso, new THREE.BoxGeometry(0.07, 0.055, 0.03), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0, 0.14, 0.018);
   // mag pouches row
   for (let i = -1; i <= 1; i++) {
     add(
       torso,
       new THREE.BoxGeometry(0.018, 0.028, 0.016),
-      matStd(0x232820),
+      matSatin(0x343830),
       i * 0.022,
       0.132,
       0.038,
@@ -5272,7 +5344,7 @@ function createRangerMesh(teamColor, opts = {}) {
   add(
     torso,
     new THREE.BoxGeometry(0.078, 0.01, 0.052),
-    matStd(accent, { roughness: 0.45 }),
+    matSatin(accent, { metalness: 0.8, roughness: 0.28 }),
     0,
     0.162,
     0.004,
@@ -5282,17 +5354,17 @@ function createRangerMesh(teamColor, opts = {}) {
     true,
   );
   // collar
-  add(torso, new THREE.BoxGeometry(0.05, 0.012, 0.04), matStd(camoDark), 0, 0.175, -0.002);
+  add(torso, new THREE.BoxGeometry(0.05, 0.012, 0.04), matSatin(camoDark), 0, 0.175, -0.002);
 
   // backpack
-  add(torso, new THREE.BoxGeometry(0.05, 0.055, 0.028), matStd(vest), 0, 0.14, -0.036);
-  add(torso, new THREE.BoxGeometry(0.04, 0.02, 0.02), matStd(0x1e2418), 0, 0.165, -0.04);
+  add(torso, new THREE.BoxGeometry(0.05, 0.055, 0.028), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0, 0.14, -0.036);
+  add(torso, new THREE.BoxGeometry(0.04, 0.02, 0.02), matSatin(0x2e3428), 0, 0.165, -0.04);
   // radio brick + antenna
-  add(torso, new THREE.BoxGeometry(0.018, 0.028, 0.016), matStd(plastic), 0.028, 0.15, -0.048);
+  add(torso, new THREE.BoxGeometry(0.018, 0.028, 0.016), matSatin(plastic, { metalness: 0.7 }), 0.028, 0.15, -0.048);
   add(
     torso,
     new THREE.CylinderGeometry(0.003, 0.003, 0.07, 5),
-    matStd(gunMetal, { metalness: 0.6, roughness: 0.35 }),
+    matArmor(gunMetal),
     0.028,
     0.195,
     -0.048,
@@ -5304,15 +5376,15 @@ function createRangerMesh(teamColor, opts = {}) {
     arm.name = name;
     arm.position.set(ax, 0.165, az);
     // shoulder pad
-    add(arm, new THREE.BoxGeometry(0.028, 0.022, 0.03), matStd(vest), 0, 0, 0);
+    add(arm, new THREE.BoxGeometry(0.028, 0.022, 0.03), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0, 0, 0);
     // upper arm
-    add(arm, new THREE.BoxGeometry(0.024, 0.04, 0.024), matStd(camo), 0, -0.028, 0.004);
+    add(arm, new THREE.BoxGeometry(0.024, 0.04, 0.024), matSatin(camo), 0, -0.028, 0.004);
     // elbow pad
-    add(arm, new THREE.BoxGeometry(0.026, 0.014, 0.022), matStd(vest), 0, -0.046, 0.008);
+    add(arm, new THREE.BoxGeometry(0.026, 0.014, 0.022), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0, -0.046, 0.008);
     // forearm
-    add(arm, new THREE.BoxGeometry(0.022, 0.036, 0.022), matStd(camoDark), 0, -0.066, 0.01);
+    add(arm, new THREE.BoxGeometry(0.022, 0.036, 0.022), matSatin(camoDark), 0, -0.066, 0.01);
     // glove
-    add(arm, new THREE.BoxGeometry(0.02, 0.016, 0.024), matStd(boot), 0, -0.088, 0.014);
+    add(arm, new THREE.BoxGeometry(0.02, 0.016, 0.024), matSatin(boot, { metalness: 0.62 }), 0, -0.088, 0.014);
     torso.add(arm);
     return arm;
   };
@@ -5320,27 +5392,27 @@ function createRangerMesh(teamColor, opts = {}) {
   makeArm("rightArm", 0.052, 0.016);
 
   // —— Head ——
-  add(torso, new THREE.BoxGeometry(0.04, 0.04, 0.038), matStd(skin), 0, 0.198, 0.002);
+  add(torso, new THREE.BoxGeometry(0.04, 0.04, 0.038), matStd(skin, { metalness: 0.08, roughness: 0.72 }), 0, 0.198, 0.002);
   // balaclava / neck
-  add(torso, new THREE.BoxGeometry(0.036, 0.016, 0.034), matStd(0x2a2824), 0, 0.182, 0.004);
+  add(torso, new THREE.BoxGeometry(0.036, 0.016, 0.034), matSatin(0x3a3834), 0, 0.182, 0.004);
   // helmet shell
-  add(torso, new THREE.BoxGeometry(0.05, 0.024, 0.052), matStd(camoDark), 0, 0.218, 0);
-  add(torso, new THREE.BoxGeometry(0.046, 0.014, 0.048), matStd(vest), 0, 0.23, -0.002);
+  add(torso, new THREE.BoxGeometry(0.05, 0.024, 0.052), matSatin(camoDark), 0, 0.218, 0);
+  add(torso, new THREE.BoxGeometry(0.046, 0.014, 0.048), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0, 0.23, -0.002);
   // helmet brim / goggles mount
-  add(torso, new THREE.BoxGeometry(0.048, 0.01, 0.016), matStd(plastic), 0, 0.21, 0.024);
-  add(torso, new THREE.BoxGeometry(0.036, 0.01, 0.012), matStd(0x66aacc, { metalness: 0.3, roughness: 0.25 }), 0, 0.206, 0.03);
+  add(torso, new THREE.BoxGeometry(0.048, 0.01, 0.016), matSatin(plastic, { metalness: 0.7 }), 0, 0.21, 0.024);
+  add(torso, new THREE.BoxGeometry(0.036, 0.01, 0.012), matSatin(0x66aacc, { metalness: 0.55, roughness: 0.22 }), 0, 0.206, 0.03);
   // NVG mount + night-vision tubes
-  add(torso, new THREE.BoxGeometry(0.02, 0.012, 0.016), matStd(gunMetal, { metalness: 0.7 }), 0, 0.236, 0.018);
-  add(torso, new THREE.CylinderGeometry(0.006, 0.006, 0.018, 6), matStd(0x1a2018, { metalness: 0.5 }), -0.008, 0.232, 0.03, Math.PI / 2, 0, 0);
-  add(torso, new THREE.CylinderGeometry(0.006, 0.006, 0.018, 6), matStd(0x1a2018, { metalness: 0.5 }), 0.008, 0.232, 0.03, Math.PI / 2, 0, 0);
+  add(torso, new THREE.BoxGeometry(0.02, 0.012, 0.016), matArmor(gunMetal), 0, 0.236, 0.018);
+  add(torso, new THREE.CylinderGeometry(0.006, 0.006, 0.018, 6), matArmor(0x3a4038), -0.008, 0.232, 0.03, Math.PI / 2, 0, 0);
+  add(torso, new THREE.CylinderGeometry(0.006, 0.006, 0.018, 6), matArmor(0x3a4038), 0.008, 0.232, 0.03, Math.PI / 2, 0, 0);
   // ear pro / headset
-  add(torso, new THREE.BoxGeometry(0.012, 0.018, 0.014), matStd(boot), -0.028, 0.208, 0);
-  add(torso, new THREE.BoxGeometry(0.012, 0.018, 0.014), matStd(boot), 0.028, 0.208, 0);
+  add(torso, new THREE.BoxGeometry(0.012, 0.018, 0.014), matSatin(boot, { metalness: 0.62 }), -0.028, 0.208, 0);
+  add(torso, new THREE.BoxGeometry(0.012, 0.018, 0.014), matSatin(boot, { metalness: 0.62 }), 0.028, 0.208, 0);
   // team helmet band
   add(
     torso,
     new THREE.BoxGeometry(0.052, 0.008, 0.018),
-    matStd(accent, { roughness: 0.4 }),
+    matSatin(accent, { metalness: 0.8, roughness: 0.28 }),
     0,
     0.214,
     0.02,
@@ -5350,50 +5422,50 @@ function createRangerMesh(teamColor, opts = {}) {
     true,
   );
   // chin strap
-  add(torso, new THREE.BoxGeometry(0.008, 0.02, 0.004), matStd(boot), -0.018, 0.195, 0.016);
-  add(torso, new THREE.BoxGeometry(0.008, 0.02, 0.004), matStd(boot), 0.018, 0.195, 0.016);
+  add(torso, new THREE.BoxGeometry(0.008, 0.02, 0.004), matSatin(boot, { metalness: 0.62 }), -0.018, 0.195, 0.016);
+  add(torso, new THREE.BoxGeometry(0.008, 0.02, 0.004), matSatin(boot, { metalness: 0.62 }), 0.018, 0.195, 0.016);
   // side dump pouches
-  add(torso, new THREE.BoxGeometry(0.02, 0.028, 0.022), matStd(vest), -0.048, 0.13, 0.01);
-  add(torso, new THREE.BoxGeometry(0.02, 0.028, 0.022), matStd(vest), 0.048, 0.13, 0.01);
+  add(torso, new THREE.BoxGeometry(0.02, 0.028, 0.022), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), -0.048, 0.13, 0.01);
+  add(torso, new THREE.BoxGeometry(0.02, 0.028, 0.022), matArmor(vest, { metalness: 0.84, roughness: 0.26 }), 0.048, 0.13, 0.01);
 
   // —— Detailed rifle (muzzle toward +Z) ——
   const rifle = new THREE.Group();
   rifle.name = "muzzleRoot";
   // stock
-  add(rifle, new THREE.BoxGeometry(0.016, 0.022, 0.036), matStd(plastic), 0.032, 0.118, -0.02);
-  add(rifle, new THREE.BoxGeometry(0.014, 0.012, 0.02), matStd(leather), 0.032, 0.11, -0.038);
+  add(rifle, new THREE.BoxGeometry(0.016, 0.022, 0.036), matSatin(plastic, { metalness: 0.7 }), 0.032, 0.118, -0.02);
+  add(rifle, new THREE.BoxGeometry(0.014, 0.012, 0.02), matSatin(leather, { metalness: 0.55 }), 0.032, 0.11, -0.038);
   // receiver
   add(
     rifle,
     new THREE.BoxGeometry(0.018, 0.02, 0.055),
-    matStd(gunMetal, { metalness: 0.75, roughness: 0.28 }),
+    matArmor(gunMetal),
     0.034,
     0.122,
     0.02,
   );
   // carry handle / optic
-  add(rifle, new THREE.BoxGeometry(0.012, 0.014, 0.03), matStd(plastic), 0.034, 0.138, 0.015);
-  add(rifle, new THREE.BoxGeometry(0.01, 0.008, 0.016), matStd(0x111110), 0.034, 0.146, 0.02);
-  add(rifle, new THREE.CylinderGeometry(0.006, 0.006, 0.014, 6), matStd(0x223322, { metalness: 0.4 }), 0.034, 0.152, 0.018, Math.PI / 2, 0, 0);
+  add(rifle, new THREE.BoxGeometry(0.012, 0.014, 0.03), matSatin(plastic, { metalness: 0.7 }), 0.034, 0.138, 0.015);
+  add(rifle, new THREE.BoxGeometry(0.01, 0.008, 0.016), matArmor(0x2a2a28), 0.034, 0.146, 0.02);
+  add(rifle, new THREE.CylinderGeometry(0.006, 0.006, 0.014, 6), matArmor(0x3a4a3a), 0.034, 0.152, 0.018, Math.PI / 2, 0, 0);
   // magazine
-  add(rifle, new THREE.BoxGeometry(0.014, 0.032, 0.018), matStd(plastic), 0.034, 0.1, 0.018);
+  add(rifle, new THREE.BoxGeometry(0.014, 0.032, 0.018), matSatin(plastic, { metalness: 0.7 }), 0.034, 0.1, 0.018);
   // handguard + rails
   add(
     rifle,
     new THREE.BoxGeometry(0.02, 0.018, 0.05),
-    matStd(gun, { metalness: 0.55, roughness: 0.35 }),
+    matArmor(gun),
     0.034,
     0.122,
     0.068,
   );
-  add(rifle, new THREE.BoxGeometry(0.022, 0.004, 0.04), matStd(gunMetal, { metalness: 0.7 }), 0.034, 0.134, 0.068);
+  add(rifle, new THREE.BoxGeometry(0.022, 0.004, 0.04), matArmor(gunMetal), 0.034, 0.134, 0.068);
   // gas block
-  add(rifle, new THREE.BoxGeometry(0.01, 0.012, 0.012), matStd(gunMetal, { metalness: 0.8 }), 0.034, 0.128, 0.1);
+  add(rifle, new THREE.BoxGeometry(0.01, 0.012, 0.012), matArmor(gunMetal), 0.034, 0.128, 0.1);
   // barrel
   add(
     rifle,
     new THREE.CylinderGeometry(0.005, 0.006, 0.07, 6),
-    matStd(0x151514, { metalness: 0.88, roughness: 0.22 }),
+    matArmor(0x3a3a38),
     0.034,
     0.124,
     0.12,
@@ -5402,11 +5474,11 @@ function createRangerMesh(teamColor, opts = {}) {
     0,
   );
   // front sight / flash hider
-  add(rifle, new THREE.BoxGeometry(0.008, 0.014, 0.008), matStd(gunMetal), 0.034, 0.134, 0.145);
+  add(rifle, new THREE.BoxGeometry(0.008, 0.014, 0.008), matArmor(gunMetal), 0.034, 0.134, 0.145);
   add(
     rifle,
     new THREE.CylinderGeometry(0.007, 0.008, 0.016, 6),
-    matStd(0x0c0c0c, { metalness: 0.7, roughness: 0.35 }),
+    matArmor(0x2a2a28),
     0.034,
     0.124,
     0.158,
@@ -5588,29 +5660,29 @@ function createTankMesh(teamColor, opts = {}) {
   g.userData.factionStyle = style;
   g.rotation.order = "YXZ";
 
-  // USA steel-olive · China ochre · GLA desert scrap
-  let hull = 0x4a5538;
-  let hullDark = 0x2e3428;
-  let hullLight = 0x627048;
+  // USA steel-olive · China ochre · GLA desert scrap — close tones (softer silhouette edges)
+  let hull = 0x5a6650;
+  let hullDark = 0x4a5444;
+  let hullLight = 0x6a7660;
   if (style === "china") {
-    hull = 0x5c4830;
-    hullDark = 0x3a2c1c;
-    hullLight = 0x7a6240;
+    hull = 0x6a5840;
+    hullDark = 0x524430;
+    hullLight = 0x7a6850;
   } else if (style === "gla") {
-    hull = 0x7a6a48;
-    hullDark = 0x4a3e28;
-    hullLight = 0x9a8860;
+    hull = 0x7a6e52;
+    hullDark = 0x5e543c;
+    hullLight = 0x8a7e62;
   }
   if (heavy && style === "usa") {
-    hull = 0x3a4230;
-    hullDark = 0x252a20;
-    hullLight = 0x525a40;
+    hull = 0x4e5848;
+    hullDark = 0x3e4638;
+    hullLight = 0x5e6858;
   }
-  const track = 0x161410;
-  const rubber = 0x0e0d0b;
-  const metal = 0x3a3c38;
-  const metalHi = 0x6a6e66;
-  const rust = style === "gla" ? 0x6a4030 : 0x3a3228;
+  const track = 0x1c1a16;
+  const rubber = 0x12110f;
+  const metal = 0x5a5e58;
+  const metalHi = 0x8a9088;
+  const rust = style === "gla" ? 0x6a4030 : 0x4a4238;
   const accent = teamColor >>> 0;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
@@ -5627,16 +5699,16 @@ function createTankMesh(teamColor, opts = {}) {
   const addTracks = (width, length, wheelN, y0) => {
     for (const side of [-1, 1]) {
       const x = side * width;
-      add(g, new THREE.BoxGeometry(0.06, 0.08, length), matStd(track, { metalness: 0.55, roughness: 0.45 }), x, y0, 0);
-      add(g, new THREE.BoxGeometry(0.044, 0.028, length * 0.96), matStd(rubber, { metalness: 0.15, roughness: 0.9 }), x, y0 - 0.03, 0);
+      add(g, new THREE.BoxGeometry(0.06, 0.08, length), matArmor(track, { metalness: 0.7, roughness: 0.38 }), x, y0, 0);
+      add(g, new THREE.BoxGeometry(0.044, 0.028, length * 0.96), matStd(rubber, { metalness: 0.2, roughness: 0.85 }), x, y0 - 0.03, 0);
       const span = length * 0.72;
       for (let i = 0; i < wheelN; i++) {
         const t = wheelN === 1 ? 0 : i / (wheelN - 1) - 0.5;
         const z = t * span;
         const w = add(
           g,
-          new THREE.CylinderGeometry(0.028, 0.028, 0.045, 10),
-          matStd(metalHi, { metalness: 0.75, roughness: 0.35 }),
+          new THREE.CylinderGeometry(0.028, 0.028, 0.045, 14),
+          matArmor(metalHi, { metalness: 0.95, roughness: 0.18 }),
           x,
           y0 - 0.012,
           z,
@@ -5648,8 +5720,8 @@ function createTankMesh(teamColor, opts = {}) {
       }
       const sprocket = add(
         g,
-        new THREE.CylinderGeometry(0.034, 0.034, 0.042, 10),
-        matStd(metal, { metalness: 0.8, roughness: 0.3 }),
+        new THREE.CylinderGeometry(0.034, 0.034, 0.042, 14),
+        matArmor(metal, { metalness: 0.94, roughness: 0.16 }),
         x,
         y0,
         -length * 0.48,
@@ -5658,7 +5730,7 @@ function createTankMesh(teamColor, opts = {}) {
         Math.PI / 2,
       );
       sprocket.userData.roadWheel = true;
-      add(g, new THREE.BoxGeometry(0.02, 0.06, length * 0.92), matStd(hullDark, { metalness: 0.55, roughness: 0.4 }), x * 1.28, y0 + 0.03, 0);
+      add(g, new THREE.BoxGeometry(0.02, 0.06, length * 0.92), matArmor(hullDark), x * 1.28, y0 + 0.03, 0);
     }
   };
 
@@ -5935,20 +6007,20 @@ function createTankMesh(teamColor, opts = {}) {
     return finishTank(0.64, 0.22, 2.0, 1.05);
   }
 
-  // Default: USA Crusader — detailed Abrams-class silhouette
+  // Default: USA M1A1 — polished olive armor
   addTracks(0.175, 0.52, 5, 0.04);
-  add(g, new THREE.BoxGeometry(0.32, 0.09, 0.5), matStd(hull, { metalness: 0.72, roughness: 0.28 }), 0, 0.09, 0);
-  add(g, new THREE.BoxGeometry(0.3, 0.05, 0.36), matStd(hullDark, { metalness: 0.78, roughness: 0.24 }), 0, 0.145, -0.02);
-  add(g, new THREE.BoxGeometry(0.28, 0.035, 0.12), matStd(hullLight, { metalness: 0.65, roughness: 0.3 }), 0, 0.12, 0.22, -0.4, 0, 0);
-  add(g, new THREE.BoxGeometry(0.26, 0.03, 0.1), matStd(metal, { metalness: 0.88, roughness: 0.2 }), 0, 0.14, -0.24);
+  add(g, new THREE.BoxGeometry(0.32, 0.09, 0.5), matArmor(hull), 0, 0.09, 0);
+  add(g, new THREE.BoxGeometry(0.3, 0.05, 0.36), matArmor(hullDark), 0, 0.145, -0.02);
+  add(g, new THREE.BoxGeometry(0.28, 0.035, 0.12), matArmor(hullLight, { roughness: 0.2 }), 0, 0.12, 0.22, -0.4, 0, 0);
+  add(g, new THREE.BoxGeometry(0.26, 0.03, 0.1), matArmor(metal), 0, 0.14, -0.24);
   // Side skirts + bolt rows
   for (const side of [-1, 1]) {
-    add(g, new THREE.BoxGeometry(0.022, 0.06, 0.48), matStd(hullDark, { metalness: 0.7, roughness: 0.3 }), side * 0.175, 0.1, 0);
+    add(g, new THREE.BoxGeometry(0.022, 0.06, 0.48), matArmor(hullDark), side * 0.175, 0.1, 0);
     for (let i = 0; i < 5; i++) {
       add(
         g,
         new THREE.BoxGeometry(0.012, 0.028, 0.055),
-        matStd(metalHi, { metalness: 0.85, roughness: 0.25 }),
+        matArmor(metalHi, { roughness: 0.12 }),
         side * 0.188,
         0.1,
         -0.16 + i * 0.08,
@@ -5956,39 +6028,39 @@ function createTankMesh(teamColor, opts = {}) {
     }
   }
   // Exhausts + rear grill
-  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18, { metalness: 0.8 }), -0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
-  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18, { metalness: 0.8 }), 0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
-  add(g, new THREE.BoxGeometry(0.18, 0.02, 0.04), matStd(metal, { metalness: 0.75 }), 0, 0.12, -0.3);
-  add(g, new THREE.BoxGeometry(0.24, 0.014, 0.055), matStd(accent, { metalness: 0.55, roughness: 0.3 }), 0, 0.16, -0.12, 0, 0, 0, true);
-  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.3 }), -0.11, 0.11, 0.27);
-  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.3 }), 0.11, 0.11, 0.27);
+  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 10), matArmor(0x2a2a28), -0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
+  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 10), matArmor(0x2a2a28), 0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
+  add(g, new THREE.BoxGeometry(0.18, 0.02, 0.04), matArmor(metal), 0, 0.12, -0.3);
+  add(g, new THREE.BoxGeometry(0.24, 0.014, 0.055), matSatin(accent, { metalness: 0.8, roughness: 0.22 }), 0, 0.16, -0.12, 0, 0, 0, true);
+  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.55, roughness: 0.3 }), -0.11, 0.11, 0.27);
+  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.55, roughness: 0.3 }), 0.11, 0.11, 0.27);
   // Front tow hooks / armor lip
-  add(g, new THREE.BoxGeometry(0.06, 0.02, 0.03), matStd(metalHi, { metalness: 0.9 }), -0.1, 0.085, 0.26);
-  add(g, new THREE.BoxGeometry(0.06, 0.02, 0.03), matStd(metalHi, { metalness: 0.9 }), 0.1, 0.085, 0.26);
+  add(g, new THREE.BoxGeometry(0.06, 0.02, 0.03), matArmor(metalHi), -0.1, 0.085, 0.26);
+  add(g, new THREE.BoxGeometry(0.06, 0.02, 0.03), matArmor(metalHi), 0.1, 0.085, 0.26);
 
-  add(turret, new THREE.BoxGeometry(0.2, 0.095, 0.24), matStd(hull, { metalness: 0.75, roughness: 0.26 }), 0, 0.22, -0.02);
-  add(turret, new THREE.BoxGeometry(0.16, 0.045, 0.14), matStd(hullDark, { metalness: 0.8, roughness: 0.22 }), 0, 0.28, -0.04);
-  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight, { metalness: 0.7 }), -0.11, 0.225, 0.02, 0, 0, 0.25);
-  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight, { metalness: 0.7 }), 0.11, 0.225, 0.02, 0, 0, -0.25);
+  add(turret, new THREE.BoxGeometry(0.2, 0.095, 0.24), matArmor(hull), 0, 0.22, -0.02);
+  add(turret, new THREE.BoxGeometry(0.16, 0.045, 0.14), matArmor(hullDark), 0, 0.28, -0.04);
+  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matArmor(hullLight), -0.11, 0.225, 0.02, 0, 0, 0.25);
+  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matArmor(hullLight), 0.11, 0.225, 0.02, 0, 0, -0.25);
   // ERA / storage boxes
-  add(turret, new THREE.BoxGeometry(0.05, 0.04, 0.1), matStd(0x3a4030, { metalness: 0.65 }), -0.125, 0.24, 0.02);
-  add(turret, new THREE.BoxGeometry(0.05, 0.04, 0.1), matStd(0x3a4030, { metalness: 0.65 }), 0.125, 0.24, 0.02);
-  add(turret, new THREE.BoxGeometry(0.14, 0.05, 0.08), matStd(0x2f3528, { metalness: 0.7 }), 0, 0.23, -0.16);
-  add(turret, new THREE.CylinderGeometry(0.038, 0.044, 0.032, 10), matStd(metal, { metalness: 0.88 }), 0.045, 0.305, -0.02);
+  add(turret, new THREE.BoxGeometry(0.05, 0.04, 0.1), matArmor(0x525848), -0.125, 0.24, 0.02);
+  add(turret, new THREE.BoxGeometry(0.05, 0.04, 0.1), matArmor(0x525848), 0.125, 0.24, 0.02);
+  add(turret, new THREE.BoxGeometry(0.14, 0.05, 0.08), matArmor(0x484e40), 0, 0.23, -0.16);
+  add(turret, new THREE.CylinderGeometry(0.038, 0.044, 0.032, 12), matArmor(metal), 0.045, 0.305, -0.02);
   // Smoke launchers
   for (const sx of [-0.06, -0.02, 0.02, 0.06]) {
-    add(turret, new THREE.CylinderGeometry(0.008, 0.01, 0.028, 6), matStd(metalHi, { metalness: 0.9 }), sx, 0.27, 0.12, 0.55, 0, 0);
+    add(turret, new THREE.CylinderGeometry(0.008, 0.01, 0.028, 8), matArmor(metalHi), sx, 0.27, 0.12, 0.55, 0, 0);
   }
-  add(turret, new THREE.BoxGeometry(0.18, 0.012, 0.04), matStd(accent, { metalness: 0.55 }), 0, 0.265, 0.08, 0, 0, 0, true);
-  add(turret, new THREE.BoxGeometry(0.09, 0.07, 0.06), matStd(metal, { metalness: 0.88 }), 0, 0.225, 0.12);
+  add(turret, new THREE.BoxGeometry(0.18, 0.012, 0.04), matSatin(accent, { metalness: 0.82 }), 0, 0.265, 0.08, 0, 0, 0, true);
+  add(turret, new THREE.BoxGeometry(0.09, 0.07, 0.06), matArmor(metal), 0, 0.225, 0.12);
   // Antenna
-  add(turret, new THREE.CylinderGeometry(0.004, 0.004, 0.12, 5), matStd(metalHi, { metalness: 0.9 }), -0.06, 0.36, -0.08);
+  add(turret, new THREE.CylinderGeometry(0.004, 0.004, 0.12, 6), matArmor(metalHi), -0.06, 0.36, -0.08);
 
   const mg = new THREE.Group();
   mg.name = "tankMg";
   mg.position.set(0.045, 0.338, -0.02);
-  add(mg, new THREE.BoxGeometry(0.02, 0.014, 0.03), matStd(metal, { metalness: 0.8 }), 0, 0.01, 0);
-  add(mg, new THREE.CylinderGeometry(0.0045, 0.0055, 0.09, 6), matStd(0x111110, { metalness: 0.85 }), 0, 0.022, 0.052, Math.PI / 2, 0, 0);
+  add(mg, new THREE.BoxGeometry(0.02, 0.014, 0.03), matArmor(metal), 0, 0.01, 0);
+  add(mg, new THREE.CylinderGeometry(0.0045, 0.0055, 0.09, 8), matArmor(0x2a2a28), 0, 0.022, 0.052, Math.PI / 2, 0, 0);
   const mgTip = new THREE.Object3D();
   mgTip.name = "mgMuzzle";
   mgTip.position.set(0, 0.022, 0.1);
@@ -5997,15 +6069,15 @@ function createTankMesh(teamColor, opts = {}) {
 
   barrelGroup.position.set(0, 0.225, 0.12);
   const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.017, 0.022, 0.32, 10),
-    matStd(0x141412, { metalness: 0.92, roughness: 0.18 }),
+    new THREE.CylinderGeometry(0.017, 0.022, 0.32, 12),
+    matArmor(0x2a2a28, { roughness: 0.12 }),
   );
   barrel.rotation.x = Math.PI / 2;
   barrel.position.z = 0.18;
   barrelGroup.add(barrel);
-  add(barrelGroup, new THREE.CylinderGeometry(0.026, 0.026, 0.05, 10), matStd(0x1c1c18, { metalness: 0.9 }), 0, 0, 0.3, Math.PI / 2, 0, 0);
-  add(barrelGroup, new THREE.CylinderGeometry(0.03, 0.03, 0.02, 10), matStd(metalHi, { metalness: 0.92 }), 0, 0, 0.22, Math.PI / 2, 0, 0);
-  add(barrelGroup, new THREE.CylinderGeometry(0.02, 0.028, 0.035, 10), matStd(metalHi, { metalness: 0.9 }), 0, 0, 0.44, Math.PI / 2, 0, 0);
+  add(barrelGroup, new THREE.CylinderGeometry(0.026, 0.026, 0.05, 12), matArmor(0x323230), 0, 0, 0.3, Math.PI / 2, 0, 0);
+  add(barrelGroup, new THREE.CylinderGeometry(0.03, 0.03, 0.02, 12), matArmor(metalHi), 0, 0, 0.22, Math.PI / 2, 0, 0);
+  add(barrelGroup, new THREE.CylinderGeometry(0.02, 0.028, 0.035, 12), matArmor(metalHi), 0, 0, 0.44, Math.PI / 2, 0, 0);
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
   tip.position.set(0, 0, 0.5);
@@ -6128,23 +6200,27 @@ function createMlrsMesh(teamColor) {
   g.userData.isTank = true; // hull drive + pod yaw reuse tank motion path
   g.userData.isMlrs = true;
   g.userData.tintParts = [];
-  g.userData.mlrsRigVersion = 1;
-  g.userData.tankRigVersion = 6;
+  g.userData.mlrsRigVersion = MLRS_RIG_VERSION;
+  g.userData.tankRigVersion = TANK_RIG_VERSION;
 
-  const hull = 0x4a5240;
-  const hullDark = 0x32382c;
-  const hullLight = 0x5c6650;
-  const track = 0x1a1814;
-  const rubber = 0x11100e;
-  const metal = 0x2c2c28;
-  const pod = 0x3e4536;
-  const podDark = 0x2a2f24;
-  const tube = 0x1e2018;
-  const glass = 0x1a2228;
+  const hull = 0x5a6450;
+  const hullDark = 0x4a5442;
+  const hullLight = 0x6a7460;
+  const track = 0x1c1a16;
+  const rubber = 0x12110f;
+  const metal = 0x5a5e58;
+  const pod = 0x525a48;
+  const podDark = 0x3e4638;
+  const tube = 0x2e3028;
+  const glass = 0x1a2830;
   const accent = teamColor >>> 0;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
-    const m = new THREE.Mesh(geo, typeof mat === "number" ? matStd(mat) : mat);
+    const resolved =
+      typeof mat === "number"
+        ? matArmor(mat)
+        : mat;
+    const m = new THREE.Mesh(geo, resolved);
     m.position.set(x, y, z);
     m.rotation.set(rx, ry, rz);
     m.castShadow = true;
@@ -6157,14 +6233,14 @@ function createMlrsMesh(teamColor) {
   // —— Tracks (Bradley-derived, longer wheelbase) ——
   for (const side of [-1, 1]) {
     const x = side * 0.168;
-    add(g, new THREE.BoxGeometry(0.052, 0.072, 0.58), track, x, 0.04, -0.02);
-    add(g, new THREE.BoxGeometry(0.038, 0.024, 0.56), rubber, x, 0.01, -0.02);
+    add(g, new THREE.BoxGeometry(0.052, 0.072, 0.58), matArmor(track, { metalness: 0.72, roughness: 0.35 }), x, 0.04, -0.02);
+    add(g, new THREE.BoxGeometry(0.038, 0.024, 0.56), matStd(rubber, { metalness: 0.18, roughness: 0.88 }), x, 0.01, -0.02);
     for (let i = 0; i < 6; i++) {
       const z = -0.22 + i * 0.088;
       const wheel = add(
         g,
-        new THREE.CylinderGeometry(0.028, 0.028, 0.034, 10),
-        rubber,
+        new THREE.CylinderGeometry(0.028, 0.028, 0.034, 14),
+        matArmor(0x3a3c38),
         x,
         0.028,
         z,
@@ -6176,8 +6252,8 @@ function createMlrsMesh(teamColor) {
     }
     const sprocket = add(
       g,
-      new THREE.CylinderGeometry(0.032, 0.032, 0.036, 12),
-      metal,
+      new THREE.CylinderGeometry(0.032, 0.032, 0.036, 14),
+      matArmor(metal),
       x,
       0.034,
       -0.28,
@@ -6186,31 +6262,31 @@ function createMlrsMesh(teamColor) {
       Math.PI / 2,
     );
     sprocket.userData.roadWheel = true;
-    add(g, new THREE.CylinderGeometry(0.026, 0.026, 0.034, 10), metal, x, 0.03, 0.26, 0, 0, Math.PI / 2);
+    add(g, new THREE.CylinderGeometry(0.026, 0.026, 0.034, 12), matArmor(metal), x, 0.03, 0.26, 0, 0, Math.PI / 2);
   }
 
   // —— Lower hull / chassis ——
-  add(g, new THREE.BoxGeometry(0.28, 0.07, 0.52), hull, 0, 0.075, -0.01, 0, 0, 0, true);
-  add(g, new THREE.BoxGeometry(0.26, 0.04, 0.48), hullDark, 0, 0.12, -0.01);
+  add(g, new THREE.BoxGeometry(0.28, 0.07, 0.52), matArmor(hull), 0, 0.075, -0.01, 0, 0, 0, true);
+  add(g, new THREE.BoxGeometry(0.26, 0.04, 0.48), matArmor(hullDark), 0, 0.12, -0.01);
   // Side skirts
   for (const side of [-1, 1]) {
-    add(g, new THREE.BoxGeometry(0.018, 0.055, 0.5), hullLight, side * 0.148, 0.08, -0.02, 0, 0, 0, true);
+    add(g, new THREE.BoxGeometry(0.018, 0.055, 0.5), matArmor(hullLight), side * 0.148, 0.08, -0.02, 0, 0, 0, true);
   }
 
   // —— Cab (front) ——
   const cab = new THREE.Group();
   cab.position.set(0, 0.14, 0.18);
   g.add(cab);
-  add(cab, new THREE.BoxGeometry(0.22, 0.14, 0.2), hull, 0, 0.07, 0, 0, 0, 0, true);
-  add(cab, new THREE.BoxGeometry(0.2, 0.06, 0.04), glass, 0, 0.1, 0.09);
-  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), glass, -0.095, 0.09, 0.02);
-  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), glass, 0.095, 0.09, 0.02);
+  add(cab, new THREE.BoxGeometry(0.22, 0.14, 0.2), matArmor(hull), 0, 0.07, 0, 0, 0, 0, true);
+  add(cab, new THREE.BoxGeometry(0.2, 0.06, 0.04), matSatin(glass, { metalness: 0.55, roughness: 0.18 }), 0, 0.1, 0.09);
+  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), matSatin(glass, { metalness: 0.55, roughness: 0.18 }), -0.095, 0.09, 0.02);
+  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), matSatin(glass, { metalness: 0.55, roughness: 0.18 }), 0.095, 0.09, 0.02);
   // Team stripe on cab roof
-  add(cab, new THREE.BoxGeometry(0.16, 0.012, 0.06), accent, 0, 0.145, -0.02, 0, 0, 0, true);
+  add(cab, new THREE.BoxGeometry(0.16, 0.012, 0.06), matSatin(accent, { metalness: 0.85 }), 0, 0.145, -0.02, 0, 0, 0, true);
   // Bumper / light bar
-  add(cab, new THREE.BoxGeometry(0.2, 0.025, 0.03), metal, 0, 0.02, 0.11);
-  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), 0xc8c090, -0.07, 0.035, 0.12);
-  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), 0xc8c090, 0.07, 0.035, 0.12);
+  add(cab, new THREE.BoxGeometry(0.2, 0.025, 0.03), matArmor(metal), 0, 0.02, 0.11);
+  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), matSatin(0xc8c090, { metalness: 0.7 }), -0.07, 0.035, 0.12);
+  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), matSatin(0xc8c090, { metalness: 0.7 }), 0.07, 0.035, 0.12);
 
   // —— Elevating rocket pod (yaw + elevation) ——
   const turret = new THREE.Group();
@@ -6219,8 +6295,8 @@ function createMlrsMesh(teamColor) {
   g.add(turret);
 
   // Traversing ring / base
-  add(turret, new THREE.CylinderGeometry(0.08, 0.09, 0.03, 12), metal, 0, 0.01, 0);
-  add(turret, new THREE.BoxGeometry(0.12, 0.04, 0.14), hullDark, 0, 0.035, 0);
+  add(turret, new THREE.CylinderGeometry(0.08, 0.09, 0.03, 16), matArmor(metal), 0, 0.01, 0);
+  add(turret, new THREE.BoxGeometry(0.12, 0.04, 0.14), matArmor(hullDark), 0, 0.035, 0);
 
   const elev = new THREE.Group();
   elev.name = "mlrsElev";
@@ -6234,9 +6310,9 @@ function createMlrsMesh(teamColor) {
     const bay = new THREE.Group();
     bay.position.set(side * 0.072, 0.06, 0);
     elev.add(bay);
-    add(bay, new THREE.BoxGeometry(0.11, 0.12, 0.32), pod, 0, 0, 0);
-    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), podDark, 0, 0.065, 0);
-    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), podDark, 0, -0.065, 0);
+    add(bay, new THREE.BoxGeometry(0.11, 0.12, 0.32), matArmor(pod), 0, 0, 0);
+    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), matArmor(podDark), 0, 0.065, 0);
+    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), matArmor(podDark), 0, -0.065, 0);
     // 3×2 tube mouths facing +Z (forward when elevated)
     for (let row = 0; row < 2; row++) {
       for (let col = 0; col < 3; col++) {
@@ -6840,7 +6916,7 @@ function upsertMesh(entity) {
           mesh.userData.airAltitude == null ||
           !mesh.getObjectByName("muzzle"))) ||
       (isMlrs &&
-        (!mesh.userData.isMlrs || (mesh.userData.mlrsRigVersion || 0) < 1)) ||
+        (!mesh.userData.isMlrs || (mesh.userData.mlrsRigVersion || 0) < MLRS_RIG_VERSION)) ||
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||

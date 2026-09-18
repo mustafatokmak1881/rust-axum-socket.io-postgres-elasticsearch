@@ -270,6 +270,13 @@ pub struct PondView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountainView {
+    pub x: f32,
+    pub y: f32,
+    pub r: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchSnapshot {
     pub match_id: Uuid,
     pub map_size: u16,
@@ -297,6 +304,9 @@ pub struct MatchSnapshot {
     /// Impassable ponds (units + buildings).
     #[serde(default)]
     pub ponds: Vec<PondView>,
+    /// Impassable mountain masses — ground units must path around.
+    #[serde(default)]
+    pub mountains: Vec<MountainView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
