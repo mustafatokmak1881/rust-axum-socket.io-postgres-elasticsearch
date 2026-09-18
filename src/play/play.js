@@ -23,6 +23,7 @@ const state = {
   matchEnded: false,
   scoreboard: [],
   resources: null,
+  ponds: [],
 };
 
 const factionColors = {
@@ -345,6 +346,7 @@ function clearWorldMeshes() {
 function enterMatch(snapshot) {
   state.match = snapshot;
   state.scoreboard = snapshot.scoreboard || [];
+  state.ponds = Array.isArray(snapshot.ponds) ? snapshot.ponds : [];
   if (snapshot.you_faction) {
     state.faction = snapshot.you_faction;
     syncFactionButtons();
@@ -1716,18 +1718,20 @@ const BUILDING_VISUAL = {
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 7;
+const BUILDING_FIT_VERSION = 8;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
 const PATRIOT_RIG_VERSION = 3;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
-const TANK_RIG_VERSION = 8;
+const TANK_RIG_VERSION = 9;
+/** Infantry mesh revision. */
+const INFANTRY_RIG_VERSION = 6;
 
 function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) {
   const m = new THREE.Mesh(
     geo,
     matStd(color, {
-      metalness: opts.metalness ?? 0.62,
-      roughness: opts.roughness ?? 0.38,
+      metalness: opts.metalness ?? 0.78,
+      roughness: opts.roughness ?? 0.28,
       emissive: opts.emissive,
       emissiveIntensity: opts.emissiveIntensity,
     }),
@@ -1759,19 +1763,21 @@ function finishProcBuilding(root, kind, unitHeight) {
 function milPalette(accent) {
   return {
     accent: accent ?? 0x556b2f,
-    olive: 0x4a5538,
-    oliveDark: 0x32382a,
-    oliveLight: 0x5c6648,
-    concrete: 0x6a675c,
-    concreteDark: 0x4a4840,
-    concreteLight: 0x7e7a6e,
-    metal: 0x4a4e48,
-    metalBright: 0x7a8074,
+    olive: 0x3e4634,
+    oliveDark: 0x2a3024,
+    oliveLight: 0x525a42,
+    concrete: 0x5c5a52,
+    concreteDark: 0x3e3c36,
+    concreteLight: 0x6e6a60,
+    metal: 0x5a6068,
+    metalBright: 0x8a929c,
     rust: 0x5a4030,
-    glass: 0x1a2830,
+    glass: 0x152028,
     sand: 0x6b6550,
     warning: 0xb8860b,
-    black: 0x141210,
+    black: 0x101214,
+    steel: 0x6a727a,
+    panel: 0x484e54,
   };
 }
 
@@ -1791,17 +1797,36 @@ function createCommandCenterMesh(fallbackMat) {
     metalness: 0.1,
   });
 
-  // Main keep
+  // Main keep — brushed steel armor panels
   bldgPart(root, new THREE.BoxGeometry(1.35, 0.55, 1.05), p.olive, 0, 0.38, 0.02, 0, 0, 0, {
-    roughness: 0.7,
+    roughness: 0.32,
+    metalness: 0.82,
   });
-  bldgPart(root, new THREE.BoxGeometry(1.38, 0.06, 1.08), p.oliveDark, 0, 0.68, 0.02);
+  bldgPart(root, new THREE.BoxGeometry(1.38, 0.06, 1.08), p.oliveDark, 0, 0.68, 0.02, 0, 0, 0, {
+    metalness: 0.88,
+    roughness: 0.22,
+  });
   // Upper CIC
-  bldgPart(root, new THREE.BoxGeometry(0.95, 0.32, 0.72), p.oliveLight, 0.08, 0.9, 0.05);
-  bldgPart(root, new THREE.BoxGeometry(0.98, 0.04, 0.75), p.metal, 0.08, 1.08, 0.05, 0, 0, 0, {
-    metalness: 0.45,
-    roughness: 0.45,
+  bldgPart(root, new THREE.BoxGeometry(0.95, 0.32, 0.72), p.oliveLight, 0.08, 0.9, 0.05, 0, 0, 0, {
+    metalness: 0.8,
+    roughness: 0.28,
   });
+  bldgPart(root, new THREE.BoxGeometry(0.98, 0.04, 0.75), p.metalBright, 0.08, 1.08, 0.05, 0, 0, 0, {
+    metalness: 0.92,
+    roughness: 0.18,
+  });
+  // Riveted face plates
+  for (const [x, z] of [
+    [-0.4, 0.55],
+    [0.4, 0.55],
+    [-0.4, -0.5],
+    [0.4, -0.5],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(0.28, 0.22, 0.04), p.steel, x, 0.42, z, 0, 0, 0, {
+      metalness: 0.9,
+      roughness: 0.2,
+    });
+  }
 
   // Corner bastions
   for (const [x, z] of [
@@ -1910,25 +1935,28 @@ function createBarracksMesh(fallbackMat) {
     cast: false,
   });
 
-  // Quonset vault (approx with box + roof wedges)
-  bldgPart(root, new THREE.BoxGeometry(1.1, 0.32, 0.62), p.olive, 0, 0.24, 0);
-  bldgPart(root, new THREE.BoxGeometry(1.12, 0.08, 0.64), p.metal, 0, 0.44, 0, 0, 0, 0, {
-    metalness: 0.4,
-    roughness: 0.5,
+  // Quonset vault — corrugated steel
+  bldgPart(root, new THREE.BoxGeometry(1.1, 0.32, 0.62), p.olive, 0, 0.24, 0, 0, 0, 0, {
+    metalness: 0.85,
+    roughness: 0.28,
+  });
+  bldgPart(root, new THREE.BoxGeometry(1.12, 0.08, 0.64), p.metalBright, 0, 0.44, 0, 0, 0, 0, {
+    metalness: 0.92,
+    roughness: 0.18,
   });
   // Arched roof strips
   for (let i = -2; i <= 2; i++) {
     bldgPart(
       root,
       new THREE.BoxGeometry(0.08, 0.14, 0.64),
-      p.oliveDark,
+      p.steel,
       i * 0.2,
       0.48,
       0,
       0,
       0,
       i * 0.12,
-      { metalness: 0.35, roughness: 0.55 },
+      { metalness: 0.9, roughness: 0.22 },
     );
   }
 
@@ -1988,19 +2016,19 @@ function createPowerPlantMesh(fallbackMat) {
     cast: false,
   });
 
-  // Reactor vessel
+  // Reactor vessel — polished containment steel
   bldgPart(root, new THREE.CylinderGeometry(0.42, 0.48, 0.55, 16), p.metal, 0, 0.35, 0, 0, 0, 0, {
-    metalness: 0.55,
-    roughness: 0.35,
+    metalness: 0.9,
+    roughness: 0.18,
   });
   bldgPart(root, new THREE.CylinderGeometry(0.38, 0.38, 0.12, 16), p.metalBright, 0, 0.68, 0, 0, 0, 0, {
-    metalness: 0.6,
-    roughness: 0.3,
+    metalness: 0.95,
+    roughness: 0.12,
   });
   // Dome
-  bldgPart(root, new THREE.SphereGeometry(0.38, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), p.concreteLight, 0, 0.72, 0, 0, 0, 0, {
-    metalness: 0.2,
-    roughness: 0.55,
+  bldgPart(root, new THREE.SphereGeometry(0.38, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), p.steel, 0, 0.72, 0, 0, 0, 0, {
+    metalness: 0.88,
+    roughness: 0.2,
   });
 
   // Cooling fins
@@ -2009,14 +2037,14 @@ function createPowerPlantMesh(fallbackMat) {
     bldgPart(
       root,
       new THREE.BoxGeometry(0.06, 0.4, 0.14),
-      p.oliveDark,
+      p.panel,
       Math.cos(a) * 0.52,
       0.35,
       Math.sin(a) * 0.52,
       0,
       -a,
       0,
-      { metalness: 0.4, roughness: 0.5 },
+      { metalness: 0.88, roughness: 0.24 },
     );
   }
 
@@ -2068,17 +2096,20 @@ function createSupplyCenterMesh(fallbackMat) {
     cast: false,
   });
 
-  // Warehouse hall
-  bldgPart(root, new THREE.BoxGeometry(1.25, 0.55, 0.85), p.olive, 0, 0.35, -0.05);
-  bldgPart(root, new THREE.BoxGeometry(1.28, 0.06, 0.88), p.metal, 0, 0.65, -0.05, 0, 0, 0, {
-    metalness: 0.4,
-    roughness: 0.5,
+  // Warehouse hall — corrugated metal cladding
+  bldgPart(root, new THREE.BoxGeometry(1.25, 0.55, 0.85), p.olive, 0, 0.35, -0.05, 0, 0, 0, {
+    metalness: 0.82,
+    roughness: 0.28,
+  });
+  bldgPart(root, new THREE.BoxGeometry(1.28, 0.06, 0.88), p.metalBright, 0, 0.65, -0.05, 0, 0, 0, {
+    metalness: 0.92,
+    roughness: 0.16,
   });
   // Sawtooth roof ridges
   for (let i = -2; i <= 2; i++) {
-    bldgPart(root, new THREE.BoxGeometry(0.18, 0.1, 0.88), p.oliveDark, i * 0.22, 0.72, -0.05, 0, 0, 0.25, {
-      metalness: 0.3,
-      roughness: 0.55,
+    bldgPart(root, new THREE.BoxGeometry(0.18, 0.1, 0.88), p.steel, i * 0.22, 0.72, -0.05, 0, 0, 0.25, {
+      metalness: 0.9,
+      roughness: 0.2,
     });
   }
 
@@ -2138,42 +2169,48 @@ function createWarFactoryMesh(fallbackMat) {
     cast: false,
   });
 
-  // Main hangar
-  bldgPart(root, new THREE.BoxGeometry(1.7, 0.7, 1.1), p.olive, 0, 0.42, 0);
-  bldgPart(root, new THREE.BoxGeometry(1.74, 0.08, 1.14), p.metal, 0, 0.8, 0, 0, 0, 0, {
-    metalness: 0.42,
-    roughness: 0.48,
+  // Main hangar — industrial steel shell
+  bldgPart(root, new THREE.BoxGeometry(1.7, 0.7, 1.1), p.olive, 0, 0.42, 0, 0, 0, 0, {
+    metalness: 0.84,
+    roughness: 0.26,
+  });
+  bldgPart(root, new THREE.BoxGeometry(1.74, 0.08, 1.14), p.metalBright, 0, 0.8, 0, 0, 0, 0, {
+    metalness: 0.94,
+    roughness: 0.14,
   });
   // Roof ridges
   for (let i = -3; i <= 3; i++) {
-    bldgPart(root, new THREE.BoxGeometry(0.1, 0.12, 1.14), p.oliveDark, i * 0.22, 0.9, 0, 0, 0, 0.15, {
-      metalness: 0.35,
-      roughness: 0.5,
+    bldgPart(root, new THREE.BoxGeometry(0.1, 0.12, 1.14), p.steel, i * 0.22, 0.9, 0, 0, 0, 0.15, {
+      metalness: 0.9,
+      roughness: 0.2,
     });
   }
 
   // Giant bay door (front)
   bldgPart(root, new THREE.BoxGeometry(0.95, 0.55, 0.05), p.black, 0, 0.38, 0.58, 0, 0, 0, {
-    metalness: 0.55,
-    roughness: 0.38,
+    metalness: 0.85,
+    roughness: 0.22,
   });
   for (let i = 0; i < 6; i++) {
     bldgPart(root, new THREE.BoxGeometry(0.9, 0.03, 0.02), p.metalBright, 0, 0.16 + i * 0.09, 0.61, 0, 0, 0, {
-      metalness: 0.5,
+      metalness: 0.92,
       cast: false,
     });
   }
   // Door frame
-  bldgPart(root, new THREE.BoxGeometry(1.05, 0.06, 0.08), p.metal, 0, 0.68, 0.58, 0, 0, 0, {
-    metalness: 0.5,
-    roughness: 0.4,
+  bldgPart(root, new THREE.BoxGeometry(1.05, 0.06, 0.08), p.steel, 0, 0.68, 0.58, 0, 0, 0, {
+    metalness: 0.9,
+    roughness: 0.18,
   });
 
   // Side workshop wing
-  bldgPart(root, new THREE.BoxGeometry(0.45, 0.4, 0.7), p.oliveLight, 0.95, 0.28, -0.15);
+  bldgPart(root, new THREE.BoxGeometry(0.45, 0.4, 0.7), p.oliveLight, 0.95, 0.28, -0.15, 0, 0, 0, {
+    metalness: 0.8,
+    roughness: 0.28,
+  });
   bldgPart(root, new THREE.BoxGeometry(0.03, 0.16, 0.28), p.glass, 1.17, 0.32, -0.15, 0, 0, 0, {
-    metalness: 0.65,
-    roughness: 0.25,
+    metalness: 0.75,
+    roughness: 0.15,
     transparent: true,
     opacity: 0.7,
   });
@@ -2184,22 +2221,22 @@ function createWarFactoryMesh(fallbackMat) {
     [-0.4, -0.45],
   ]) {
     bldgPart(root, new THREE.CylinderGeometry(0.08, 0.1, 0.85, 10), p.rust, x, 0.95, z, 0, 0, 0, {
-      metalness: 0.4,
-      roughness: 0.55,
+      metalness: 0.72,
+      roughness: 0.38,
     });
     bldgPart(root, new THREE.CylinderGeometry(0.09, 0.09, 0.05, 10), p.warning, x, 1.38, z);
   }
 
   // Overhead crane
   bldgPart(root, new THREE.BoxGeometry(0.08, 0.7, 0.08), p.metal, -0.75, 0.85, 0.35, 0, 0, 0, {
-    metalness: 0.55,
+    metalness: 0.9,
   });
   bldgPart(root, new THREE.BoxGeometry(0.08, 0.7, 0.08), p.metal, 0.75, 0.85, 0.35, 0, 0, 0, {
-    metalness: 0.55,
+    metalness: 0.9,
   });
   bldgPart(root, new THREE.BoxGeometry(1.55, 0.06, 0.08), p.metalBright, 0, 1.18, 0.35, 0, 0, 0, {
-    metalness: 0.6,
-    roughness: 0.35,
+    metalness: 0.94,
+    roughness: 0.16,
   });
   bldgPart(root, new THREE.BoxGeometry(0.2, 0.12, 0.2), p.warning, 0.2, 1.1, 0.35);
 
@@ -3653,11 +3690,11 @@ function createFogOfWar(size) {
         float explored = texel.r;
         float visible = texel.g;
         if (explored < 0.5) {
-          fragColor = vec4(0.02, 0.03, 0.02, 0.92);
+          fragColor = vec4(0.06, 0.04, 0.025, 0.93);
           return;
         }
         if (visible < 0.5) {
-          fragColor = vec4(0.05, 0.07, 0.04, 0.62);
+          fragColor = vec4(0.1, 0.07, 0.04, 0.58);
           return;
         }
         discard;
@@ -3689,7 +3726,7 @@ function scatterGroundDecor(scene, size) {
   group.name = "groundDecor";
 
   const desertRock = new THREE.MeshStandardMaterial({
-    color: 0x8a7a5a,
+    color: 0x6a5240,
     roughness: 0.96,
     metalness: 0.04,
     flatShading: true,
@@ -3717,6 +3754,43 @@ function scatterGroundDecor(scene, size) {
     metalness: 0,
     flatShading: true,
   });
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: 0x2a6880,
+    roughness: 0.18,
+    metalness: 0.55,
+    transparent: true,
+    opacity: 0.78,
+  });
+  const waterDeep = new THREE.MeshStandardMaterial({
+    color: 0x1a4058,
+    roughness: 0.22,
+    metalness: 0.45,
+    transparent: true,
+    opacity: 0.85,
+  });
+
+  // Impassable pond discs (visual layer above baked texture).
+  for (const pond of state.ponds || []) {
+    const r = Math.max(1.2, Number(pond.r) || 3);
+    const deep = new THREE.Mesh(new THREE.CircleGeometry(r * 0.72, 28), waterDeep);
+    deep.rotation.x = -Math.PI / 2;
+    deep.position.set(pond.x, 0.03, pond.y);
+    group.add(deep);
+    const rim = new THREE.Mesh(new THREE.RingGeometry(r * 0.7, r * 1.02, 36), waterMat);
+    rim.rotation.x = -Math.PI / 2;
+    rim.position.set(pond.x, 0.035, pond.y);
+    group.add(rim);
+  }
+
+  const nearPond = (x, z, pad = 1.2) => {
+    for (const pond of state.ponds || []) {
+      const dx = pond.x - x;
+      const dy = pond.y - z;
+      const min = (pond.r || 0) + pad;
+      if (dx * dx + dy * dy < min * min) return true;
+    }
+    return false;
+  };
 
   const maxTrees = Math.min(36, Math.floor(size * 0.18));
   const maxRocks = Math.min(22, Math.floor(size * 0.12));
@@ -3728,6 +3802,7 @@ function scatterGroundDecor(scene, size) {
   for (let i = 0; i < tries; i++) {
     const x = 5 + Math.random() * (size - 10);
     const z = 5 + Math.random() * (size - 10);
+    if (nearPond(x, z)) continue;
     const biome = sampleBiome(x, z, size);
 
     if (biome > 0.68 && trees < maxTrees) {
@@ -3805,9 +3880,9 @@ function initThree(size, terrainTexture, home) {
   renderer.shadowMap.enabled = false;
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1a2218);
-  // Warm distant haze that sits between desert sand and forest green.
-  scene.fog = new THREE.Fog(0x2a3224, Math.max(80, aoiRadius * 2.4), Math.max(140, aoiRadius * 5));
+  scene.background = new THREE.Color(0x221810);
+  // Warm soil haze matching brown dirt terrain.
+  scene.fog = new THREE.Fog(0x3a2e20, Math.max(80, aoiRadius * 2.4), Math.max(140, aoiRadius * 5));
 
   camera = new THREE.PerspectiveCamera(
     CAMERA_FOV,
@@ -3842,19 +3917,19 @@ function initThree(size, terrainTexture, home) {
   controls.maxPolarAngle = CAMERA_PITCH;
   controls.update();
 
-  const hemi = new THREE.HemisphereLight(0xe8d8b0, 0x2a3018, 1.05);
+  const hemi = new THREE.HemisphereLight(0xf0e0c0, 0x3a2818, 1.08);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffe2b8, 1.05);
+  const sun = new THREE.DirectionalLight(0xffe2b8, 1.12);
   sun.position.set(55, 70, 28);
   scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xa8c090, 0.22);
+  const fill = new THREE.DirectionalLight(0xc0a880, 0.28);
   fill.position.set(-30, 25, -40);
   scene.add(fill);
 
   const geo = new THREE.PlaneGeometry(size, size, 1, 1);
   const mat = new THREE.MeshStandardMaterial({
     map: terrainTexture || null,
-    color: terrainTexture ? 0xffffff : 0x5a6840,
+    color: terrainTexture ? 0xffffff : 0x6a4e32,
     roughness: 0.94,
     metalness: 0.02,
     flatShading: false,
@@ -3870,7 +3945,7 @@ function initThree(size, terrainTexture, home) {
     size,
     Math.min(size, 64),
     0x000000,
-    0x3a4030,
+    0x4a3a28,
   );
   grid.material.opacity = 0.05;
   grid.material.transparent = true;
@@ -3886,7 +3961,7 @@ function initThree(size, terrainTexture, home) {
   const underlay = new THREE.Mesh(
     new THREE.PlaneGeometry(size + 48, size + 48),
     new THREE.MeshStandardMaterial({
-      color: 0x141810,
+      color: 0x181208,
       roughness: 1,
       metalness: 0,
     }),
@@ -4009,6 +4084,12 @@ function canPlaceBuildingAt(kind, tileX, tileY) {
   const fx = tileX + 0.5;
   const fy = tileY + 0.5;
   const placeR = buildingRadius(kind);
+  for (const pond of state.ponds || []) {
+    const dx = pond.x - fx;
+    const dy = pond.y - fy;
+    const min = (pond.r || 0) + placeR;
+    if (dx * dx + dy * dy < min * min) return false;
+  }
   const myTeam = state.match?.team;
   for (const entity of state.entities.values()) {
     if (entity.building) {

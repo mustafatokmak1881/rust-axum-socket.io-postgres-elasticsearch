@@ -651,7 +651,7 @@ fn collision_pad() -> f32 {
     0.006
 }
 
-/// Deterministic ponds from match id — same seed the client uses for paint.
+/// Deterministic ponds from match id — client paints the same discs from snapshot.
 fn generate_ponds(match_id: Uuid, map_size: u16) -> Vec<PondView> {
     let mut seed = match_id.as_u128() as u64 ^ ((match_id.as_u128() >> 64) as u64);
     if seed == 0 {
@@ -661,16 +661,34 @@ fn generate_ponds(match_id: Uuid, map_size: u16) -> Vec<PondView> {
     let count = 7 + (seed % 5) as usize; // 7–11 ponds
     let mut ponds = Vec::with_capacity(count);
     let mut s = seed;
-    for i in 0..count {
+    let mut attempts = 0;
+    while ponds.len() < count && attempts < count * 40 {
+        attempts += 1;
         s = s
             .wrapping_mul(6364136223846793005)
-            .wrapping_add(i as u64 + 1);
-        let x = 10.0 + ((s % 10_000) as f32 / 10_000.0) * (map - 20.0).max(8.0);
+            .wrapping_add(attempts as u64 + 1);
+        let x = 12.0 + ((s % 10_000) as f32 / 10_000.0) * (map - 24.0).max(8.0);
         s = s.wrapping_mul(6364136223846793005).wrapping_add(17);
-        let y = 10.0 + ((s % 10_000) as f32 / 10_000.0) * (map - 20.0).max(8.0);
+        let y = 12.0 + ((s % 10_000) as f32 / 10_000.0) * (map - 24.0).max(8.0);
         s = s.wrapping_mul(6364136223846793005).wrapping_add(31);
         let r = 2.8 + ((s % 50) as f32) * 0.07; // ~2.8–6.3
-        // Keep clear of map corners spawn bands a bit — still allow lakes mid-map.
+        // Prefer mid-map lakes; keep clear of west/east spawn bands.
+        if x < map * 0.18 || x > map * 0.82 {
+            continue;
+        }
+        let mut overlap = false;
+        for p in &ponds {
+            let dx = p.x - x;
+            let dy = p.y - y;
+            let min = p.r + r + 3.0;
+            if dx * dx + dy * dy < min * min {
+                overlap = true;
+                break;
+            }
+        }
+        if overlap {
+            continue;
+        }
         ponds.push(PondView { x, y, r });
     }
     ponds
@@ -970,7 +988,22 @@ impl MatchSim {
         } else {
             bx.clamp(4.0, map - 5.0)
         };
-        (fallback_x, by.clamp(4.0, map - 5.0))
+        let fy = by.clamp(4.0, map - 5.0);
+        let hq_r = building_radius("hq") + 0.5;
+        if !self.water_blocks(fallback_x, fy, hq_r) {
+            return (fallback_x, fy);
+        }
+        // Nudge off water if the naive fallback landed in a pond.
+        for k in 0..48 {
+            let ang = k as f32 * 0.7;
+            let dist = 2.0 + k as f32 * 0.35;
+            let x = (fallback_x + ang.cos() * dist).clamp(4.0, map - 5.0);
+            let y = (fy + ang.sin() * dist).clamp(4.0, map - 5.0);
+            if !self.water_blocks(x, y, hq_r) {
+                return (x, y);
+            }
+        }
+        (fallback_x, fy)
     }
 
     /// Mid-match join: spawn HQ on the same wide ring as the opening cities.
