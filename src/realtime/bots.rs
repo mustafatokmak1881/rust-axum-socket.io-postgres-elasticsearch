@@ -191,39 +191,39 @@ impl BotStyle {
 
     fn ranger_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 10,
-            BotStyle::Aggressive => 8,
-            BotStyle::Balanced => 8,
-            BotStyle::Defensive => 10,
-            BotStyle::Counter => 8,
+            BotStyle::Reckless => 5,
+            BotStyle::Aggressive => 4,
+            BotStyle::Balanced => 4,
+            BotStyle::Defensive => 5,
+            BotStyle::Counter => 4,
         }
     }
 
     fn tank_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 16,
-            BotStyle::Aggressive => 14,
-            BotStyle::Balanced => 14,
-            BotStyle::Defensive => 12,
-            BotStyle::Counter => 14,
+            BotStyle::Reckless => 8,
+            BotStyle::Aggressive => 7,
+            BotStyle::Balanced => 7,
+            BotStyle::Defensive => 6,
+            BotStyle::Counter => 7,
         }
     }
 
     fn mlrs_cap(self) -> usize {
         match self {
-            BotStyle::Reckless => 4,
-            BotStyle::Aggressive => 5,
-            BotStyle::Balanced => 5,
-            BotStyle::Defensive => 3,
-            BotStyle::Counter => 4,
+            BotStyle::Reckless => 2,
+            BotStyle::Aggressive => 2,
+            BotStyle::Balanced => 2,
+            BotStyle::Defensive => 1,
+            BotStyle::Counter => 2,
         }
     }
 
     fn turrets(self) -> u32 {
         match self {
-            BotStyle::Defensive => 3,
-            BotStyle::Counter => 2,
-            BotStyle::Balanced => 2,
+            BotStyle::Defensive => 2,
+            BotStyle::Counter => 1,
+            BotStyle::Balanced => 1,
             BotStyle::Aggressive => 1,
             BotStyle::Reckless => 1,
         }

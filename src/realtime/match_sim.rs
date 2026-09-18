@@ -18,11 +18,11 @@ pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 32;
 
 /// Total living+queued units with a single home HQ.
-pub const HOME_UNIT_BUDGET: usize = 36;
+pub const HOME_UNIT_BUDGET: usize = 18;
 /// Extra units per captured colony HQ (= half of home → x + x/2 + x/2 …).
 pub const COLONY_UNIT_BUDGET: usize = HOME_UNIT_BUDGET / 2;
 /// Non-HQ structures allowed at the home base.
-pub const HOME_BUILDING_BUDGET: usize = 12;
+pub const HOME_BUILDING_BUDGET: usize = 6;
 /// Extra structures unlocked per captured colony HQ (= half of home).
 pub const COLONY_BUILDING_BUDGET: usize = HOME_BUILDING_BUDGET / 2;
 /// Wipe / claim radius around a fallen HQ (city footprint).
@@ -1025,13 +1025,13 @@ impl MatchSim {
         };
 
         const GOLDEN: f32 = 2.399_963;
-        // Pack denser when the lobby is large so 32 HQs still fit.
+        // Wider bases — fewer collisions / less early fight clutter (still packs for 32).
         let min_sep = if self.players.len() >= 20 {
-            11.0
-        } else if self.players.len() >= 12 {
-            14.0
-        } else {
             18.0
+        } else if self.players.len() >= 12 {
+            26.0
+        } else {
+            34.0
         };
 
         // Rotate the golden spiral per match so Ally spawns aren't the same ring every game.
@@ -1041,23 +1041,23 @@ impl MatchSim {
             .wrapping_add(1);
         let spin_ang = (spin % 10_000) as f32 / 10_000.0 * std::f32::consts::TAU;
 
-        for k in 0..220 {
+        for k in 0..360 {
             let r = if hq_positions.is_empty() {
                 // First HQ near center-ish, then spiral out.
                 if k == 0 {
                     0.0
                 } else {
-                    min_sep * 0.55 + (k as f32).sqrt() * 5.0
+                    min_sep * 0.7 + (k as f32).sqrt() * 6.5
                 }
             } else {
-                min_sep + (k as f32).sqrt() * 5.5
+                min_sep + (k as f32).sqrt() * 7.0
             };
             let angle = k as f32 * GOLDEN + spin_ang;
             let x = (bx + angle.cos() * r).clamp(4.0, map - 5.0);
             let y = (by + angle.sin() * r).clamp(4.0, map - 5.0);
             let fx = x.floor() as f32 + 0.5;
             let fy = y.floor() as f32 + 0.5;
-            let sep = min_sep * 0.85;
+            let sep = min_sep * 0.95;
             let mut blocked = false;
             self.grid.for_each_nearby(fx, fy, sep + MAX_ENTITY_RADIUS, |id| {
                 let Some(e) = self.entities.get(&id) else {
