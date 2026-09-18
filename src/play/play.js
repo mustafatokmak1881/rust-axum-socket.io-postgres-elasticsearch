@@ -1727,9 +1727,13 @@ const BUILDING_VISUAL = {
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 8;
+const BUILDING_FIT_VERSION = 9;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
-const PATRIOT_RIG_VERSION = 3;
+const PATRIOT_RIG_VERSION = 4;
+/** China Gattling Cannon mesh revision. */
+const GATLING_DEF_VERSION = 1;
+/** Strategy Center / tech building mesh revision. */
+const STRATEGY_RIG_VERSION = 1;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
 const TANK_RIG_VERSION = 9;
 /** Infantry mesh revision. */
@@ -1795,7 +1799,7 @@ function createCommandCenterMesh(fallbackMat) {
   const p = milPalette(fallbackMat?.color?.getHex?.());
   const root = new THREE.Group();
 
-  // Plinth / blast apron
+  // Plinth / blast apron — Generals CC concrete pad
   bldgPart(root, new THREE.BoxGeometry(1.95, 0.07, 1.75), p.concreteDark, 0, 0.035, 0, 0, 0, 0, {
     roughness: 0.92,
     metalness: 0.08,
@@ -1804,6 +1808,17 @@ function createCommandCenterMesh(fallbackMat) {
   bldgPart(root, new THREE.BoxGeometry(1.82, 0.04, 1.62), p.concrete, 0, 0.08, 0, 0, 0, 0, {
     roughness: 0.88,
     metalness: 0.1,
+  });
+  // Painted apron marking (sun-catching strip)
+  bldgPart(root, new THREE.BoxGeometry(0.55, 0.01, 0.55), p.concreteLight, 0, 0.095, 0.55, 0, 0, 0, {
+    metalness: 0.15,
+    roughness: 0.7,
+    cast: false,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.2, 0.012, 0.2), p.accent, 0, 0.1, 0.55, 0, 0.2, 0, {
+    metalness: 0.35,
+    roughness: 0.45,
+    cast: false,
   });
 
   // Main keep — brushed steel armor panels
@@ -2261,14 +2276,13 @@ function createWarFactoryMesh(fallbackMat) {
 
 function createBuildingMesh(kind, fallbackMat) {
   if (kind === "turret" || kind === "stinger_site") return createPatriotBatteryMesh(fallbackMat);
-  if (kind === "gatling_cannon") return createPatriotBatteryMesh(fallbackMat);
+  if (kind === "gatling_cannon") return createGattlingCannonMesh(fallbackMat);
   if (kind === "bunker" || kind === "tunnel_network") return createBunkerMesh(fallbackMat);
   if (kind === "demo_trap") {
     const m = createBunkerMesh(fallbackMat);
     m.scale.setScalar(0.55);
     return m;
   }
-  if (kind === "radar") return createRadarStationMesh(fallbackMat);
   if (kind === "firebase") return createFirebaseMesh(fallbackMat);
   if (kind === "hq") return createCommandCenterMesh(fallbackMat);
   if (
@@ -2278,7 +2292,7 @@ function createBuildingMesh(kind, fallbackMat) {
     kind === "internet_center" ||
     kind === "black_market"
   ) {
-    return createCommandCenterMesh(fallbackMat);
+    return createStrategyCenterMesh(fallbackMat, kind);
   }
   if (kind === "barracks") return createBarracksMesh(fallbackMat);
   if (
@@ -2307,6 +2321,213 @@ function createBuildingMesh(kind, fallbackMat) {
   const root = new THREE.Group();
   bldgPart(root, new THREE.BoxGeometry(0.9, 0.45, 0.7), p.olive, 0, 0.25, 0);
   return finishProcBuilding(root, kind, 0.5);
+}
+
+/** China Gattling Cannon — twin spinning barrels on a pedestal (not a Patriot clone). */
+function createGattlingCannonMesh(fallbackMat) {
+  const accent = fallbackMat?.color?.getHex?.() ?? 0x8a3030;
+  const ochre = 0x6a5030;
+  const ochreDark = 0x4a3820;
+  const metal = 0x3a3e42;
+  const metalBright = 0x6a7278;
+  const barrel = 0x1a1c1e;
+
+  const root = new THREE.Group();
+  root.userData.building = true;
+  root.userData.isBunker = true;
+  root.userData.isGattlingDef = true;
+  root.userData.gatlingDefVersion = GATLING_DEF_VERSION;
+  root.userData.modelKind = "gatling_cannon";
+  root.userData.isFallback = false;
+  root.userData.keepMtlColors = true;
+  root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.unitHeight = 0.42;
+  root.userData.turretTurnRate = 2.2;
+  root.userData.scanRate = 1.1;
+  root.userData.aimYaw = 0;
+
+  const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
+    const m = new THREE.Mesh(
+      geo,
+      matStd(color, {
+        metalness: opts.metalness ?? 0.82,
+        roughness: opts.roughness ?? 0.28,
+      }),
+    );
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = opts.cast !== false;
+    m.receiveShadow = true;
+    parent.add(m);
+    return m;
+  };
+
+  // Concrete pad
+  add(root, new THREE.CylinderGeometry(0.38, 0.42, 0.04, 16), 0x5a5848, 0, 0.02, 0, 0, 0, 0, {
+    metalness: 0.08,
+    roughness: 0.92,
+    cast: false,
+  });
+  // Pedestal
+  add(root, new THREE.CylinderGeometry(0.16, 0.2, 0.14, 12), ochreDark, 0, 0.1, 0, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  add(root, new THREE.CylinderGeometry(0.14, 0.14, 0.04, 12), metalBright, 0, 0.18, 0, 0, 0, 0, {
+    metalness: 0.9,
+    roughness: 0.18,
+  });
+
+  const turret = new THREE.Group();
+  turret.name = "muzzleRoot";
+  turret.position.set(0, 0.22, 0);
+  root.add(turret);
+
+  add(turret, new THREE.BoxGeometry(0.22, 0.1, 0.2), ochre, 0, 0.05, -0.02, 0, 0, 0, {
+    metalness: 0.75,
+    roughness: 0.3,
+  });
+  add(turret, new THREE.BoxGeometry(0.18, 0.06, 0.12), ochreDark, 0, 0.1, -0.04);
+  add(turret, new THREE.BoxGeometry(0.16, 0.02, 0.04), accent, 0, 0.12, 0.04, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.45,
+  });
+
+  // Twin gatling clusters
+  for (const sx of [-0.05, 0.05]) {
+    const hub = add(
+      turret,
+      new THREE.CylinderGeometry(0.035, 0.035, 0.05, 10),
+      metal,
+      sx,
+      0.06,
+      0.1,
+      Math.PI / 2,
+      0,
+      0,
+      { metalness: 0.92, roughness: 0.2 },
+    );
+    hub.name = "gatlingSpin";
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      add(
+        turret,
+        new THREE.CylinderGeometry(0.006, 0.007, 0.28, 5),
+        barrel,
+        sx + Math.cos(a) * 0.02,
+        0.06 + Math.sin(a) * 0.02,
+        0.26,
+        Math.PI / 2,
+        0,
+        0,
+        { metalness: 0.95, roughness: 0.18 },
+      );
+    }
+  }
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0, 0.06, 0.42);
+  turret.add(tip);
+
+  // Sandbags
+  for (const [x, z] of [
+    [-0.28, 0.1],
+    [0.28, 0.1],
+    [-0.22, -0.2],
+    [0.22, -0.2],
+  ]) {
+    add(root, new THREE.BoxGeometry(0.1, 0.06, 0.08), 0x6b6550, x, 0.05, z, 0, 0, 0, {
+      metalness: 0.05,
+      roughness: 0.95,
+      cast: false,
+    });
+  }
+  return root;
+}
+
+/** Strategy Center / Palace / Propaganda — tech HQ with dish & battle-plan look. */
+function createStrategyCenterMesh(fallbackMat, kind = "strategy_center") {
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
+
+  bldgPart(root, new THREE.BoxGeometry(1.7, 0.06, 1.4), p.concreteDark, 0, 0.03, 0, 0, 0, 0, {
+    roughness: 0.92,
+    metalness: 0.08,
+    cast: false,
+  });
+  // Main blockhouse
+  bldgPart(root, new THREE.BoxGeometry(1.25, 0.48, 0.95), p.olive, 0, 0.32, 0, 0, 0, 0, {
+    metalness: 0.84,
+    roughness: 0.26,
+  });
+  bldgPart(root, new THREE.BoxGeometry(1.28, 0.05, 0.98), p.metalBright, 0, 0.58, 0, 0, 0, 0, {
+    metalness: 0.94,
+    roughness: 0.14,
+  });
+  // Sun-catching roof panels
+  for (let i = -2; i <= 2; i++) {
+    bldgPart(root, new THREE.BoxGeometry(0.2, 0.02, 0.9), p.steel, i * 0.22, 0.62, 0, 0, 0, 0.08, {
+      metalness: 0.96,
+      roughness: 0.12,
+    });
+  }
+  // Ops wing
+  bldgPart(root, new THREE.BoxGeometry(0.45, 0.35, 0.55), p.oliveLight, 0.7, 0.26, 0.15, 0, 0, 0, {
+    metalness: 0.8,
+    roughness: 0.28,
+  });
+  // Glass CIC strip
+  bldgPart(root, new THREE.BoxGeometry(0.7, 0.12, 0.04), p.glass, 0, 0.42, 0.5, 0, 0, 0, {
+    metalness: 0.7,
+    roughness: 0.12,
+    transparent: true,
+    opacity: 0.75,
+  });
+  // Satellite dish (Search & Destroy cue)
+  bldgPart(root, new THREE.CylinderGeometry(0.04, 0.05, 0.35, 8), p.metal, -0.45, 0.78, -0.2, 0, 0, 0, {
+    metalness: 0.9,
+    roughness: 0.2,
+  });
+  bldgPart(
+    root,
+    new THREE.SphereGeometry(0.22, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    p.metalBright,
+    -0.45,
+    0.98,
+    -0.2,
+    0.6,
+    0.4,
+    0,
+    { metalness: 0.92, roughness: 0.16 },
+  );
+  // Bombardment cannon stub on roof
+  if (kind === "strategy_center") {
+    bldgPart(root, new THREE.CylinderGeometry(0.05, 0.06, 0.12, 10), p.metal, 0.25, 0.7, -0.1, 0, 0, 0, {
+      metalness: 0.9,
+    });
+    bldgPart(root, new THREE.CylinderGeometry(0.025, 0.03, 0.35, 8), p.black, 0.25, 0.78, 0.12, Math.PI / 2, 0, 0, {
+      metalness: 0.88,
+      roughness: 0.22,
+    });
+  }
+  bldgPart(root, new THREE.BoxGeometry(0.9, 0.04, 0.05), p.accent, 0, 0.45, 0.5);
+  // Sandbag perimeter
+  for (const [x, z] of [
+    [-0.7, 0.55],
+    [0.7, 0.55],
+    [-0.75, -0.5],
+    [0.75, -0.5],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(0.14, 0.08, 0.1), p.sand, x, 0.1, z, 0, 0, 0, {
+      roughness: 0.95,
+      metalness: 0.05,
+      cast: false,
+    });
+  }
+
+  const finished = finishProcBuilding(root, kind, 1.15);
+  finished.userData.strategyRigVersion = STRATEGY_RIG_VERSION;
+  return finished;
 }
 
 /** Hand-built MIM-104 Patriot — sized vs Crusader tank (~0.28 long) & infantry (~0.08 tall).
@@ -3476,9 +3697,9 @@ function visionRadiusFor(entity) {
   const kind = String(entity.kind || "");
   if (kind === "hq") return 20;
   if (kind === "radar") {
-    // Under construction: short local vision; finished dish lights a huge sector.
+    // Legacy leftover — HQ already provides USA radar in Generals.
     const building = entity.progress != null && entity.progress < 1;
-    return building ? 6 : 38;
+    return building ? 6 : 20;
   }
   if (entity.building) return 13;
   if (entity.unit) return 11;
@@ -3886,7 +4107,9 @@ function initThree(size, terrainTexture, home) {
   const dprCap = (navigator.deviceMemory && navigator.deviceMemory <= 8) ? 1 : 1.15;
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, dprCap));
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
-  renderer.shadowMap.enabled = false;
+  // Soft sun shadows — modest map for integrated GPUs.
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x221810);
@@ -3926,14 +4149,28 @@ function initThree(size, terrainTexture, home) {
   controls.maxPolarAngle = CAMERA_PITCH;
   controls.update();
 
-  const hemi = new THREE.HemisphereLight(0xf0e0c0, 0x3a2818, 1.08);
+  const hemi = new THREE.HemisphereLight(0xfff0d8, 0x3a2818, 0.95);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffe2b8, 1.12);
-  sun.position.set(55, 70, 28);
+  const sun = new THREE.DirectionalLight(0xffe8c4, 1.35);
+  sun.position.set(48, 78, 32);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.camera.near = 8;
+  sun.shadow.camera.far = 220;
+  const shadowSpan = Math.min(90, size * 0.55);
+  sun.shadow.camera.left = -shadowSpan;
+  sun.shadow.camera.right = shadowSpan;
+  sun.shadow.camera.top = shadowSpan;
+  sun.shadow.camera.bottom = -shadowSpan;
+  sun.shadow.bias = -0.0008;
+  sun.shadow.normalBias = 0.03;
   scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xc0a880, 0.28);
-  fill.position.set(-30, 25, -40);
+  const fill = new THREE.DirectionalLight(0xb8d0e8, 0.32);
+  fill.position.set(-40, 35, -50);
   scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffcc88, 0.22);
+  rim.position.set(-20, 18, 55);
+  scene.add(rim);
 
   const geo = new THREE.PlaneGeometry(size, size, 1, 1);
   const mat = new THREE.MeshStandardMaterial({
@@ -6466,7 +6703,6 @@ function buildingHasProperModel(kind) {
     kind === "bunker" ||
     kind === "tunnel_network" ||
     kind === "demo_trap" ||
-    kind === "radar" ||
     kind === "firebase" ||
     kind === "hq" ||
     kind === "barracks" ||
@@ -6505,10 +6741,20 @@ function upsertMesh(entity) {
   // Swap / upgrade procedural Patriot batteries.
   if (
     mesh &&
-    (entity.kind === "turret" ||
-      entity.kind === "stinger_site" ||
-      entity.kind === "gatling_cannon") &&
+    (entity.kind === "turret" || entity.kind === "stinger_site") &&
     (!mesh.userData.isPatriot || (mesh.userData.patriotRigVersion || 0) < PATRIOT_RIG_VERSION)
+  ) {
+    scene.remove(mesh);
+    disposeMeshTree(mesh);
+    state.meshes.delete(entity.id);
+    mesh = null;
+  }
+
+  if (
+    mesh &&
+    entity.kind === "gatling_cannon" &&
+    (!mesh.userData.isGattlingDef ||
+      (mesh.userData.gatlingDefVersion || 0) < GATLING_DEF_VERSION)
   ) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
@@ -6529,8 +6775,12 @@ function upsertMesh(entity) {
 
   if (
     mesh &&
-    entity.kind === "radar" &&
-    (!mesh.userData.isRadar || (mesh.userData.radarRigVersion || 0) < 2)
+    (entity.kind === "strategy_center" ||
+      entity.kind === "propaganda_center" ||
+      entity.kind === "palace" ||
+      entity.kind === "internet_center" ||
+      entity.kind === "black_market") &&
+    (mesh.userData.strategyRigVersion || 0) < STRATEGY_RIG_VERSION
   ) {
     scene.remove(mesh);
     disposeMeshTree(mesh);
@@ -6780,6 +7030,27 @@ function shortestAngle(from, to) {
   return diff;
 }
 
+/**
+ * Filter tank hull heading so one-tick collision sidesteps / net corrections
+ * don't whip the body ~180° for a frame (visible "jitter then correct").
+ */
+function setTankTravelYaw(mesh, yaw, opts = {}) {
+  if (!Number.isFinite(yaw)) return;
+  const cur = mesh.userData.faceYaw;
+  if (cur == null || !Number.isFinite(cur)) {
+    mesh.userData.faceYaw = yaw;
+    return;
+  }
+  const diff = shortestAngle(cur, yaw);
+  const abs = Math.abs(diff);
+  // Hard spikes while already rolling → keep prior heading (avoidance / snap-back).
+  if (mesh.userData.moving && abs > 1.05) {
+    return;
+  }
+  const blend = opts.blend != null ? opts.blend : abs > 0.55 ? 0.22 : 0.4;
+  mesh.userData.faceYaw = cur + diff * blend;
+}
+
 function clientMoveSpeed(kind) {
   const k = String(kind || "");
   // Tank 0.58 ≈ 50 km/h; air scaled from real cruise km/h.
@@ -6857,7 +7128,12 @@ function applyUnitMotion(mesh, entity) {
       mesh.userData.velX = (mesh.userData.velX || 0) * 0.4 + nvx * 0.6;
       mesh.userData.velZ = (mesh.userData.velZ || 0) * 0.4 + nvz * 0.6;
       mesh.userData.moving = true;
-      mesh.userData.faceYaw = Math.atan2(dx, dz);
+      // Tanks: never snap hull to a raw net delta (avoidance ticks look like U-turns).
+      if (mesh.userData.isTank) {
+        setTankTravelYaw(mesh, Math.atan2(dx, dz), { blend: 0.28 });
+      } else {
+        mesh.userData.faceYaw = Math.atan2(dx, dz);
+      }
       mesh.userData.moveSeenAt = now;
       mesh.userData.lastMoveDist = dist;
     } else {
@@ -6933,12 +7209,21 @@ function updateTankDrive(mesh, dt) {
   }
 
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
-  if (step > 0.00035) {
-    // Face the direction we actually slid — not clamped net velocity.
-    mesh.userData.faceYaw = Math.atan2(
-      mesh.position.x - beforeX,
-      mesh.position.z - beforeZ,
-    );
+  if (step > 0.0008) {
+    // Prefer smoothed net velocity over a single-frame slide (catch-up can be sideways).
+    let yaw;
+    if (speed > 0.06) {
+      const velYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+      const slideYaw = Math.atan2(
+        mesh.position.x - beforeX,
+        mesh.position.z - beforeZ,
+      );
+      const conflict = Math.abs(shortestAngle(slideYaw, velYaw));
+      yaw = conflict > 0.75 ? velYaw : slideYaw;
+    } else {
+      yaw = Math.atan2(mesh.position.x - beforeX, mesh.position.z - beforeZ);
+    }
+    setTankTravelYaw(mesh, yaw);
     mesh.userData.moving = true;
     const spin = step * 28;
     if (spin > 0.0002) {
@@ -6947,7 +7232,9 @@ function updateTankDrive(mesh, dt) {
       });
     }
   } else if (speed > 0.04) {
-    mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+    setTankTravelYaw(mesh, Math.atan2(mesh.userData.velX, mesh.userData.velZ), {
+      blend: 0.2,
+    });
     mesh.userData.moving = true;
   }
 
@@ -7018,20 +7305,16 @@ function smoothUnitFacing(mesh, dt) {
     const turretRate = mesh.userData.turretTurnRate || 1.35;
     const turret = mesh.getObjectByName("muzzleRoot");
 
-    // Hull follows travel direction; snap hard when skating sideways.
+    // Hull follows travel direction — always slew, never hard-snap while moving
+    // (snaps were the visible "wrong way for a frame" flicker).
     if (mesh.userData.faceYaw != null) {
       const diff = shortestAngle(mesh.rotation.y, mesh.userData.faceYaw);
       const abs = Math.abs(diff);
       let maxStep = hullRate * dt;
-      if (mesh.userData.moving && abs > 0.4) {
-        maxStep = Math.max(maxStep, abs * Math.min(1, dt * 10));
+      if (mesh.userData.moving && abs > 0.55) {
+        maxStep = Math.min(abs, maxStep * 1.55);
       }
-      if (abs > 1.2) {
-        // >~70°: snap — remesh/variant tanks were stuck sliding sideways.
-        mesh.rotation.y = mesh.userData.faceYaw;
-      } else {
-        mesh.rotation.y += Math.max(-maxStep, Math.min(maxStep, diff));
-      }
+      mesh.rotation.y += Math.max(-maxStep, Math.min(maxStep, diff));
     }
 
     // Turret independently tracks aim (or hull heading if no aim yet).
@@ -7226,10 +7509,11 @@ function spawnShotFx(shot) {
   const didHit = shot.hit !== false;
   const kind = String(shot.kind || fromMesh?.userData?.kind || "");
   const isTankMg = kind.includes("mg") && !!fromMesh?.userData?.isTank && !fromMesh?.userData?.isMlrs;
-  const isBunkerMg = kind.includes("bunker");
+  const isBunkerMg = kind.includes("bunker") || kind.includes("gatling");
+  const isFirebaseShell = kind.includes("firebase");
   const isMlrs = kind.includes("mlrs") || !!fromMesh?.userData?.isMlrs;
   const isTankCannon = kind.includes("tank") && !kind.includes("mg") && !isMlrs;
-  const isMortar = kind.includes("mortar");
+  const isMortar = kind.includes("mortar") || isFirebaseShell;
   const isAirBomb =
     !!fromMesh?.userData?.isJet ||
     kind.includes("raptor") ||

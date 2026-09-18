@@ -259,16 +259,6 @@ impl BotStyle {
         }
     }
 
-    fn radars(self) -> u32 {
-        match self {
-            BotStyle::Defensive => 1,
-            BotStyle::Counter => 1,
-            BotStyle::Balanced => 1,
-            BotStyle::Aggressive => 1,
-            BotStyle::Reckless => 0,
-        }
-    }
-
     /// Ticks to wait after a building dies before even considering that kind again.
     fn rebuild_delay(self) -> u64 {
         match self {
@@ -1233,7 +1223,6 @@ fn expand_base(
     let factory = count_kind(sim, bot_id, factory_kind);
     let turrets = count_kind(sim, bot_id, defense_kind);
     let bunkers = count_kind(sim, bot_id, bunker_kind);
-    let radars = count_kind(sim, bot_id, "radar");
     let now = sim.tick;
 
     if sim.entities.values().any(|e| {
@@ -1249,7 +1238,6 @@ fn expand_base(
         (factory_kind, factory),
         (defense_kind, turrets),
         (bunker_kind, bunkers),
-        ("radar", radars),
     ];
     if let Some(mind) = sim.players.get_mut(&bot_id).and_then(|p| p.bot.as_mut()) {
         let delay = style.rebuild_delay();
@@ -1294,8 +1282,6 @@ fn expand_base(
         Some((factory_kind, 4.2))
     } else if plants < 2 && faction != "gla" && now > 220 && !held(power_kind) {
         Some((power_kind, 4.2))
-    } else if radars < style.radars() && faction != "gla" && now > 280 && !held("radar") {
-        Some(("radar", 5.5))
     } else if bunkers < style.bunkers() && !held(bunker_kind) {
         Some((bunker_kind, 4.0))
     } else if turrets < style.turrets() && !held(defense_kind) {

@@ -234,9 +234,14 @@ pub fn trainables() -> &'static [UnitDef] {
 
 fn attack_cooldown_for(kind: &str) -> u32 {
     match kind {
+        // Patriot / Stinger — guided missile salvo cadence
         "turret" | "stinger_site" | "particle_cannon" => 1_850,
+        // China Bunker / GLA Tunnel — MG nest
         "bunker" | "tunnel_network" => 90,
-        "gatling_cannon" | "firebase" => 80,
+        // Gattling Cannon — continuous spin-up fire
+        "gatling_cannon" => 100,
+        // Fire Base 155mm howitzer — slow artillery
+        "firebase" => 3_200,
         _ => trainables()
             .iter()
             .find(|u| u.unit == kind)
@@ -247,12 +252,18 @@ fn attack_cooldown_for(kind: &str) -> u32 {
 
 const RIFLE_MAG: u8 = 30;
 const RIFLE_RELOAD_MS: u32 = 5_000;
-/// Patriot engagement bubble — AA outranges tanks, not half the map.
-const PATRIOT_RANGE: f32 = 11.0;
-const PATRIOT_DAMAGE: f32 = 780.0;
-/// Pillbox MG nest — short, shreds infantry; under tank main-gun reach.
-const BUNKER_RANGE: f32 = 5.2;
-const BUNKER_DAMAGE: f32 = 68.0;
+/// Generals Patriot: strong vs vehicles/air, weak vs infantry. Range ~225 logic ≈ 9.0 wu.
+const PATRIOT_RANGE: f32 = 9.0;
+const PATRIOT_DAMAGE: f32 = 520.0;
+/// China Gattling: shreds soft targets, weak vs heavy armor. Range ~225 ≈ 8.0.
+const GATLING_RANGE: f32 = 8.0;
+const GATLING_DAMAGE: f32 = 42.0;
+/// ZH Fire Base howitzer — outranges Patriots.
+const FIREBASE_RANGE: f32 = 12.5;
+const FIREBASE_DAMAGE: f32 = 560.0;
+/// Pillbox / tunnel MG — short anti-infantry.
+const BUNKER_RANGE: f32 = 4.8;
+const BUNKER_DAMAGE: f32 = 72.0;
 const BUNKER_MAG: u8 = 40;
 const BUNKER_RELOAD_MS: u32 = 2_200;
 const BUNKER_SLEW_RATE: f32 = 1.85;
@@ -365,23 +376,38 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     let soft_vehicle = target.kind.contains("mlrs");
     if infantry && attacker_kind.contains("tank") {
         10_000.0
-    } else if infantry && (attacker_kind.contains("missile") || attacker_kind == "turret") {
-        // PAC warhead — one connect deletes a soft target.
-        10_000.0
+    } else if infantry && (attacker_kind == "turret" || attacker_kind == "stinger_site") {
+        // Generals Patriot/Stinger — poor vs infantry (missiles overshoot soft targets).
+        (base * 0.28).max(55.0)
+    } else if infantry && attacker_kind == "firebase" {
+        // 155mm HE — deadly to soft targets in the blast.
+        (base * 1.15).max(280.0)
+    } else if infantry && attacker_kind == "gatling_cannon" {
+        (base * 1.35).max(48.0)
     } else if infantry && attacker_kind.contains("mlrs") {
         // Rocket HE / DPICM — lethal in the seat.
         10_000.0
     } else if infantry && attacker_kind.contains("mortar") {
         (base * 0.95).max(250.0)
-    } else if infantry && attacker_kind == "bunker" {
-        (base * 1.2).max(55.0)
-    } else if armored && attacker_kind == "bunker" {
+    } else if infantry && (attacker_kind == "bunker" || attacker_kind == "tunnel_network") {
+        (base * 1.25).max(58.0)
+    } else if armored && (attacker_kind == "bunker" || attacker_kind == "tunnel_network") {
         // MG vs armor — sparks only.
         (base * 0.08).max(3.0)
+    } else if armored && attacker_kind == "gatling_cannon" {
+        // Gattling vs heavy armor — weak (Generals).
+        (base * 0.18).max(8.0)
+    } else if armored && attacker_kind == "firebase" {
+        // Howitzer HE vs AFV — solid.
+        if soft_vehicle {
+            (base * 1.2).max(base)
+        } else {
+            (base * 0.85).max(base * 0.7)
+        }
     } else if armored && is_rifle_infantry(attacker_kind) {
         // 5.56/7.62 vs AFV — negligible.
         (base * 0.06).max(2.0)
-    } else if armored && attacker_kind == "turret" {
+    } else if armored && (attacker_kind == "turret" || attacker_kind == "stinger_site") {
         // Guided hit — brutal vs soft launchers, heavy punch vs MBT.
         if soft_vehicle {
             (base * 1.45).max(base)
@@ -419,8 +445,10 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
             || attacker_kind.contains("overlord"))
     {
         (base * 1.15).max(base)
-    } else if target.building && attacker_kind == "turret" {
-        (base * 0.85).max(400.0)
+    } else if target.building && (attacker_kind == "turret" || attacker_kind == "stinger_site") {
+        (base * 0.75).max(280.0)
+    } else if target.building && attacker_kind == "firebase" {
+        (base * 1.05).max(base)
     } else if target.building && attacker_kind.contains("mlrs") {
         (base * 1.1).max(base)
     } else {
@@ -1162,7 +1190,8 @@ impl MatchSim {
         let (damage, range, mag) = match def.kind {
             "turret" | "stinger_site" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
             "bunker" | "tunnel_network" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
-            "gatling_cannon" | "firebase" => (55.0, 6.5, 60u8),
+            "gatling_cannon" => (GATLING_DAMAGE, GATLING_RANGE, 60u8),
+            "firebase" => (FIREBASE_DAMAGE, FIREBASE_RANGE, 0u8),
             _ => (0.0, 0.0, 0u8),
         };
         self.put_entity(Entity {
@@ -1593,7 +1622,8 @@ impl MatchSim {
         let (damage, range, mag) = match def.kind {
             "turret" | "stinger_site" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
             "bunker" | "tunnel_network" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
-            "gatling_cannon" | "firebase" => (55.0, 6.5, 60u8),
+            "gatling_cannon" => (GATLING_DAMAGE, GATLING_RANGE, 60u8),
+            "firebase" => (FIREBASE_DAMAGE, FIREBASE_RANGE, 0u8),
             _ => (0.0, 0.0, 0u8),
         };
         self.put_entity(Entity {
@@ -3400,29 +3430,41 @@ impl MatchSim {
             return;
         }
 
-        if entity.mag_ammo == 0 {
-            entity.mag_ammo = BUNKER_MAG;
-        }
-        entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
-        if entity.mag_ammo == 0 {
-            entity.attack_cooldown_ms = BUNKER_RELOAD_MS;
-            entity.mag_ammo = BUNKER_MAG;
+        let kind = entity.kind.as_str();
+        let uses_mag = matches!(kind, "bunker" | "tunnel_network" | "gatling_cannon");
+        if uses_mag {
+            let mag_size = if kind == "gatling_cannon" { 60u8 } else { BUNKER_MAG };
+            if entity.mag_ammo == 0 {
+                entity.mag_ammo = mag_size;
+            }
+            entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
+            if entity.mag_ammo == 0 {
+                entity.attack_cooldown_ms = if kind == "gatling_cannon" {
+                    700
+                } else {
+                    BUNKER_RELOAD_MS
+                };
+                entity.mag_ammo = mag_size;
+            } else {
+                entity.attack_cooldown_ms = attack_cooldown_for(kind);
+            }
         } else {
-            entity.attack_cooldown_ms = attack_cooldown_for("bunker");
+            entity.attack_cooldown_ms = attack_cooldown_for(kind);
         }
         entity.dirty = true;
 
-        let dmg = hit_damage("bunker", target, entity.damage);
+        let dmg = hit_damage(kind, target, entity.damage);
         let tx = target.x;
         let ty = target.y;
         let fx = entity.x;
         let fy = entity.y;
         let from_id = entity.id;
         let attacker_owner = entity.owner;
-        let hit_p = shot_hit_chance("bunker", target, dist, entity.range, cover.exposure);
+        let hit_p = shot_hit_chance(kind, target, dist, entity.range, cover.exposure);
         let mut rng = rand::thread_rng();
-        // MG spray: decent connect rate up close, wilder at edge.
-        let hit = rng.gen_range(0.0..1.0) < hit_p.max(0.35).min(0.82);
+        let hit_floor = if kind == "firebase" { 0.45 } else { 0.35 };
+        let hit_ceil = if kind == "firebase" { 0.88 } else { 0.82 };
+        let hit = rng.gen_range(0.0..1.0) < hit_p.max(hit_floor).min(hit_ceil);
         let (ix, iy) = if hit {
             (tx, ty)
         } else {
@@ -3440,6 +3482,11 @@ impl MatchSim {
             }
         }
 
+        let shot_kind = match kind {
+            "firebase" => "firebase_shell",
+            "gatling_cannon" => "gatling",
+            _ => "bunker_mg",
+        };
         self.shots.push(ShotEvent {
             from: from_id,
             to: tid,
@@ -3447,7 +3494,7 @@ impl MatchSim {
             y0: fy,
             x1: ix,
             y1: iy,
-            kind: "bunker_mg".into(),
+            kind: shot_kind.into(),
             hit,
         });
     }
