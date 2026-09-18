@@ -325,11 +325,39 @@ input {
   text-overflow: ellipsis;
 }
 
+.build-item .build-cost {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.build-item .cost-gold {
+  color: #e8c84a;
+  font-weight: 700;
+}
+
+.build-item .cost-pwr {
+  color: #7ec8ff;
+  font-weight: 700;
+}
+
+.build-item .cost-pwr.drain {
+  color: #ff8a5c;
+}
+
+.build-item .cost-pwr.gen {
+  color: #7dff9a;
+}
+
 #build-detail {
   padding: 4px 8px;
   border-top: 1px solid var(--line);
   font-size: 10px;
   color: #a8b898;
+}
+
+#build-detail b {
+  color: #f0e8c0;
 }
 
 .radar {

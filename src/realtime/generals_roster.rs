@@ -819,22 +819,22 @@ pub fn trainables() -> &'static [UnitDef] {
     ]
 }
 
-/// Soft population caps — keep lobbies tank-heavy.
+/// Soft population caps — keep lobbies tank-heavy (tuned for ~8 AI).
 pub fn army_cap_for(unit: &str) -> usize {
     match unit {
-        "ranger" | "red_guard" | "rebel" => 10,
-        "missile_defender" | "tank_hunter" | "rpg_trooper" | "pathfinder" => 6,
-        "terrorist" | "hijacker" | "hacker" => 4,
+        "ranger" | "red_guard" | "rebel" => 8,
+        "missile_defender" | "tank_hunter" | "rpg_trooper" | "pathfinder" => 5,
+        "terrorist" | "hijacker" | "hacker" => 3,
         "colonel_burton" | "black_lotus" | "jarmen_kell" => 1,
-        "humvee" | "technical" | "rocket_buggy" => 10,
-        "tank" | "battlemaster" | "scorpion_tank" => 14,
-        "paladin_tank" | "marauder_tank" => 8,
-        "overlord" => 4,
-        "gatling_tank" | "quad_cannon" | "microwave_tank" => 8,
-        "tomahawk" | "inferno_cannon" | "scud_launcher" | "mlrs" => 5,
+        "humvee" | "technical" | "rocket_buggy" => 6,
+        "tank" | "battlemaster" | "scorpion_tank" => 10,
+        "paladin_tank" | "marauder_tank" => 5,
+        "overlord" => 2,
+        "gatling_tank" | "quad_cannon" | "microwave_tank" => 5,
+        "tomahawk" | "inferno_cannon" | "scud_launcher" | "mlrs" => 3,
         "troop_crawler" | "battle_bus" | "listening_outpost" | "ecm_tank" | "radar_van"
-        | "bomb_truck" | "chinook" => 4,
-        "raptor" | "mig" | "comanche" | "helix" => 6,
-        _ => 8,
+        | "bomb_truck" | "chinook" => 3,
+        "raptor" | "mig" | "comanche" | "helix" => 4,
+        _ => 6,
     }
 }

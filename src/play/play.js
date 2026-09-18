@@ -463,16 +463,38 @@ function updateArmyCounts() {
   if (totalEl) totalEl.textContent = inf + tanks;
 }
 
+function formatBuildingEconomy(item) {
+  if (!item) return "";
+  const gold = Number(item.cost_gold) || 0;
+  const pwr = Number(item.power) || 0;
+  const secs = Math.round((item.build_ms || 0) / 1000);
+  let pwrLabel = "PWR 0";
+  if (pwr > 0) pwrLabel = `PWR +${pwr}`;
+  else if (pwr < 0) pwrLabel = `PWR ${pwr}`;
+  return `GOLD ${gold} · ${pwrLabel} · ${secs}s`;
+}
+
+function findBuildable(kind) {
+  return (state.buildable || []).find((b) => b.kind === kind) || null;
+}
+
 function renderBuildList(items) {
   state.buildable = items || [];
   $("#build-list").innerHTML = state.buildable
     .map(
       (item, index) => `
-      <button type="button" class="build-item" data-kind="${escapeHtml(item.kind)}" data-hotkey="${index + 1}">
+      <button type="button" class="build-item" data-kind="${escapeHtml(item.kind)}" data-hotkey="${index + 1}" title="${escapeHtml(formatBuildingEconomy(item))}">
         <strong><span class="hotkey">${index + 1}</span> ${escapeHtml(item.name)}</strong>
-        <small>${item.cost_gold ?? 0}g · ${Math.round(item.build_ms / 1000)}s${
-          item.power ? ` · ${item.power > 0 ? "+" : ""}${item.power}pwr` : ""
-        }</small>
+        <small class="build-cost">
+          <span class="cost-gold">GOLD ${item.cost_gold ?? 0}</span>
+          <span class="cost-pwr ${(item.power || 0) < 0 ? "drain" : (item.power || 0) > 0 ? "gen" : ""}">${
+            (item.power || 0) > 0
+              ? `PWR +${item.power}`
+              : (item.power || 0) < 0
+                ? `PWR ${item.power}`
+                : "PWR 0"
+          }</span>
+        </small>
       </button>`,
     )
     .join("");
@@ -1616,16 +1638,18 @@ const BUILDING_VISUAL = {
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 6;
+const BUILDING_FIT_VERSION = 7;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
 const PATRIOT_RIG_VERSION = 3;
+/** Distinct Generals vehicle silhouettes — remesh when below this. */
+const TANK_RIG_VERSION = 8;
 
 function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) {
   const m = new THREE.Mesh(
     geo,
     matStd(color, {
-      metalness: opts.metalness ?? 0.28,
-      roughness: opts.roughness ?? 0.62,
+      metalness: opts.metalness ?? 0.62,
+      roughness: opts.roughness ?? 0.38,
       emissive: opts.emissive,
       emissiveIntensity: opts.emissiveIntensity,
     }),
@@ -1663,8 +1687,8 @@ function milPalette(accent) {
     concrete: 0x6a675c,
     concreteDark: 0x4a4840,
     concreteLight: 0x7e7a6e,
-    metal: 0x3a3c38,
-    metalBright: 0x5c6058,
+    metal: 0x4a4e48,
+    metalBright: 0x7a8074,
     rust: 0x5a4030,
     glass: 0x1a2830,
     sand: 0x6b6550,
@@ -3157,19 +3181,20 @@ function stampVisionCircle(data, size, cx, cy, radius) {
 }
 
 let lastVisionAt = 0;
+let visionPruneCounter = 0;
 
 function startVisionLoop() {
   if (startVisionLoop.timer) return;
   startVisionLoop.timer = setInterval(() => {
     if (!state.match || $("#match-screen")?.hidden) return;
     refreshLiveVision();
-  }, 320);
+  }, 480);
 }
 
 function refreshLiveVision() {
   if (!fogVisionData || !fogExploredData || !fogDataTexture) return;
   const now = performance.now();
-  if (now - lastVisionAt < 280) return;
+  if (now - lastVisionAt < 420) return;
   lastVisionAt = now;
 
   const tex = fogDataTexture.image?.data;
@@ -3231,8 +3256,8 @@ function refreshLiveVision() {
     tex[o + 3] = 255;
   }
   fogDataTexture.needsUpdate = true;
-  // Occasional client-side cull if AOI ghosts linger (post M-toggle).
-  if (!globalVision && (now | 0) % 5 === 0) pruneFogGhosts();
+  visionPruneCounter += 1;
+  if (visionPruneCounter % 8 === 0) pruneFogGhosts();
 }
 
 function createFogOfWar(size) {
@@ -3343,9 +3368,9 @@ function scatterGroundDecor(scene, size) {
     flatShading: true,
   });
 
-  const maxTrees = Math.min(70, Math.floor(size * 0.28));
-  const maxRocks = Math.min(40, Math.floor(size * 0.18));
-  const maxBushes = Math.min(50, Math.floor(size * 0.22));
+  const maxTrees = Math.min(36, Math.floor(size * 0.18));
+  const maxRocks = Math.min(22, Math.floor(size * 0.12));
+  const maxBushes = Math.min(28, Math.floor(size * 0.14));
   const tries = Math.min(280, Math.floor(size * 0.9));
   let trees = 0;
   let rocks = 0;
@@ -3423,8 +3448,11 @@ function initThree(size, terrainTexture, home) {
   }
 
   renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
+  // Cap DPR hard — 8GB / integrated GPUs choke above 1x on big maps.
+  const dprCap = (navigator.deviceMemory && navigator.deviceMemory <= 8) ? 1 : 1.15;
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, dprCap));
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+  renderer.shadowMap.enabled = false;
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a2218);
@@ -3703,11 +3731,15 @@ function setBuildPlacement(kind) {
   });
   if (kind) {
     ensureGhost(kind);
-    $("#build-detail").textContent =
-      `Placing ${kind} — drag to preview, click to build (Esc cancel)`;
+    const def = findBuildable(kind);
+    const name = def?.name || kind;
+    const econ = formatBuildingEconomy(def);
+    $("#build-detail").innerHTML = econ
+      ? `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)} · haritaya tıkla`
+      : `Placing ${escapeHtml(kind)} — click map (Esc cancel)`;
   } else {
     clearGhost();
-    $("#build-detail").textContent = "Select a building to place";
+    $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
     document.querySelectorAll(".build-item").forEach((el) => el.classList.remove("on"));
   }
 }
@@ -3930,7 +3962,15 @@ function finishBoxSelect(event) {
       clearUnitSelection();
       syncSelectionMarkers();
       refreshTrainablePanel();
-      toast(`Selected ${best.kind}`);
+      {
+        const def = findBuildable(best.kind);
+        const name = def?.name || best.kind;
+        const econ = formatBuildingEconomy(def);
+        if (econ && !state.selectedBuild) {
+          $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}`;
+        }
+        toast(econ ? `${name}: ${econ}` : `Selected ${name}`);
+      }
     } else if (!boxSelect.additive) {
       clearUnitSelection();
       state.selectedBuilding = null;
@@ -4778,33 +4818,70 @@ function createMortarMesh(teamColor) {
   return g;
 }
 
+function tankVariantFor(kind) {
+  const k = String(kind || "");
+  if (k.includes("overlord")) return "overlord";
+  if (k.includes("paladin") || k.includes("abrams")) return "paladin";
+  if (k.includes("marauder")) return "marauder";
+  if (k.includes("battlemaster")) return "battlemaster";
+  if (k.includes("scorpion")) return "scorpion";
+  if (k.includes("gatling")) return "gatling";
+  if (k.includes("microwave")) return "microwave";
+  if (k.includes("quad")) return "quad";
+  if (
+    k.includes("humvee") ||
+    k.includes("technical") ||
+    k.includes("buggy") ||
+    k.includes("radar_van") ||
+    k.includes("crawler") ||
+    k.includes("battle_bus") ||
+    k.includes("bomb_truck")
+  ) {
+    return "wheeled";
+  }
+  return "crusader";
+}
+
 function createTankMesh(teamColor, opts = {}) {
-  const heavy = !!opts.heavy;
+  const variant = opts.variant || "crusader";
   const style = opts.style || "usa";
+  const heavy =
+    !!opts.heavy ||
+    variant === "paladin" ||
+    variant === "overlord" ||
+    variant === "marauder";
+
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.tintParts = [];
-  g.userData.tankRigVersion = 7;
+  g.userData.tankRigVersion = TANK_RIG_VERSION;
+  g.userData.tankVariant = variant;
   g.userData.isAbrams = heavy;
   g.userData.factionStyle = style;
 
-  // USA olive · China olive-red · GLA desert scrap
-  let hull = heavy ? 0x3f4634 : 0x4a5538;
-  let hullDark = heavy ? 0x2c3224 : 0x353c2c;
-  let hullLight = heavy ? 0x525a42 : 0x5a6648;
+  // USA steel-olive · China ochre · GLA desert scrap
+  let hull = 0x4a5538;
+  let hullDark = 0x2e3428;
+  let hullLight = 0x627048;
   if (style === "china") {
-    hull = heavy ? 0x4a3a28 : 0x5a4830;
-    hullDark = 0x322818;
-    hullLight = 0x6a5840;
+    hull = 0x5c4830;
+    hullDark = 0x3a2c1c;
+    hullLight = 0x7a6240;
   } else if (style === "gla") {
-    hull = heavy ? 0x6a5a38 : 0x7a6a48;
+    hull = 0x7a6a48;
     hullDark = 0x4a3e28;
-    hullLight = 0x8a7a58;
+    hullLight = 0x9a8860;
   }
-  const track = 0x1a1814;
-  const rubber = 0x11100e;
-  const metal = 0x2a2a26;
-  const rust = style === "gla" ? 0x5a4030 : 0x3a3228;
+  if (heavy && style === "usa") {
+    hull = 0x3a4230;
+    hullDark = 0x252a20;
+    hullLight = 0x525a40;
+  }
+  const track = 0x161410;
+  const rubber = 0x0e0d0b;
+  const metal = 0x3a3c38;
+  const metalHi = 0x6a6e66;
+  const rust = style === "gla" ? 0x6a4030 : 0x3a3228;
   const accent = teamColor >>> 0;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
@@ -4818,216 +4895,469 @@ function createTankMesh(teamColor, opts = {}) {
     return m;
   };
 
-  // —— Tracks, wheels, return rollers ——
-  for (const side of [-1, 1]) {
-    const x = side * 0.175;
-    // Track armor / link band
-    add(g, new THREE.BoxGeometry(0.058, 0.078, 0.54), matStd(track), x, 0.042, 0);
-    add(g, new THREE.BoxGeometry(0.042, 0.028, 0.52), matStd(rubber), x, 0.01, 0);
-    // Road wheels
-    for (let i = -2; i <= 2; i++) {
-      const w = add(
+  const addTracks = (width, length, wheelN, y0) => {
+    for (const side of [-1, 1]) {
+      const x = side * width;
+      add(g, new THREE.BoxGeometry(0.06, 0.08, length), matStd(track, { metalness: 0.55, roughness: 0.45 }), x, y0, 0);
+      add(g, new THREE.BoxGeometry(0.044, 0.028, length * 0.96), matStd(rubber, { metalness: 0.15, roughness: 0.9 }), x, y0 - 0.03, 0);
+      const span = length * 0.72;
+      for (let i = 0; i < wheelN; i++) {
+        const t = wheelN === 1 ? 0 : i / (wheelN - 1) - 0.5;
+        const z = t * span;
+        const w = add(
+          g,
+          new THREE.CylinderGeometry(0.028, 0.028, 0.045, 10),
+          matStd(metalHi, { metalness: 0.75, roughness: 0.35 }),
+          x,
+          y0 - 0.012,
+          z,
+          0,
+          0,
+          Math.PI / 2,
+        );
+        w.userData.roadWheel = true;
+      }
+      const sprocket = add(
         g,
-        new THREE.CylinderGeometry(0.026, 0.026, 0.042, 10),
-        matStd(metal, { metalness: 0.55, roughness: 0.42 }),
+        new THREE.CylinderGeometry(0.034, 0.034, 0.042, 10),
+        matStd(metal, { metalness: 0.8, roughness: 0.3 }),
         x,
-        0.03,
-        i * 0.095,
+        y0,
+        -length * 0.48,
         0,
         0,
         Math.PI / 2,
       );
-      w.userData.roadWheel = true;
-      add(
-        g,
-        new THREE.CylinderGeometry(0.012, 0.012, 0.044, 6),
-        matStd(0x0e0e0c),
-        x,
-        0.03,
-        i * 0.095,
-        0,
-        0,
-        Math.PI / 2,
-      );
+      sprocket.userData.roadWheel = true;
+      add(g, new THREE.BoxGeometry(0.02, 0.06, length * 0.92), matStd(hullDark, { metalness: 0.55, roughness: 0.4 }), x * 1.28, y0 + 0.03, 0);
     }
-    // Drive sprocket (rear) + idler (front)
-    const sprocket = add(
-      g,
-      new THREE.CylinderGeometry(0.032, 0.032, 0.04, 10),
-      matStd(metal, { metalness: 0.6 }),
-      x,
-      0.04,
-      -0.255,
-      0,
-      0,
-      Math.PI / 2,
-    );
-    sprocket.userData.roadWheel = true;
-    const idler = add(
-      g,
-      new THREE.CylinderGeometry(0.028, 0.028, 0.038, 10),
-      matStd(metal, { metalness: 0.55 }),
-      x,
-      0.038,
-      0.255,
-      0,
-      0,
-      Math.PI / 2,
-    );
-    idler.userData.roadWheel = true;
-    // Side skirts / schürzen
-    add(g, new THREE.BoxGeometry(0.018, 0.055, 0.5), matStd(hullDark), x * 1.22, 0.078, 0);
-    add(g, new THREE.BoxGeometry(0.014, 0.02, 0.12), matStd(hull), x * 1.24, 0.095, 0.12);
-    add(g, new THREE.BoxGeometry(0.014, 0.02, 0.12), matStd(hull), x * 1.24, 0.095, -0.12);
-  }
+  };
 
-  // —— Hull ——
-  add(g, new THREE.BoxGeometry(0.32, 0.085, 0.5), matStd(hull), 0, 0.085, 0);
-  add(g, new THREE.BoxGeometry(0.3, 0.05, 0.38), matStd(hullDark), 0, 0.14, -0.02);
-  // Front glacis plate
-  add(g, new THREE.BoxGeometry(0.28, 0.035, 0.12), matStd(hullLight), 0, 0.118, 0.21, -0.38, 0, 0);
-  add(g, new THREE.BoxGeometry(0.22, 0.02, 0.06), matStd(hullDark), 0, 0.135, 0.18, -0.2, 0, 0);
-  // Rear engine deck
-  add(g, new THREE.BoxGeometry(0.26, 0.03, 0.1), matStd(metal), 0, 0.132, -0.24);
-  add(g, new THREE.BoxGeometry(0.1, 0.012, 0.06), matStd(0x1e1e1a), -0.06, 0.148, -0.24);
-  add(g, new THREE.BoxGeometry(0.1, 0.012, 0.06), matStd(0x1e1e1a), 0.06, 0.148, -0.24);
-  // Exhausts
-  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18), -0.09, 0.148, -0.265, Math.PI / 2, 0, 0);
-  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18), 0.09, 0.148, -0.265, Math.PI / 2, 0, 0);
-  // Team stripe on rear deck
-  add(
-    g,
-    new THREE.BoxGeometry(0.24, 0.014, 0.055),
-    matStd(accent, { roughness: 0.45 }),
-    0,
-    0.152,
-    -0.14,
-    0,
-    0,
-    0,
-    true,
-  );
-  // Driver hatch + vision block
-  add(g, new THREE.BoxGeometry(0.065, 0.022, 0.065), matStd(hullDark), -0.075, 0.158, 0.1);
-  add(g, new THREE.BoxGeometry(0.04, 0.012, 0.02), matStd(0x111110), -0.075, 0.168, 0.125);
-  // Co-driver MG mount bump
-  add(g, new THREE.BoxGeometry(0.05, 0.018, 0.05), matStd(hullDark), 0.08, 0.155, 0.12);
-  // Front headlights
-  add(g, new THREE.BoxGeometry(0.028, 0.022, 0.02), matStd(metal), -0.11, 0.11, 0.26);
-  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.35, roughness: 0.3 }), -0.11, 0.11, 0.272);
-  add(g, new THREE.BoxGeometry(0.028, 0.022, 0.02), matStd(metal), 0.11, 0.11, 0.26);
-  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.35, roughness: 0.3 }), 0.11, 0.11, 0.272);
-  // Fuel / stowage boxes on fenders
-  add(g, new THREE.BoxGeometry(0.04, 0.035, 0.1), matStd(rust), -0.2, 0.12, -0.05);
-  add(g, new THREE.BoxGeometry(0.04, 0.035, 0.1), matStd(rust), 0.2, 0.12, -0.05);
-  // Front mud flaps
-  add(g, new THREE.BoxGeometry(0.05, 0.04, 0.01), matStd(rubber), -0.175, 0.06, 0.28);
-  add(g, new THREE.BoxGeometry(0.05, 0.04, 0.01), matStd(rubber), 0.175, 0.06, 0.28);
+  const finishTank = (scale, unitH, hullRate, turretRate) => {
+    g.userData.unitHeight = unitH;
+    g.userData.isTank = true;
+    g.userData.hullTurnRate = hullRate;
+    g.userData.turretTurnRate = turretRate;
+    g.userData.barrelRecoil = 0;
+    g.userData.tankRigVersion = TANK_RIG_VERSION;
+    g.scale.setScalar(scale);
+    return g;
+  };
 
-  // —— Turret ——
   const turret = new THREE.Group();
   turret.name = "muzzleRoot";
-  // Main turret body (slightly tapered look via stacked boxes)
-  add(turret, new THREE.BoxGeometry(0.2, 0.095, 0.24), matStd(0x3d4730), 0, 0.21, -0.02);
-  add(turret, new THREE.BoxGeometry(0.17, 0.045, 0.14), matStd(hullDark), 0, 0.268, -0.04);
-  // Angled cheek armor
-  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight), -0.11, 0.215, 0.02, 0, 0, 0.25);
-  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight), 0.11, 0.215, 0.02, 0, 0, -0.25);
-  // Bustle / ammo rack rear
-  add(turret, new THREE.BoxGeometry(0.14, 0.05, 0.08), matStd(0x2f3528), 0, 0.22, -0.16);
-  add(turret, new THREE.BoxGeometry(0.1, 0.03, 0.05), matStd(rust), 0, 0.245, -0.18);
-  // Commander cupola
-  add(turret, new THREE.CylinderGeometry(0.038, 0.044, 0.032, 10), matStd(metal), 0.045, 0.295, -0.02);
-  add(turret, new THREE.BoxGeometry(0.032, 0.014, 0.032), matStd(0x222018), 0.045, 0.312, -0.02);
-  // Roof pintle MG (fires independently of the main gun)
+  const barrelGroup = new THREE.Group();
+  barrelGroup.name = "tankBarrel";
+
+  // ——— Variant silhouettes (Generals-inspired) ———
+  if (variant === "overlord") {
+    // China super-heavy: wide dual-track, twin side guns
+    addTracks(0.28, 0.72, 6, 0.05);
+    addTracks(0.18, 0.72, 6, 0.05);
+    add(g, new THREE.BoxGeometry(0.55, 0.14, 0.7), matStd(hull, { metalness: 0.55, roughness: 0.42 }), 0, 0.12, 0);
+    add(g, new THREE.BoxGeometry(0.5, 0.08, 0.5), matStd(hullDark, { metalness: 0.6, roughness: 0.38 }), 0, 0.2, -0.02);
+    add(g, new THREE.BoxGeometry(0.48, 0.05, 0.16), matStd(hullLight, { metalness: 0.5 }), 0, 0.16, 0.3, -0.35, 0, 0);
+    add(g, new THREE.BoxGeometry(0.4, 0.04, 0.14), matStd(metal, { metalness: 0.7 }), 0, 0.2, -0.34);
+    add(g, new THREE.BoxGeometry(0.35, 0.02, 0.08), matStd(accent, { metalness: 0.45, roughness: 0.4 }), 0, 0.22, -0.2, 0, 0, 0, true);
+    // Massive rounded turret
+    add(turret, new THREE.CylinderGeometry(0.2, 0.22, 0.14, 12), matStd(hull, { metalness: 0.55, roughness: 0.4 }), 0, 0.3, 0);
+    add(turret, new THREE.CylinderGeometry(0.14, 0.16, 0.06, 10), matStd(hullDark, { metalness: 0.6 }), 0, 0.38, -0.02);
+    add(turret, new THREE.BoxGeometry(0.22, 0.02, 0.06), matStd(accent, { metalness: 0.5 }), 0, 0.36, 0.1, 0, 0, 0, true);
+    // Twin barrels
+    for (const sx of [-0.1, 0.1]) {
+      const bg = new THREE.Group();
+      bg.position.set(sx, 0.3, 0.18);
+      const b = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.022, 0.028, 0.42, 10),
+        matStd(0x1a1a16, { metalness: 0.85, roughness: 0.28 }),
+      );
+      b.rotation.x = Math.PI / 2;
+      b.position.z = 0.22;
+      bg.add(b);
+      add(bg, new THREE.CylinderGeometry(0.03, 0.03, 0.06, 8), matStd(metalHi, { metalness: 0.8 }), 0, 0, 0.38, Math.PI / 2, 0, 0);
+      turret.add(bg);
+    }
+    barrelGroup.position.set(0, 0.3, 0.18);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.55);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.72, 0.28, 1.4, 0.85);
+  }
+
+  if (variant === "battlemaster") {
+    // China Type-59-ish: rounded "pudding basin" turret, 5 wheels
+    addTracks(0.17, 0.52, 5, 0.038);
+    add(g, new THREE.BoxGeometry(0.3, 0.09, 0.48), matStd(hull, { metalness: 0.5, roughness: 0.45 }), 0, 0.09, 0);
+    add(g, new THREE.BoxGeometry(0.26, 0.04, 0.14), matStd(hullLight, { metalness: 0.45 }), 0, 0.12, 0.2, -0.4, 0, 0);
+    add(g, new THREE.BoxGeometry(0.22, 0.035, 0.12), matStd(metal, { metalness: 0.7 }), 0, 0.13, -0.22);
+    add(g, new THREE.CylinderGeometry(0.02, 0.02, 0.06, 6), matStd(0x1a1a18, { metalness: 0.6 }), 0.08, 0.14, -0.26, Math.PI / 2, 0, 0);
+    add(g, new THREE.BoxGeometry(0.2, 0.015, 0.05), matStd(accent, { metalness: 0.4 }), 0, 0.145, -0.1, 0, 0, 0, true);
+    // Round cast turret
+    add(turret, new THREE.SphereGeometry(0.13, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), matStd(hull, { metalness: 0.55, roughness: 0.4 }), 0, 0.18, 0);
+    add(turret, new THREE.CylinderGeometry(0.05, 0.055, 0.04, 10), matStd(metal, { metalness: 0.7 }), 0.04, 0.3, -0.02);
+    add(turret, new THREE.BoxGeometry(0.12, 0.012, 0.035), matStd(accent, { metalness: 0.45 }), 0, 0.26, 0.06, 0, 0, 0, true);
+    barrelGroup.position.set(0, 0.22, 0.1);
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.016, 0.02, 0.32, 10),
+      matStd(0x181816, { metalness: 0.85, roughness: 0.3 }),
+    );
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = 0.18;
+    barrelGroup.add(barrel);
+    // Mid-barrel fume extractor (Type 79 cue)
+    add(barrelGroup, new THREE.CylinderGeometry(0.024, 0.024, 0.045, 8), matStd(metalHi, { metalness: 0.8 }), 0, 0, 0.22, Math.PI / 2, 0, 0);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.38);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.52, 0.17, 2.4, 1.2);
+  }
+
+  if (variant === "scorpion") {
+    // GLA light: small, scrappy, side rocket rail
+    addTracks(0.14, 0.4, 4, 0.032);
+    add(g, new THREE.BoxGeometry(0.24, 0.07, 0.38), matStd(hull, { metalness: 0.35, roughness: 0.55 }), 0, 0.07, 0);
+    add(g, new THREE.BoxGeometry(0.2, 0.03, 0.1), matStd(rust, { metalness: 0.4, roughness: 0.6 }), 0, 0.1, 0.16, -0.3, 0, 0);
+    add(g, new THREE.BoxGeometry(0.08, 0.05, 0.12), matStd(rust, { metalness: 0.3 }), -0.14, 0.1, -0.05);
+    add(g, new THREE.BoxGeometry(0.16, 0.012, 0.04), matStd(accent, { metalness: 0.35 }), 0, 0.115, -0.08, 0, 0, 0, true);
+    // Low open turret
+    add(turret, new THREE.BoxGeometry(0.14, 0.06, 0.16), matStd(hullDark, { metalness: 0.4, roughness: 0.55 }), 0, 0.15, 0);
+    add(turret, new THREE.BoxGeometry(0.1, 0.03, 0.08), matStd(hullLight, { metalness: 0.35 }), 0, 0.19, -0.02);
+    // Rocket rail (signature)
+    add(turret, new THREE.BoxGeometry(0.04, 0.03, 0.22), matStd(metal, { metalness: 0.7 }), 0.12, 0.18, 0.04, 0.2, 0, 0);
+    add(turret, new THREE.CylinderGeometry(0.012, 0.012, 0.18, 6), matStd(0x2a2018, { metalness: 0.5 }), 0.12, 0.2, 0.06, Math.PI / 2, 0, 0);
+    barrelGroup.position.set(0, 0.16, 0.08);
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.015, 0.22, 8),
+      matStd(0x1a1814, { metalness: 0.7, roughness: 0.4 }),
+    );
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = 0.12;
+    barrelGroup.add(barrel);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.28);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.48, 0.14, 3.0, 1.4);
+  }
+
+  if (variant === "marauder") {
+    // GLA medium: boxy improvised armor, thick gun
+    addTracks(0.2, 0.58, 5, 0.042);
+    add(g, new THREE.BoxGeometry(0.36, 0.11, 0.55), matStd(hull, { metalness: 0.4, roughness: 0.5 }), 0, 0.1, 0);
+    add(g, new THREE.BoxGeometry(0.1, 0.08, 0.2), matStd(rust, { metalness: 0.35 }), -0.2, 0.14, 0.05);
+    add(g, new THREE.BoxGeometry(0.1, 0.08, 0.2), matStd(rust, { metalness: 0.35 }), 0.2, 0.14, 0.05);
+    add(g, new THREE.BoxGeometry(0.3, 0.04, 0.12), matStd(hullDark, { metalness: 0.45 }), 0, 0.14, 0.24, -0.25, 0, 0);
+    add(g, new THREE.BoxGeometry(0.28, 0.02, 0.06), matStd(accent, { metalness: 0.4 }), 0, 0.17, -0.12, 0, 0, 0, true);
+    // Squared scrap turret
+    add(turret, new THREE.BoxGeometry(0.22, 0.12, 0.26), matStd(hullDark, { metalness: 0.45, roughness: 0.48 }), 0, 0.24, -0.02);
+    add(turret, new THREE.BoxGeometry(0.08, 0.06, 0.1), matStd(metal, { metalness: 0.7 }), -0.12, 0.28, 0.05);
+    add(turret, new THREE.BoxGeometry(0.08, 0.06, 0.1), matStd(metal, { metalness: 0.7 }), 0.12, 0.28, 0.05);
+    add(turret, new THREE.BoxGeometry(0.18, 0.015, 0.04), matStd(accent, { metalness: 0.4 }), 0, 0.3, 0.08, 0, 0, 0, true);
+    barrelGroup.position.set(0, 0.24, 0.12);
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.024, 0.03, 0.36, 10),
+      matStd(0x1c1814, { metalness: 0.75, roughness: 0.35 }),
+    );
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = 0.2;
+    barrelGroup.add(barrel);
+    add(barrelGroup, new THREE.BoxGeometry(0.05, 0.04, 0.04), matStd(metalHi, { metalness: 0.8 }), 0, 0, 0.4);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.46);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.62, 0.2, 2.0, 1.0);
+  }
+
+  if (variant === "gatling") {
+    addTracks(0.16, 0.48, 4, 0.036);
+    add(g, new THREE.BoxGeometry(0.28, 0.08, 0.44), matStd(hull, { metalness: 0.55, roughness: 0.4 }), 0, 0.085, 0);
+    add(g, new THREE.BoxGeometry(0.22, 0.015, 0.05), matStd(accent, { metalness: 0.45 }), 0, 0.135, -0.1, 0, 0, 0, true);
+    add(turret, new THREE.CylinderGeometry(0.1, 0.11, 0.1, 10), matStd(hullDark, { metalness: 0.6 }), 0, 0.2, 0);
+    // Rotary barrel cluster
+    barrelGroup.position.set(0, 0.2, 0.08);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const bx = Math.cos(a) * 0.028;
+      const by = Math.sin(a) * 0.028;
+      const b = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.006, 0.007, 0.22, 5),
+        matStd(0x222220, { metalness: 0.85, roughness: 0.25 }),
+      );
+      b.rotation.x = Math.PI / 2;
+      b.position.set(bx, by, 0.12);
+      barrelGroup.add(b);
+    }
+    add(barrelGroup, new THREE.CylinderGeometry(0.04, 0.04, 0.05, 8), matStd(metalHi, { metalness: 0.8 }), 0, 0, 0.02, Math.PI / 2, 0, 0);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.28);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.5, 0.16, 2.5, 1.5);
+  }
+
+  if (variant === "microwave") {
+    addTracks(0.16, 0.48, 4, 0.036);
+    add(g, new THREE.BoxGeometry(0.28, 0.08, 0.44), matStd(hull, { metalness: 0.6, roughness: 0.35 }), 0, 0.085, 0);
+    add(g, new THREE.BoxGeometry(0.22, 0.015, 0.05), matStd(accent, { metalness: 0.5 }), 0, 0.135, -0.1, 0, 0, 0, true);
+    add(turret, new THREE.BoxGeometry(0.16, 0.08, 0.16), matStd(hullDark, { metalness: 0.65 }), 0, 0.18, -0.04);
+    // Emitter dish
+    barrelGroup.position.set(0, 0.2, 0.06);
+    add(barrelGroup, new THREE.CylinderGeometry(0.09, 0.02, 0.04, 12), matStd(metalHi, { metalness: 0.85, roughness: 0.2 }), 0, 0, 0.08, Math.PI / 2, 0, 0);
+    add(barrelGroup, new THREE.SphereGeometry(0.03, 8, 8), matStd(0x88aacc, { metalness: 0.9, roughness: 0.15, emissive: 0x224466, emissiveIntensity: 0.4 }), 0, 0, 0.12);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.2);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.5, 0.16, 2.4, 1.3);
+  }
+
+  if (variant === "quad") {
+    addTracks(0.15, 0.42, 4, 0.034);
+    add(g, new THREE.BoxGeometry(0.26, 0.07, 0.4), matStd(hull, { metalness: 0.4, roughness: 0.5 }), 0, 0.075, 0);
+    add(g, new THREE.BoxGeometry(0.18, 0.012, 0.04), matStd(accent, { metalness: 0.35 }), 0, 0.12, -0.08, 0, 0, 0, true);
+    add(turret, new THREE.BoxGeometry(0.18, 0.05, 0.14), matStd(hullDark, { metalness: 0.45 }), 0, 0.16, 0);
+    barrelGroup.position.set(0, 0.18, 0.04);
+    for (const [ox, oy] of [
+      [-0.04, 0.02],
+      [0.04, 0.02],
+      [-0.04, -0.02],
+      [0.04, -0.02],
+    ]) {
+      const b = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.008, 0.01, 0.2, 6),
+        matStd(0x1a1814, { metalness: 0.7 }),
+      );
+      b.rotation.x = Math.PI / 2;
+      b.position.set(ox, oy, 0.12);
+      barrelGroup.add(b);
+    }
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.26);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.48, 0.14, 2.8, 1.6);
+  }
+
+  if (variant === "paladin") {
+    // USA advanced: bulky angular hull + point-defense laser blister
+    addTracks(0.2, 0.58, 6, 0.045);
+    add(g, new THREE.BoxGeometry(0.36, 0.1, 0.56), matStd(hull, { metalness: 0.65, roughness: 0.32 }), 0, 0.1, 0);
+    add(g, new THREE.BoxGeometry(0.32, 0.06, 0.4), matStd(hullDark, { metalness: 0.7, roughness: 0.3 }), 0, 0.16, -0.02);
+    add(g, new THREE.BoxGeometry(0.3, 0.04, 0.14), matStd(hullLight, { metalness: 0.55 }), 0, 0.13, 0.24, -0.42, 0, 0);
+    add(g, new THREE.BoxGeometry(0.28, 0.03, 0.1), matStd(metal, { metalness: 0.8 }), 0, 0.155, -0.28);
+    add(g, new THREE.BoxGeometry(0.26, 0.016, 0.06), matStd(accent, { metalness: 0.5, roughness: 0.35 }), 0, 0.175, -0.14, 0, 0, 0, true);
+    // Angular Abrams-like turret
+    add(turret, new THREE.BoxGeometry(0.24, 0.11, 0.28), matStd(hull, { metalness: 0.65, roughness: 0.32 }), 0, 0.26, -0.02);
+    add(turret, new THREE.BoxGeometry(0.18, 0.05, 0.16), matStd(hullDark, { metalness: 0.7 }), 0, 0.32, -0.04);
+    add(turret, new THREE.BoxGeometry(0.05, 0.08, 0.18), matStd(hullLight, { metalness: 0.55 }), -0.13, 0.26, 0.02, 0, 0, 0.3);
+    add(turret, new THREE.BoxGeometry(0.05, 0.08, 0.18), matStd(hullLight, { metalness: 0.55 }), 0.13, 0.26, 0.02, 0, 0, -0.3);
+    // Reactive bricks
+    add(turret, new THREE.BoxGeometry(0.07, 0.045, 0.12), matStd(0x5a5038, { metalness: 0.5 }), -0.14, 0.27, 0.02, 0, 0, 0, true);
+    add(turret, new THREE.BoxGeometry(0.07, 0.045, 0.12), matStd(0x5a5038, { metalness: 0.5 }), 0.14, 0.27, 0.02, 0, 0, 0, true);
+    // Point-defense laser blister (signature)
+    add(turret, new THREE.BoxGeometry(0.05, 0.04, 0.05), matStd(metalHi, { metalness: 0.9, roughness: 0.2 }), 0.1, 0.34, 0.08);
+    add(turret, new THREE.CylinderGeometry(0.012, 0.008, 0.04, 6), matStd(0xff4466, { metalness: 0.5, emissive: 0xaa2233, emissiveIntensity: 0.55 }), 0.1, 0.36, 0.11, Math.PI / 2, 0, 0);
+    add(turret, new THREE.CylinderGeometry(0.04, 0.045, 0.035, 10), matStd(metal, { metalness: 0.75 }), 0.05, 0.35, -0.02);
+    add(turret, new THREE.BoxGeometry(0.2, 0.014, 0.045), matStd(accent, { metalness: 0.5 }), 0, 0.3, 0.1, 0, 0, 0, true);
+    // Roof MG
+    const mg = new THREE.Group();
+    mg.name = "tankMg";
+    mg.position.set(0.05, 0.38, -0.02);
+    add(mg, new THREE.CylinderGeometry(0.005, 0.006, 0.1, 6), matStd(0x111110, { metalness: 0.8 }), 0, 0.02, 0.05, Math.PI / 2, 0, 0);
+    const mgTip = new THREE.Object3D();
+    mgTip.name = "mgMuzzle";
+    mgTip.position.set(0, 0.02, 0.12);
+    mg.add(mgTip);
+    turret.add(mg);
+    barrelGroup.position.set(0, 0.26, 0.14);
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.026, 0.38, 10),
+      matStd(0x141412, { metalness: 0.88, roughness: 0.25 }),
+    );
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.z = 0.22;
+    barrelGroup.add(barrel);
+    add(barrelGroup, new THREE.CylinderGeometry(0.028, 0.028, 0.055, 10), matStd(0x1c1c18, { metalness: 0.8 }), 0, 0, 0.32, Math.PI / 2, 0, 0);
+    add(barrelGroup, new THREE.CylinderGeometry(0.022, 0.03, 0.04, 10), matStd(metalHi, { metalness: 0.85 }), 0, 0, 0.48, Math.PI / 2, 0, 0);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.55);
+    barrelGroup.add(tip);
+    turret.add(barrelGroup);
+    g.add(turret);
+    return finishTank(0.64, 0.22, 2.0, 1.05);
+  }
+
+  // Default: USA Crusader — Leopard/Abrams mix, long gun, side skirts
+  addTracks(0.175, 0.52, 5, 0.04);
+  add(g, new THREE.BoxGeometry(0.32, 0.09, 0.5), matStd(hull, { metalness: 0.6, roughness: 0.35 }), 0, 0.09, 0);
+  add(g, new THREE.BoxGeometry(0.3, 0.05, 0.36), matStd(hullDark, { metalness: 0.65, roughness: 0.32 }), 0, 0.145, -0.02);
+  add(g, new THREE.BoxGeometry(0.28, 0.035, 0.12), matStd(hullLight, { metalness: 0.5 }), 0, 0.12, 0.22, -0.4, 0, 0);
+  add(g, new THREE.BoxGeometry(0.26, 0.03, 0.1), matStd(metal, { metalness: 0.8 }), 0, 0.14, -0.24);
+  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18, { metalness: 0.7 }), -0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
+  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 8), matStd(0x1a1a18, { metalness: 0.7 }), 0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
+  add(g, new THREE.BoxGeometry(0.24, 0.014, 0.055), matStd(accent, { metalness: 0.5, roughness: 0.35 }), 0, 0.16, -0.12, 0, 0, 0, true);
+  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.3 }), -0.11, 0.11, 0.27);
+  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.3 }), 0.11, 0.11, 0.27);
+
+  add(turret, new THREE.BoxGeometry(0.2, 0.095, 0.24), matStd(hull, { metalness: 0.6, roughness: 0.35 }), 0, 0.22, -0.02);
+  add(turret, new THREE.BoxGeometry(0.16, 0.045, 0.14), matStd(hullDark, { metalness: 0.65 }), 0, 0.28, -0.04);
+  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight, { metalness: 0.5 }), -0.11, 0.225, 0.02, 0, 0, 0.25);
+  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matStd(hullLight, { metalness: 0.5 }), 0.11, 0.225, 0.02, 0, 0, -0.25);
+  add(turret, new THREE.BoxGeometry(0.14, 0.05, 0.08), matStd(0x2f3528, { metalness: 0.55 }), 0, 0.23, -0.16);
+  add(turret, new THREE.CylinderGeometry(0.038, 0.044, 0.032, 10), matStd(metal, { metalness: 0.75 }), 0.045, 0.305, -0.02);
+  add(turret, new THREE.BoxGeometry(0.18, 0.012, 0.04), matStd(accent, { metalness: 0.5 }), 0, 0.265, 0.08, 0, 0, 0, true);
+  add(turret, new THREE.BoxGeometry(0.09, 0.07, 0.06), matStd(metal, { metalness: 0.8 }), 0, 0.225, 0.12);
+
   const mg = new THREE.Group();
   mg.name = "tankMg";
-  mg.position.set(0.045, 0.328, -0.02);
-  add(mg, new THREE.CylinderGeometry(0.01, 0.01, 0.022, 6), matStd(metal), 0, 0.012, 0);
-  add(mg, new THREE.BoxGeometry(0.016, 0.012, 0.028), matStd(0x1a1a16), 0, 0.02, 0.01);
-  const mgBarrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.0045, 0.0055, 0.09, 6),
-    matStd(0x111110, { metalness: 0.65 }),
-  );
-  mgBarrel.rotation.x = Math.PI / 2;
-  mgBarrel.position.set(0, 0.022, 0.052);
-  mgBarrel.castShadow = true;
-  mg.add(mgBarrel);
-  add(mg, new THREE.BoxGeometry(0.012, 0.008, 0.018), matStd(metal), 0, 0.03, 0.02);
+  mg.position.set(0.045, 0.338, -0.02);
+  add(mg, new THREE.CylinderGeometry(0.0045, 0.0055, 0.09, 6), matStd(0x111110, { metalness: 0.8 }), 0, 0.022, 0.052, Math.PI / 2, 0, 0);
   const mgTip = new THREE.Object3D();
   mgTip.name = "mgMuzzle";
   mgTip.position.set(0, 0.022, 0.1);
   mg.add(mgTip);
   turret.add(mg);
-  // Smoke grenade launchers
-  for (let i = 0; i < 3; i++) {
-    add(turret, new THREE.CylinderGeometry(0.008, 0.008, 0.03, 6), matStd(metal), -0.09, 0.24, 0.06 + i * 0.025, 0.6, 0, 0.4);
-    add(turret, new THREE.CylinderGeometry(0.008, 0.008, 0.03, 6), matStd(metal), 0.09, 0.24, 0.06 + i * 0.025, 0.6, 0, -0.4);
-  }
-  // Antenna
-  add(turret, new THREE.CylinderGeometry(0.003, 0.003, 0.22, 4), matStd(0x222220, { metalness: 0.5 }), -0.08, 0.36, -0.12);
-  // Team turret band
-  add(
-    turret,
-    new THREE.BoxGeometry(0.18, 0.012, 0.04),
-    matStd(accent, { roughness: 0.4 }),
-    0,
-    0.255,
-    0.08,
-    0,
-    0,
-    0,
-    true,
-  );
-  // Mantlet
-  add(turret, new THREE.BoxGeometry(0.09, 0.07, 0.06), matStd(metal, { metalness: 0.55 }), 0, 0.215, 0.11);
 
-  const barrelGroup = new THREE.Group();
-  barrelGroup.name = "tankBarrel";
-  barrelGroup.position.set(0, 0.215, 0.11);
-  // Thermal sleeve segments
+  barrelGroup.position.set(0, 0.225, 0.12);
   const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.017, 0.022, 0.28, 10),
-    matStd(0x141412, { metalness: 0.7, roughness: 0.35 }),
+    new THREE.CylinderGeometry(0.017, 0.022, 0.32, 10),
+    matStd(0x141412, { metalness: 0.85, roughness: 0.28 }),
   );
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0, 0.16);
-  barrel.castShadow = true;
+  barrel.position.z = 0.18;
   barrelGroup.add(barrel);
-  add(barrelGroup, new THREE.CylinderGeometry(0.019, 0.019, 0.08, 10), matStd(0x1a1a16, { metalness: 0.65 }), 0, 0, 0.34, Math.PI / 2, 0, 0);
-  // Fume extractor
-  add(barrelGroup, new THREE.CylinderGeometry(0.026, 0.026, 0.05, 10), matStd(0x1c1c18, { metalness: 0.6 }), 0, 0, 0.28, Math.PI / 2, 0, 0);
-  // Muzzle brake
-  add(barrelGroup, new THREE.CylinderGeometry(0.02, 0.028, 0.035, 10), matStd(metal, { metalness: 0.7 }), 0, 0, 0.42, Math.PI / 2, 0, 0);
-  add(barrelGroup, new THREE.BoxGeometry(0.04, 0.018, 0.02), matStd(metal), 0, 0, 0.435);
+  add(barrelGroup, new THREE.CylinderGeometry(0.026, 0.026, 0.05, 10), matStd(0x1c1c18, { metalness: 0.8 }), 0, 0, 0.3, Math.PI / 2, 0, 0);
+  add(barrelGroup, new THREE.CylinderGeometry(0.02, 0.028, 0.035, 10), matStd(metalHi, { metalness: 0.85 }), 0, 0, 0.44, Math.PI / 2, 0, 0);
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0, 0, 0.46);
+  tip.position.set(0, 0, 0.5);
   barrelGroup.add(tip);
   turret.add(barrelGroup);
-  // Coaxial MG
-  add(turret, new THREE.CylinderGeometry(0.006, 0.006, 0.09, 5), matStd(0x111110), 0.045, 0.2, 0.155, Math.PI / 2, 0, 0);
-
   g.add(turret);
-  g.userData.unitHeight = heavy ? 0.19 : 0.16;
+  return finishTank(0.52, 0.17, 2.5, 1.25);
+}
+
+/** Humvee / Technical / buggy — wheeled, not a rescaled tank. */
+function createWheeledVehicleMesh(teamColor, opts = {}) {
+  const style = opts.style || "usa";
+  const kind = String(opts.kind || "humvee");
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
   g.userData.isTank = true;
-  // Hull must track travel heading fast enough that catch-up slide
-  // never looks like a sideways stamp (see smoothUnitFacing).
-  g.userData.hullTurnRate = heavy ? 2.1 : 2.6;
-  g.userData.turretTurnRate = heavy ? 1.05 : 1.25;
-  g.userData.barrelRecoil = 0;
-  // Keep in sync with remesh gate (`tankRigVersion < 7`); never overwrite
-  // down to an older version or tanks remesh every snapshot and slide flat.
-  g.userData.tankRigVersion = 7;
-  // Half visual size vs prior rig; Abrams slightly larger silhouette.
-  g.scale.setScalar(heavy ? 0.59 : 0.5);
-  if (heavy) {
-    // Reactive armor bricks on the turret cheeks
-    add(turret, new THREE.BoxGeometry(0.06, 0.04, 0.1), matStd(0x5a5038, { metalness: 0.35 }), -0.12, 0.22, 0.02, 0, 0, 0, true);
-    add(turret, new THREE.BoxGeometry(0.06, 0.04, 0.1), matStd(0x5a5038, { metalness: 0.35 }), 0.12, 0.22, 0.02, 0, 0, 0, true);
-    tip.position.set(0, 0, 0.52);
+  g.userData.isLightVehicle = true;
+  g.userData.tintParts = [];
+  g.userData.tankRigVersion = TANK_RIG_VERSION;
+  g.userData.tankVariant = "wheeled";
+  g.userData.factionStyle = style;
+
+  let body = 0x3a4530;
+  let bodyDark = 0x2a3224;
+  if (style === "china") {
+    body = 0x5a4830;
+    bodyDark = 0x3a3020;
+  } else if (style === "gla") {
+    body = 0x7a6a48;
+    bodyDark = 0x4a3e28;
   }
+  const metal = 0x2a2c28;
+  const rubber = 0x11100e;
+  const accent = teamColor >>> 0;
+
+  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    if (tint) g.userData.tintParts.push(m);
+    parent.add(m);
+    return m;
+  };
+
+  // Chassis
+  const long = kind.includes("bus") || kind.includes("crawler") ? 0.55 : 0.42;
+  const wide = kind.includes("bus") ? 0.28 : 0.22;
+  add(g, new THREE.BoxGeometry(wide, 0.08, long), matStd(body, { metalness: 0.55, roughness: 0.4 }), 0, 0.1, 0);
+  add(g, new THREE.BoxGeometry(wide * 0.92, 0.1, long * 0.55), matStd(bodyDark, { metalness: 0.5, roughness: 0.42 }), 0, 0.18, -long * 0.05);
+  // Hood / windshield
+  add(g, new THREE.BoxGeometry(wide * 0.88, 0.06, long * 0.28), matStd(body, { metalness: 0.5 }), 0, 0.16, long * 0.28, -0.25, 0, 0);
+  add(g, new THREE.BoxGeometry(wide * 0.7, 0.04, 0.02), matStd(0x1a2830, { metalness: 0.3, roughness: 0.2 }), 0, 0.2, long * 0.18);
+  add(g, new THREE.BoxGeometry(wide * 0.7, 0.015, 0.04), matStd(accent, { metalness: 0.45 }), 0, 0.24, -long * 0.05, 0, 0, 0, true);
+
+  // Wheels
+  for (const [sx, sz] of [
+    [-wide * 0.55, long * 0.28],
+    [wide * 0.55, long * 0.28],
+    [-wide * 0.55, -long * 0.28],
+    [wide * 0.55, -long * 0.28],
+  ]) {
+    const w = add(
+      g,
+      new THREE.CylinderGeometry(0.045, 0.045, 0.035, 10),
+      matStd(rubber, { metalness: 0.1, roughness: 0.9 }),
+      sx,
+      0.045,
+      sz,
+      0,
+      0,
+      Math.PI / 2,
+    );
+    w.userData.roadWheel = true;
+    add(g, new THREE.CylinderGeometry(0.02, 0.02, 0.038, 6), matStd(metal, { metalness: 0.75 }), sx, 0.045, sz, 0, 0, Math.PI / 2);
+  }
+
+  // Roof weapon / cargo cue
+  const turret = new THREE.Group();
+  turret.name = "muzzleRoot";
+  if (kind.includes("radar")) {
+    add(turret, new THREE.CylinderGeometry(0.06, 0.06, 0.02, 12), matStd(metal, { metalness: 0.7 }), 0, 0.28, 0);
+    add(turret, new THREE.BoxGeometry(0.14, 0.02, 0.04), matStd(0x8899aa, { metalness: 0.8 }), 0, 0.3, 0);
+  } else if (kind.includes("buggy") || kind.includes("technical")) {
+    add(turret, new THREE.BoxGeometry(0.06, 0.04, 0.08), matStd(bodyDark, { metalness: 0.4 }), 0, 0.26, 0);
+    add(turret, new THREE.CylinderGeometry(0.01, 0.012, 0.2, 6), matStd(0x1a1814, { metalness: 0.7 }), 0, 0.28, 0.1, Math.PI / 2, 0, 0);
+  } else {
+    // Humvee roof MG
+    add(turret, new THREE.BoxGeometry(0.05, 0.03, 0.05), matStd(metal, { metalness: 0.7 }), 0, 0.26, 0);
+    add(turret, new THREE.CylinderGeometry(0.006, 0.008, 0.14, 6), matStd(0x111110, { metalness: 0.8 }), 0, 0.28, 0.08, Math.PI / 2, 0, 0);
+  }
+  const barrelGroup = new THREE.Group();
+  barrelGroup.name = "tankBarrel";
+  barrelGroup.position.set(0, 0.28, 0.05);
+  const tip = new THREE.Object3D();
+  tip.name = "muzzle";
+  tip.position.set(0, 0, 0.16);
+  barrelGroup.add(tip);
+  turret.add(barrelGroup);
+  g.add(turret);
+
+  g.userData.unitHeight = 0.14;
+  g.userData.hullTurnRate = 3.2;
+  g.userData.turretTurnRate = 1.8;
+  g.userData.barrelRecoil = 0;
+  g.scale.setScalar(style === "gla" ? 0.7 : 0.75);
   return g;
+}
+
+function createLightVehicleMesh(teamColor, opts = {}) {
+  return createWheeledVehicleMesh(teamColor, opts);
 }
 
 /** M270 MLRS — tracked launcher with elevating dual rocket pods (not a tank). */
@@ -5203,14 +5533,6 @@ function isHeavyTankKind(kind) {
   );
 }
 
-function createLightVehicleMesh(teamColor, opts = {}) {
-  const style = opts.style || "usa";
-  const m = createTankMesh(teamColor, { heavy: false, style });
-  m.scale.setScalar(style === "gla" ? 0.68 : 0.72);
-  m.userData.isLightVehicle = true;
-  return m;
-}
-
 function createAirMesh(teamColor, kind = "") {
   const k = String(kind || "");
   const heli =
@@ -5363,24 +5685,13 @@ function createUnitMesh(kind, teamColor) {
     return createMlrsMesh(teamColor);
   }
 
-  // Heavy / medium tanks
-  if (
-    k.includes("abrams") ||
-    k.includes("paladin") ||
-    k.includes("marauder") ||
-    k.includes("overlord")
-  ) {
-    return createTankMesh(teamColor, { heavy: true, style });
+  // Heavy / medium / specialty tanks — distinct Generals silhouettes
+  const tankVar = tankVariantFor(k);
+  if (tankVar !== "wheeled" && tankVar !== "crusader") {
+    return createTankMesh(teamColor, { style, variant: tankVar, heavy: isHeavyTankKind(k) });
   }
-  if (
-    k.includes("battlemaster") ||
-    k.includes("scorpion") ||
-    k.includes("gatling_tank") ||
-    k.includes("quad_cannon") ||
-    k.includes("microwave") ||
-    (k.includes("tank") && !k.includes("hunter"))
-  ) {
-    return createTankMesh(teamColor, { style });
+  if (k.includes("tank") && !k.includes("hunter")) {
+    return createTankMesh(teamColor, { style, variant: "crusader" });
   }
 
   // Light vehicles
@@ -5394,7 +5705,7 @@ function createUnitMesh(kind, teamColor) {
     k.includes("battle_bus") ||
     k.includes("bomb_truck")
   ) {
-    return createLightVehicleMesh(teamColor, { style });
+    return createLightVehicleMesh(teamColor, { style, kind: k });
   }
 
   // Rocket / AT infantry → mortar pose
@@ -5426,7 +5737,9 @@ function createUnitMesh(kind, teamColor) {
 
   // Fallback
   if (k.includes("missile") || k.includes("mortar")) return createMortarMesh(teamColor);
-  if (k.includes("tank") || k.includes("cannon")) return createTankMesh(teamColor, { style });
+  if (k.includes("tank") || k.includes("cannon")) {
+    return createTankMesh(teamColor, { style, variant: tankVariantFor(k) });
+  }
   return createRangerMesh(teamColor, { style });
 }
 
@@ -5590,7 +5903,8 @@ function upsertMesh(entity) {
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
-          (mesh.userData.tankRigVersion || 0) < 7 ||
+          (mesh.userData.tankRigVersion || 0) < TANK_RIG_VERSION ||
+          mesh.userData.tankVariant !== tankVariantFor(kind) ||
           (isHeavy && !mesh.userData.isAbrams) ||
           (!isHeavy && mesh.userData.isAbrams))) ||
       (isMortar && !mesh.userData.isMortar) ||
@@ -7629,7 +7943,7 @@ $("#btn-create").addEventListener("click", () => {
   void enterGameFullscreen();
   send({
     t: "create_lobby",
-    max_players: Number($("#max-players").value) || 50,
+    max_players: Number($("#max-players").value) || 8,
     map_size: Number($("#map-size").value) || 128,
     ffa: $("#ffa").checked,
     faction: state.faction || "usa",
@@ -7667,6 +7981,27 @@ $("#build-list").addEventListener("click", (event) => {
     return;
   }
   setBuildPlacement(btn.dataset.kind);
+});
+
+$("#build-list").addEventListener("pointerover", (event) => {
+  const btn = event.target.closest("[data-kind]");
+  if (!btn || state.selectedBuild) return;
+  const def = findBuildable(btn.dataset.kind);
+  if (!def) return;
+  $("#build-detail").innerHTML = `<b>${escapeHtml(def.name)}</b> — ${escapeHtml(formatBuildingEconomy(def))}`;
+});
+
+$("#build-list").addEventListener("pointerleave", () => {
+  if (state.selectedBuild) {
+    const def = findBuildable(state.selectedBuild);
+    const name = def?.name || state.selectedBuild;
+    const econ = formatBuildingEconomy(def);
+    $("#build-detail").innerHTML = econ
+      ? `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)} · haritaya tıkla`
+      : `Placing ${escapeHtml(state.selectedBuild)}`;
+  } else {
+    $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+  }
 });
 
 window.addEventListener("keydown", (event) => {

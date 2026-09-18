@@ -16,12 +16,12 @@ pub use generals_roster::army_cap_for;
 
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
-pub const MAX_PLAYERS: u8 = 50;
+pub const MAX_PLAYERS: u8 = 16;
 
 /// Total living+queued units at the home HQ.
-pub const HOME_UNIT_BUDGET: usize = 50;
+pub const HOME_UNIT_BUDGET: usize = 36;
 /// Extra total units unlocked per captured colony HQ.
-pub const COLONY_UNIT_BUDGET: usize = 25;
+pub const COLONY_UNIT_BUDGET: usize = 18;
 /// Wipe / claim radius around a fallen HQ (city footprint).
 pub const CITY_CLAIM_RADIUS: f32 = 14.0;
 
@@ -3984,8 +3984,13 @@ impl MatchSim {
         Vec<u16>,
         Vec<ShotEvent>,
     ) {
-        // Always stamp vision discs (radar / units) into the permanent shroud.
-        let explored_new = self.reveal_vision_for(user_id);
+        // Fog: only stamp / stream this commander's vision discs (not the whole map).
+        let mut explored_new = self.reveal_vision_for(user_id);
+        // Cap payload — first seconds can flood thousands of cell indices.
+        const MAX_EXPLORED_NEW: usize = 180;
+        if explored_new.len() > MAX_EXPLORED_NEW {
+            explored_new.truncate(MAX_EXPLORED_NEW);
+        }
 
         let Some(player) = self.players.get_mut(&user_id) else {
             return (vec![], vec![], None, explored_new, vec![]);
@@ -4011,31 +4016,40 @@ impl MatchSim {
             }
         }
 
-        let mut removed = self.removed.clone();
+        // Only report removals the client could have known about (FOW-aware).
+        let mut removed = Vec::new();
+        for id in &self.removed {
+            if previously_known.contains(id) {
+                removed.push(*id);
+            }
+        }
         for id in previously_known.difference(&visible_ids) {
+            // Keep own units in AOI set even if somehow filtered — never ghost-drop them.
             if self.entities.get(id).is_some_and(|e| e.owner == user_id) {
                 continue;
             }
             removed.push(*id);
         }
 
-        // Show shots involving you, or either end currently in vision.
+        // Shots only if either end is in this viewer's fog window.
         let shots: Vec<ShotEvent> = self
             .shots
             .iter()
-            .filter(|s| {
-                if visible_ids.contains(&s.from) || visible_ids.contains(&s.to) {
-                    return true;
-                }
-                let from_mine = self.entities.get(&s.from).is_some_and(|e| e.owner == user_id);
-                let to_mine = self.entities.get(&s.to).is_some_and(|e| e.owner == user_id);
-                from_mine || to_mine
-            })
+            .filter(|s| visible_ids.contains(&s.from) || visible_ids.contains(&s.to))
             .cloned()
             .collect();
 
         if let Some(player) = self.players.get_mut(&user_id) {
-            player.aoi_known = visible_ids;
+            // Re-insert own entities that we skipped removing so AOI stays consistent.
+            let mut known = visible_ids;
+            for id in &previously_known {
+                if let Some(e) = self.entities.get(id) {
+                    if e.owner == user_id {
+                        known.insert(*id);
+                    }
+                }
+            }
+            player.aoi_known = known;
         }
 
         (entities, removed, resources, explored_new, shots)

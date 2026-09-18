@@ -478,18 +478,31 @@ impl MatchHub {
                         outgoing.reserve(member_ids.len());
                         for uid in member_ids {
                             if rt.sim.players.get(&uid).is_some_and(|p| !p.connected) {
-                                rt.sim.reveal_vision_for(uid);
+                                // Offline commanders: no WS payload, no vision stamp.
                                 continue;
                             }
                             let (entities, removed, resources, explored_new, shots) =
                                 rt.sim.delta_for(uid);
-                            let focus = rt.sim.players.get(&uid).map(|p| p.focus);
-                            let scoreboard = if tick % match_sim::TICK_HZ as u64 == 0 {
+                            // Scoreboard is Tab-only chrome — every 2s is enough.
+                            let scoreboard = if tick % (match_sim::TICK_HZ as u64 * 2) == 0 {
                                 Some(rt.sim.scoreboard_for(uid))
                             } else {
                                 None
                             };
                             let global_vision = rt.sim.player_has_global_vision(uid);
+                            // Skip empty heartbeats when nothing in this FOW window changed.
+                            if entities.is_empty()
+                                && removed.is_empty()
+                                && explored_new.is_empty()
+                                && shots.is_empty()
+                                && scoreboard.is_none()
+                                && !global_vision
+                            {
+                                // Still push a light tick so resources/UI stay alive ~2 Hz.
+                                if tick % 10 != 0 {
+                                    continue;
+                                }
+                            }
                             outgoing.push((
                                 uid,
                                 ServerMsg::Delta {
@@ -497,7 +510,7 @@ impl MatchHub {
                                     entities,
                                     removed,
                                     resources,
-                                    focus_hint: focus,
+                                    focus_hint: None,
                                     explored_new,
                                     shots,
                                     scoreboard,

@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a2614'/%3E%3Cpath d='M8 22 V10 h4 l4 8 4-8 h4 v12 h-3.2 V14.5 L16.5 22 h-1L11.2 14.5 V22z' fill='%237cfc00'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/play.css?v=goldPower">
+  <link rel="stylesheet" href="/assets/play.css?v=buildCostHud">
   <script type="importmap">
   {
     "imports": {
@@ -45,10 +45,10 @@
 
         <div class="lobby-actions">
           <label>Slots
-            <input id="max-players" type="number" min="2" max="50" value="50">
+            <input id="max-players" type="number" min="2" max="16" value="8">
           </label>
           <label>Map
-            <input id="map-size" type="number" min="64" max="256" value="128">
+            <input id="map-size" type="number" min="64" max="256" value="96">
           </label>
           <label class="check"><input id="ffa" type="checkbox"> FFA</label>
           <button type="button" id="btn-create" class="primary">Start Match</button>
@@ -137,6 +137,6 @@
     </section>
   </div>
 
-  <script type="module" src="/assets/play.js?v=fogMfix"></script>
+  <script type="module" src="/assets/play.js?v=buildCostHud"></script>
 </body>
 </html>

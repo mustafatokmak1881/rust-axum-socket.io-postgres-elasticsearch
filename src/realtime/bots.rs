@@ -8,7 +8,7 @@ use super::grid::MAX_ENTITY_RADIUS;
 use super::match_sim::{building_radius, MatchSim, MAX_PLAYERS};
 
 /// Seed bots up toward a full lobby (human already seated when MatchSim::new runs).
-pub const OPENING_BOT_TARGET: usize = 50;
+pub const OPENING_BOT_TARGET: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotStyle {
@@ -325,6 +325,13 @@ pub fn tick_bots(sim: &mut MatchSim) {
     if sim.ended {
         return;
     }
+    // Human foci — distant AI thinks less often (FOW / perf).
+    let human_pts: Vec<(f32, f32)> = sim
+        .players
+        .values()
+        .filter(|p| p.alive && !p.is_bot() && p.connected)
+        .map(|p| (p.focus[0], p.focus[1]))
+        .collect();
     let bots: Vec<Uuid> = sim
         .players
         .values()
@@ -333,8 +340,25 @@ pub fn tick_bots(sim: &mut MatchSim) {
         .collect();
     for id in bots {
         let slot = (id.as_u128() % 5) as u64;
-        // ~4 Hz — fast enough to retask when a fight starts on the road.
-        if sim.tick % 5 != slot {
+        let near_human = {
+            let hq = sim
+                .entities
+                .values()
+                .find(|e| e.owner == id && e.kind == "hq" && e.hp > 0.0)
+                .map(|e| (e.x, e.y));
+            match hq {
+                None => true,
+                Some(_) if human_pts.is_empty() => true,
+                Some((bx, by)) => human_pts.iter().any(|(hx, hy)| {
+                    let dx = bx - hx;
+                    let dy = by - hy;
+                    dx * dx + dy * dy < 55.0 * 55.0
+                }),
+            }
+        };
+        // Near fight: ~4 Hz. Far away: ~1 Hz.
+        let period = if near_human { 5u64 } else { 20u64 };
+        if sim.tick % period != slot % period {
             continue;
         }
         think(sim, id);
