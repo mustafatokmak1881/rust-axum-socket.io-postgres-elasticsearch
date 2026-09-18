@@ -1736,7 +1736,7 @@ const GATLING_DEF_VERSION = 1;
 /** Strategy Center / tech building mesh revision. */
 const STRATEGY_RIG_VERSION = 1;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
-const TANK_RIG_VERSION = 9;
+const TANK_RIG_VERSION = 10;
 /** Infantry mesh revision. */
 const INFANTRY_RIG_VERSION = 6;
 
@@ -5665,7 +5665,8 @@ function createTankMesh(teamColor, opts = {}) {
   const finishTank = (scale, unitH, hullRate, turretRate) => {
     g.userData.unitHeight = unitH;
     g.userData.isTank = true;
-    g.userData.hullTurnRate = hullRate;
+    // Floor hull turn — slow pivots were the main sideways-skate look.
+    g.userData.hullTurnRate = Math.max(2.6, hullRate);
     g.userData.turretTurnRate = turretRate;
     g.userData.barrelRecoil = 0;
     g.userData.tankRigVersion = TANK_RIG_VERSION;
@@ -6109,7 +6110,7 @@ function createWheeledVehicleMesh(teamColor, opts = {}) {
   g.add(turret);
 
   g.userData.unitHeight = 0.14;
-  g.userData.hullTurnRate = 3.2;
+  g.userData.hullTurnRate = Math.max(2.6, 3.2);
   g.userData.turretTurnRate = 1.8;
   g.userData.barrelRecoil = 0;
   g.scale.setScalar(style === "gla" ? 0.7 : 0.75);
@@ -6265,7 +6266,7 @@ function createMlrsMesh(teamColor) {
   elev.add(dummyBarrel);
 
   g.userData.unitHeight = 0.28;
-  g.userData.hullTurnRate = 2.2;
+  g.userData.hullTurnRate = Math.max(2.6, 2.2);
   g.userData.turretTurnRate = 0.85;
   g.userData.barrelRecoil = 0;
   g.scale.setScalar(0.5);
@@ -7032,8 +7033,8 @@ function shortestAngle(from, to) {
 }
 
 /**
- * Filter tank hull heading so one-tick collision sidesteps / net corrections
- * don't whip the body ~180° for a frame (visible "jitter then correct").
+ * Soft-update tank travel heading. Rate-limits spikes (avoidance ticks) but
+ * never freezes the hull facing the wrong way while crabbing.
  */
 function setTankTravelYaw(mesh, yaw, opts = {}) {
   if (!Number.isFinite(yaw)) return;
@@ -7044,12 +7045,12 @@ function setTankTravelYaw(mesh, yaw, opts = {}) {
   }
   const diff = shortestAngle(cur, yaw);
   const abs = Math.abs(diff);
-  // Hard spikes while already rolling → keep prior heading (avoidance / snap-back).
-  if (mesh.userData.moving && abs > 1.05) {
-    return;
-  }
-  const blend = opts.blend != null ? opts.blend : abs > 0.55 ? 0.22 : 0.4;
-  mesh.userData.faceYaw = cur + diff * blend;
+  // Cap one-shot change so a single sidestep tick can't whip 180°,
+  // but still allow continuous turn toward the real travel line.
+  const maxStep = opts.maxStep != null ? opts.maxStep : abs > 1.2 ? 0.55 : 0.85;
+  const blend = opts.blend != null ? opts.blend : 1;
+  const stepped = Math.max(-maxStep, Math.min(maxStep, diff)) * blend;
+  mesh.userData.faceYaw = cur + stepped;
 }
 
 function clientMoveSpeed(kind) {
@@ -7129,10 +7130,9 @@ function applyUnitMotion(mesh, entity) {
       mesh.userData.velX = (mesh.userData.velX || 0) * 0.4 + nvx * 0.6;
       mesh.userData.velZ = (mesh.userData.velZ || 0) * 0.4 + nvz * 0.6;
       mesh.userData.moving = true;
-      // Tanks: never snap hull to a raw net delta (avoidance ticks look like U-turns).
-      if (mesh.userData.isTank) {
-        setTankTravelYaw(mesh, Math.atan2(dx, dz), { blend: 0.28 });
-      } else {
+      // Hull yaw is owned by updateTankDrive (dest/velocity). Don't yank it from
+      // noisy net deltas — that was locking tanks into sideways crabbing.
+      if (!mesh.userData.isTank) {
         mesh.userData.faceYaw = Math.atan2(dx, dz);
       }
       mesh.userData.moveSeenAt = now;
@@ -7164,16 +7164,16 @@ function predictedPos(mesh) {
   ];
 }
 
-function slideToward(mesh, dt) {
+function slideToward(mesh, dt, speedScale = 1) {
   if (mesh.userData.destX == null || mesh.userData.destZ == null) return 0;
   const [px, pz] = predictedPos(mesh);
   const dx = px - mesh.position.x;
   const dz = pz - mesh.position.z;
   const dist = Math.hypot(dx, dz);
   if (dist < 1e-5) return 0;
-  const cruise = mesh.userData.moveSpeed || 0.22;
+  const cruise = (mesh.userData.moveSpeed || 0.22) * Math.max(0.05, speedScale);
   const catchup = dist / 0.4;
-  const speed = Math.min(cruise * 2.1, Math.max(cruise, catchup));
+  const speed = Math.min(cruise * 2.1, Math.max(cruise, catchup * speedScale));
   const step = Math.min(dist, speed * dt);
   mesh.position.x += (dx / dist) * step;
   mesh.position.z += (dz / dist) * step;
@@ -7190,18 +7190,47 @@ function updateTankDrive(mesh, dt) {
     Sfx.stopEngine(id);
     return;
   }
+
+  // Desired travel heading = toward server dest (true path), not micro-slide noise.
+  const toDx = mesh.userData.destX - mesh.position.x;
+  const toDz = mesh.userData.destZ - mesh.position.z;
+  const toDist = Math.hypot(toDx, toDz);
+  const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
+  let desiredYaw = mesh.userData.faceYaw;
+  if (toDist > 0.06) {
+    desiredYaw = Math.atan2(toDx, toDz);
+  } else if (speed > 0.05) {
+    desiredYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+  }
+  if (desiredYaw != null && Number.isFinite(desiredYaw)) {
+    setTankTravelYaw(mesh, desiredYaw, { maxStep: 0.9, blend: 1 });
+  }
+
+  // Don't crab: if hull is far from travel heading, turn first / crawl.
+  const face = mesh.userData.faceYaw;
+  const hullYaw = mesh.rotation.y;
+  const misalign =
+    face != null && Number.isFinite(face)
+      ? Math.abs(shortestAngle(hullYaw, face))
+      : 0;
+  // >~50°: mostly pivot; >~25°: reduced drive. Stops sideways skating.
+  let driveScale = 1;
+  if (misalign > 0.95) driveScale = 0.08;
+  else if (misalign > 0.55) driveScale = 0.28;
+  else if (misalign > 0.3) driveScale = 0.55;
+
   const beforeX = mesh.position.x;
   const beforeZ = mesh.position.z;
-  slideToward(mesh, dt);
+  slideToward(mesh, dt, driveScale);
   const step = Math.hypot(mesh.position.x - beforeX, mesh.position.z - beforeZ);
   const now = performance.now();
-  if (step < 0.00035) {
+  if (step < 0.00035 && misalign < 0.25) {
     mesh.userData.stillFrames = (mesh.userData.stillFrames || 0) + 1;
   } else {
     mesh.userData.stillFrames = 0;
-    mesh.userData.engineHeardAt = now;
+    if (step > 0.00035 || misalign > 0.2) mesh.userData.engineHeardAt = now;
   }
-  if (mesh.userData.stillFrames > 6) {
+  if (mesh.userData.stillFrames > 8) {
     mesh.userData.velX = 0;
     mesh.userData.velZ = 0;
     mesh.userData.moving = false;
@@ -7209,37 +7238,21 @@ function updateTankDrive(mesh, dt) {
     return;
   }
 
-  const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
-  if (step > 0.0008) {
-    // Prefer smoothed net velocity over a single-frame slide (catch-up can be sideways).
-    let yaw;
-    if (speed > 0.06) {
-      const velYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
-      const slideYaw = Math.atan2(
-        mesh.position.x - beforeX,
-        mesh.position.z - beforeZ,
-      );
-      const conflict = Math.abs(shortestAngle(slideYaw, velYaw));
-      yaw = conflict > 0.75 ? velYaw : slideYaw;
-    } else {
-      yaw = Math.atan2(mesh.position.x - beforeX, mesh.position.z - beforeZ);
-    }
-    setTankTravelYaw(mesh, yaw);
+  if (toDist > 0.05 || step > 0.0005 || misalign > 0.15) {
     mesh.userData.moving = true;
+  }
+  if (step > 0.0008) {
     const spin = step * 28;
     if (spin > 0.0002) {
       mesh.traverse((obj) => {
         if (obj.userData?.roadWheel) obj.rotation.x += spin;
       });
     }
-  } else if (speed > 0.04) {
-    setTankTravelYaw(mesh, Math.atan2(mesh.userData.velX, mesh.userData.velZ), {
-      blend: 0.2,
-    });
-    mesh.userData.moving = true;
   }
 
-  // Palet sesi sadece seçili tank hareket ederken — tüm harita gürültü yapmasın.
+  // Remember misalign so smoothUnitFacing can boost hull slew.
+  mesh.userData.hullMisalign = misalign;
+
   const selected = state.selectedUnits.includes(id);
   if (selected && now - (mesh.userData.engineHeardAt || 0) < 90) {
     Sfx.setEngine(id, mesh.position.x, mesh.position.z, Math.min(1, 0.45 + speed));
@@ -7306,14 +7319,15 @@ function smoothUnitFacing(mesh, dt) {
     const turretRate = mesh.userData.turretTurnRate || 1.35;
     const turret = mesh.getObjectByName("muzzleRoot");
 
-    // Hull follows travel direction — always slew, never hard-snap while moving
-    // (snaps were the visible "wrong way for a frame" flicker).
+    // Hull follows travel heading; turn faster when crabbing so we don't skate sideways.
     if (mesh.userData.faceYaw != null) {
       const diff = shortestAngle(mesh.rotation.y, mesh.userData.faceYaw);
       const abs = Math.abs(diff);
+      const mis = mesh.userData.hullMisalign || abs;
       let maxStep = hullRate * dt;
-      if (mesh.userData.moving && abs > 0.55) {
-        maxStep = Math.min(abs, maxStep * 1.55);
+      if (mesh.userData.moving) {
+        if (mis > 0.7) maxStep = Math.max(maxStep, 4.8 * dt);
+        else if (mis > 0.35) maxStep = Math.max(maxStep, hullRate * 2.2 * dt);
       }
       mesh.rotation.y += Math.max(-maxStep, Math.min(maxStep, diff));
     }
