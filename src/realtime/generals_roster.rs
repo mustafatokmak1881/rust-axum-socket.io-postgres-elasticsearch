@@ -76,17 +76,21 @@ pub fn trainables() -> &'static [UnitDef] {
             attack_ms: 800,
         },
         UnitDef {
+            // M1A1 Abrams — real refs: GDLS / USMC factfile / AFV Database
+            // Cross-country ~48 km/h → speed 0.60 (game scale ≈50 km/h at 0.58).
+            // M256 effective ~3.5–4 km (Desert Storm) → range 13.5 wu (compressed map).
+            // Loader cadence ~6–8 s between aimed shots → attack_ms 6200.
             unit: "tank",
             name: "M1A1 Abrams",
             faction: "usa",
             from_building: "war_factory",
             cost_gold: 1_600,
             train_ms: 16_000,
-            hp: 7_200.0,
-            damage: 580.0,
-            speed: 0.58,
-            range: 8.5,
-            attack_ms: 4_800,
+            hp: 7_800.0,
+            damage: 650.0,
+            speed: 0.60,
+            range: 13.5,
+            attack_ms: 6_200,
         },
         UnitDef {
             // M270 MLRS — soft-skin launcher, long-range rocket ripple.

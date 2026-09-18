@@ -1738,7 +1738,7 @@ const GATLING_DEF_VERSION = 1;
 /** Strategy Center / tech building mesh revision. */
 const STRATEGY_RIG_VERSION = 1;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
-const TANK_RIG_VERSION = 11;
+const TANK_RIG_VERSION = 12;
 /** Infantry mesh revision. */
 const INFANTRY_RIG_VERSION = 7;
 /** MLRS mesh revision. */
@@ -3662,6 +3662,58 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
     }
   }
 
+  // Rocky mountain footprints — brown-grey rock, soft skirts into soil.
+  const mountains = state.mountains || [];
+  for (const mt of mountains) {
+    const cx = (mt.x / mapSize) * size;
+    const cy = (mt.y / mapSize) * size;
+    const pr = (mt.r / mapSize) * size;
+    const r0 = Math.max(4, Math.floor(pr));
+    const skirt = Math.max(4, r0 * 0.22);
+    const x0 = Math.max(0, Math.floor(cx - r0 - skirt - 2));
+    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + skirt + 2));
+    const y0 = Math.max(0, Math.floor(cy - r0 - skirt - 2));
+    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + skirt + 2));
+    const peak = [92, 88, 78];
+    const rock = [72, 66, 56];
+    const scree = [98, 82, 58];
+    const seed = ((mt.x * 23) ^ (mt.y * 41) ^ (mt.r * 11)) | 0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - cx;
+        const dy = y + 0.5 - cy;
+        const ang = Math.atan2(dy, dx);
+        const warp =
+          Math.sin(ang * 2.5 + seed * 0.01) * 0.08 +
+          Math.sin(ang * 4.2 - seed * 0.015) * 0.05 +
+          fbm2(x * 0.035 + seed, y * 0.035, seed + 11, 2) * 0.12 -
+          0.04;
+        const shoreR = r0 * (1 + warp);
+        const d = Math.hypot(dx, dy);
+        if (d > shoreR + skirt) continue;
+        const o = (y * size + x) * 4;
+        const under = [px[o], px[o + 1], px[o + 2]];
+        let col;
+        if (d > shoreR) {
+          const t = (d - shoreR) / skirt;
+          col = lerpColor(scree, under, Math.min(1, t * t));
+        } else {
+          const t = d / Math.max(0.001, shoreR);
+          if (t < 0.35) {
+            col = lerpColor(peak, rock, t / 0.35);
+          } else {
+            col = lerpColor(rock, scree, (t - 0.35) / 0.65);
+          }
+          const grain = (fbm2(x * 0.08, y * 0.08, seed, 2) - 0.5) * 18;
+          col = [col[0] + grain, col[1] + grain * 0.9, col[2] + grain * 0.7];
+        }
+        px[o] = Math.max(0, Math.min(255, col[0]));
+        px[o + 1] = Math.max(0, Math.min(255, col[1]));
+        px[o + 2] = Math.max(0, Math.min(255, col[2]));
+      }
+    }
+  }
+
   ctx.putImageData(img, 0, 0);
 
   // Soft photo texture wash — tinted so it doesn't fight biome colors.
@@ -4059,11 +4111,76 @@ function scatterGroundDecor(scene, size) {
     group.add(lake);
   }
 
-  const nearPond = (x, z, pad = 1.2) => {
+  const rockMat = new THREE.MeshStandardMaterial({
+    color: 0x6a6458,
+    roughness: 0.88,
+    metalness: 0.08,
+    flatShading: true,
+  });
+  const rockDark = new THREE.MeshStandardMaterial({
+    color: 0x4a463c,
+    roughness: 0.92,
+    metalness: 0.06,
+    flatShading: true,
+  });
+  const rockLite = new THREE.MeshStandardMaterial({
+    color: 0x8a8270,
+    roughness: 0.85,
+    metalness: 0.05,
+    flatShading: true,
+  });
+
+  // Impassable mountain clusters — must path around.
+  for (const mt of state.mountains || []) {
+    const r = Math.max(2.2, Number(mt.r) || 4);
+    const mass = new THREE.Group();
+    mass.position.set(mt.x, 0, mt.y);
+    mass.rotation.y = (mt.x * 0.21 + mt.y * 0.13) % (Math.PI * 2);
+    const peaks = 3 + Math.floor((Math.abs(mt.x * 7 + mt.y) * 0.1) % 3);
+    for (let i = 0; i < peaks; i++) {
+      const ang = (i / peaks) * Math.PI * 2 + mt.r * 0.2;
+      const dist = r * (0.12 + (i % 3) * 0.12);
+      const h = r * (0.55 + (i % 2) * 0.28);
+      const rad = r * (0.38 + (i % 3) * 0.1);
+      const peak = new THREE.Mesh(
+        new THREE.ConeGeometry(rad, h, 6),
+        i % 2 === 0 ? rockMat : rockDark,
+      );
+      peak.position.set(Math.cos(ang) * dist, h * 0.48, Math.sin(ang) * dist);
+      peak.rotation.y = ang * 0.4;
+      peak.castShadow = true;
+      peak.receiveShadow = true;
+      mass.add(peak);
+    }
+    // Central bulk
+    const coreH = r * 0.85;
+    const core = new THREE.Mesh(new THREE.ConeGeometry(r * 0.55, coreH, 7), rockLite);
+    core.position.y = coreH * 0.45;
+    core.castShadow = true;
+    core.receiveShadow = true;
+    mass.add(core);
+    // Low skirt so the blocker reads on the ground
+    const skirt = new THREE.Mesh(
+      new THREE.CylinderGeometry(r * 0.95, r * 1.05, r * 0.18, 10),
+      rockDark,
+    );
+    skirt.position.y = r * 0.08;
+    skirt.receiveShadow = true;
+    mass.add(skirt);
+    group.add(mass);
+  }
+
+  const nearBlocked = (x, z, pad = 1.2) => {
     for (const pond of state.ponds || []) {
       const dx = pond.x - x;
       const dy = pond.y - z;
       const min = (pond.r || 0) + pad;
+      if (dx * dx + dy * dy < min * min) return true;
+    }
+    for (const mt of state.mountains || []) {
+      const dx = mt.x - x;
+      const dy = mt.y - z;
+      const min = (mt.r || 0) + pad;
       if (dx * dx + dy * dy < min * min) return true;
     }
     return false;
@@ -4079,7 +4196,7 @@ function scatterGroundDecor(scene, size) {
   for (let i = 0; i < tries; i++) {
     const x = 5 + Math.random() * (size - 10);
     const z = 5 + Math.random() * (size - 10);
-    if (nearPond(x, z)) continue;
+    if (nearBlocked(x, z)) continue;
     const biome = sampleBiome(x, z, size);
 
     if (biome > 0.68 && trees < maxTrees) {
@@ -4384,6 +4501,12 @@ function canPlaceBuildingAt(kind, tileX, tileY) {
     const dx = pond.x - fx;
     const dy = pond.y - fy;
     const min = (pond.r || 0) + placeR;
+    if (dx * dx + dy * dy < min * min) return false;
+  }
+  for (const mt of state.mountains || []) {
+    const dx = mt.x - fx;
+    const dy = mt.y - fy;
+    const min = (mt.r || 0) + placeR;
     if (dx * dx + dy * dy < min * min) return false;
   }
   const myTeam = state.match?.team;
@@ -5734,13 +5857,16 @@ function createTankMesh(teamColor, opts = {}) {
     }
   };
 
-  const finishTank = (scale, unitH, hullRate, turretRate) => {
+  const finishTank = (scale, unitH, hullRate, turretRate, opts = {}) => {
     g.userData.unitHeight = unitH;
     g.userData.isTank = true;
-    // Floor hull turn — slow pivots were the main sideways-skate look.
-    g.userData.hullTurnRate = Math.max(2.6, hullRate);
+    // Abrams: real pivot is slower; misalign boost in smoothUnitFacing still prevents crabbing.
+    // Other variants keep a higher floor for arcade turn-in.
+    const floor = opts.abrams ? 0.85 : 2.6;
+    g.userData.hullTurnRate = Math.max(floor, hullRate);
     g.userData.turretTurnRate = turretRate;
     g.userData.barrelRecoil = 0;
+    g.userData.isAbrams = !!opts.abrams || !!g.userData.isAbrams;
     g.userData.tankRigVersion = TANK_RIG_VERSION;
     g.scale.setScalar(scale);
     return g;
@@ -6007,84 +6133,106 @@ function createTankMesh(teamColor, opts = {}) {
     return finishTank(0.64, 0.22, 2.0, 1.05);
   }
 
-  // Default: USA M1A1 — polished olive armor
-  addTracks(0.175, 0.52, 5, 0.04);
-  add(g, new THREE.BoxGeometry(0.32, 0.09, 0.5), matArmor(hull), 0, 0.09, 0);
-  add(g, new THREE.BoxGeometry(0.3, 0.05, 0.36), matArmor(hullDark), 0, 0.145, -0.02);
-  add(g, new THREE.BoxGeometry(0.28, 0.035, 0.12), matArmor(hullLight, { roughness: 0.2 }), 0, 0.12, 0.22, -0.4, 0, 0);
-  add(g, new THREE.BoxGeometry(0.26, 0.03, 0.1), matArmor(metal), 0, 0.14, -0.24);
-  // Side skirts + bolt rows
+  // Default: M1A1 Abrams — proportions / CARC Forest Green / 7 road wheels / arrowhead turret.
+  // Real refs: L≈7.93 m hull, W≈3.66 m, H≈2.44 m; turret ~40°/s; CC ~48 km/h.
+  const carc = (c, rough = 0.64) =>
+    matStd(c, { metalness: 0.18, roughness: rough, envMapIntensity: 0.45 });
+  const carcSteel = (c) => matStd(c, { metalness: 0.55, roughness: 0.42, envMapIntensity: 0.7 });
+
+  // FS34094 / Green 383 family — matte NATO CARC (not chrome).
+  const abramsGreen = 0x4e5638;
+  const abramsGreenDk = 0x3a422c;
+  const abramsGreenLt = 0x5e6648;
+  const abramsMetal = 0x3a3c36;
+
+  // 7 road wheels (Abrams layout), rear drive sprocket.
+  addTracks(0.155, 0.56, 7, 0.038);
+  // Hull — low silhouette, length > width (~real 7.93×3.66).
+  add(g, new THREE.BoxGeometry(0.28, 0.085, 0.56), carc(abramsGreen), 0, 0.088, 0);
+  add(g, new THREE.BoxGeometry(0.26, 0.045, 0.4), carc(abramsGreenDk, 0.68), 0, 0.14, -0.02);
+  // Glacis plate (sloped front)
+  add(g, new THREE.BoxGeometry(0.255, 0.04, 0.14), carc(abramsGreenLt, 0.6), 0, 0.115, 0.24, -0.48, 0, 0);
+  add(g, new THREE.BoxGeometry(0.22, 0.028, 0.08), carcSteel(abramsMetal), 0, 0.135, -0.28);
+  // Side skirts (full length)
   for (const side of [-1, 1]) {
-    add(g, new THREE.BoxGeometry(0.022, 0.06, 0.48), matArmor(hullDark), side * 0.175, 0.1, 0);
-    for (let i = 0; i < 5; i++) {
+    add(g, new THREE.BoxGeometry(0.02, 0.07, 0.54), carc(abramsGreenDk, 0.7), side * 0.152, 0.095, 0);
+    for (let i = 0; i < 6; i++) {
       add(
         g,
-        new THREE.BoxGeometry(0.012, 0.028, 0.055),
-        matArmor(metalHi, { roughness: 0.12 }),
-        side * 0.188,
-        0.1,
-        -0.16 + i * 0.08,
+        new THREE.BoxGeometry(0.01, 0.03, 0.06),
+        carcSteel(0x4a4e46),
+        side * 0.165,
+        0.095,
+        -0.2 + i * 0.08,
       );
     }
   }
-  // Exhausts + rear grill
-  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 10), matArmor(0x2a2a28), -0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
-  add(g, new THREE.CylinderGeometry(0.016, 0.018, 0.05, 10), matArmor(0x2a2a28), 0.09, 0.155, -0.27, Math.PI / 2, 0, 0);
-  add(g, new THREE.BoxGeometry(0.18, 0.02, 0.04), matArmor(metal), 0, 0.12, -0.3);
-  add(g, new THREE.BoxGeometry(0.24, 0.014, 0.055), matSatin(accent, { metalness: 0.8, roughness: 0.22 }), 0, 0.16, -0.12, 0, 0, 0, true);
-  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.55, roughness: 0.3 }), -0.11, 0.11, 0.27);
-  add(g, new THREE.BoxGeometry(0.02, 0.016, 0.012), matStd(0xfff2a8, { emissive: 0xaa8800, emissiveIntensity: 0.4, metalness: 0.55, roughness: 0.3 }), 0.11, 0.11, 0.27);
-  // Front tow hooks / armor lip
-  add(g, new THREE.BoxGeometry(0.06, 0.02, 0.03), matArmor(metalHi), -0.1, 0.085, 0.26);
-  add(g, new THREE.BoxGeometry(0.06, 0.02, 0.03), matArmor(metalHi), 0.1, 0.085, 0.26);
+  // Rear turbine exhausts + grille
+  add(g, new THREE.CylinderGeometry(0.018, 0.02, 0.055, 10), carcSteel(0x2a2a26), -0.08, 0.15, -0.3, Math.PI / 2, 0, 0);
+  add(g, new THREE.CylinderGeometry(0.018, 0.02, 0.055, 10), carcSteel(0x2a2a26), 0.08, 0.15, -0.3, Math.PI / 2, 0, 0);
+  add(g, new THREE.BoxGeometry(0.2, 0.022, 0.045), carcSteel(abramsMetal), 0, 0.118, -0.32);
+  // Soft team band (not a candy stripe)
+  add(g, new THREE.BoxGeometry(0.2, 0.012, 0.04), matSatin(accent, { metalness: 0.45, roughness: 0.4 }), 0, 0.155, -0.14, 0, 0, 0, true);
+  // Headlights
+  add(g, new THREE.BoxGeometry(0.018, 0.014, 0.012), matStd(0xfff0a8, { emissive: 0x886600, emissiveIntensity: 0.35, metalness: 0.4, roughness: 0.35 }), -0.1, 0.105, 0.29);
+  add(g, new THREE.BoxGeometry(0.018, 0.014, 0.012), matStd(0xfff0a8, { emissive: 0x886600, emissiveIntensity: 0.35, metalness: 0.4, roughness: 0.35 }), 0.1, 0.105, 0.29);
+  // Front tow eyes
+  add(g, new THREE.BoxGeometry(0.05, 0.018, 0.025), carcSteel(0x5a5e56), -0.09, 0.08, 0.285);
+  add(g, new THREE.BoxGeometry(0.05, 0.018, 0.025), carcSteel(0x5a5e56), 0.09, 0.08, 0.285);
 
-  add(turret, new THREE.BoxGeometry(0.2, 0.095, 0.24), matArmor(hull), 0, 0.22, -0.02);
-  add(turret, new THREE.BoxGeometry(0.16, 0.045, 0.14), matArmor(hullDark), 0, 0.28, -0.04);
-  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matArmor(hullLight), -0.11, 0.225, 0.02, 0, 0, 0.25);
-  add(turret, new THREE.BoxGeometry(0.04, 0.07, 0.16), matArmor(hullLight), 0.11, 0.225, 0.02, 0, 0, -0.25);
-  // ERA / storage boxes
-  add(turret, new THREE.BoxGeometry(0.05, 0.04, 0.1), matArmor(0x525848), -0.125, 0.24, 0.02);
-  add(turret, new THREE.BoxGeometry(0.05, 0.04, 0.1), matArmor(0x525848), 0.125, 0.24, 0.02);
-  add(turret, new THREE.BoxGeometry(0.14, 0.05, 0.08), matArmor(0x484e40), 0, 0.23, -0.16);
-  add(turret, new THREE.CylinderGeometry(0.038, 0.044, 0.032, 12), matArmor(metal), 0.045, 0.305, -0.02);
-  // Smoke launchers
-  for (const sx of [-0.06, -0.02, 0.02, 0.06]) {
-    add(turret, new THREE.CylinderGeometry(0.008, 0.01, 0.028, 8), matArmor(metalHi), sx, 0.27, 0.12, 0.55, 0, 0);
+  // Arrowhead / wedge turret (Abrams signature)
+  add(turret, new THREE.BoxGeometry(0.22, 0.1, 0.28), carc(abramsGreen), 0, 0.215, -0.02);
+  add(turret, new THREE.BoxGeometry(0.18, 0.05, 0.16), carc(abramsGreenDk, 0.66), 0, 0.28, -0.04);
+  // Cheek armor (angled)
+  add(turret, new THREE.BoxGeometry(0.05, 0.08, 0.2), carc(abramsGreenLt, 0.6), -0.12, 0.22, 0.02, 0, 0, 0.32);
+  add(turret, new THREE.BoxGeometry(0.05, 0.08, 0.2), carc(abramsGreenLt, 0.6), 0.12, 0.22, 0.02, 0, 0, -0.32);
+  // Bustle / blow-off panels rear
+  add(turret, new THREE.BoxGeometry(0.16, 0.055, 0.1), carc(0x454c38, 0.7), 0, 0.225, -0.18);
+  // CITV / GPS housing
+  add(turret, new THREE.CylinderGeometry(0.035, 0.04, 0.03, 12), carcSteel(abramsMetal), 0.05, 0.305, -0.02);
+  // Smoke grenade launchers (front cheeks)
+  for (const sx of [-0.07, -0.03, 0.03, 0.07]) {
+    add(turret, new THREE.CylinderGeometry(0.007, 0.009, 0.026, 8), carcSteel(0x5a5e56), sx, 0.265, 0.13, 0.55, 0, 0);
   }
-  add(turret, new THREE.BoxGeometry(0.18, 0.012, 0.04), matSatin(accent, { metalness: 0.82 }), 0, 0.265, 0.08, 0, 0, 0, true);
-  add(turret, new THREE.BoxGeometry(0.09, 0.07, 0.06), matArmor(metal), 0, 0.225, 0.12);
+  add(turret, new THREE.BoxGeometry(0.16, 0.01, 0.035), matSatin(accent, { metalness: 0.4, roughness: 0.45 }), 0, 0.26, 0.08, 0, 0, 0, true);
+  // Gun mantlet
+  add(turret, new THREE.BoxGeometry(0.1, 0.075, 0.07), carcSteel(abramsMetal), 0, 0.22, 0.14);
   // Antenna
-  add(turret, new THREE.CylinderGeometry(0.004, 0.004, 0.12, 6), matArmor(metalHi), -0.06, 0.36, -0.08);
+  add(turret, new THREE.CylinderGeometry(0.0035, 0.0035, 0.14, 6), carcSteel(0x6a6e66), -0.07, 0.36, -0.1);
 
+  // Commander's M2HB (.50) on cupola
   const mg = new THREE.Group();
   mg.name = "tankMg";
-  mg.position.set(0.045, 0.338, -0.02);
-  add(mg, new THREE.BoxGeometry(0.02, 0.014, 0.03), matArmor(metal), 0, 0.01, 0);
-  add(mg, new THREE.CylinderGeometry(0.0045, 0.0055, 0.09, 8), matArmor(0x2a2a28), 0, 0.022, 0.052, Math.PI / 2, 0, 0);
+  mg.position.set(0.05, 0.335, -0.02);
+  add(mg, new THREE.BoxGeometry(0.022, 0.016, 0.032), carcSteel(abramsMetal), 0, 0.01, 0);
+  add(mg, new THREE.CylinderGeometry(0.005, 0.006, 0.1, 8), carcSteel(0x2a2a28), 0, 0.022, 0.055, Math.PI / 2, 0, 0);
   const mgTip = new THREE.Object3D();
   mgTip.name = "mgMuzzle";
-  mgTip.position.set(0, 0.022, 0.1);
+  mgTip.position.set(0, 0.022, 0.11);
   mg.add(mgTip);
   turret.add(mg);
 
-  barrelGroup.position.set(0, 0.225, 0.12);
-  const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.017, 0.022, 0.32, 12),
-    matArmor(0x2a2a28, { roughness: 0.12 }),
+  // M256 120 mm L/44 — long thermal sleeve + bore evacuator mid-barrel
+  barrelGroup.position.set(0, 0.22, 0.15);
+  const sleeve = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.02, 0.024, 0.38, 12),
+    carc(0x3e4634, 0.55),
   );
-  barrel.rotation.x = Math.PI / 2;
-  barrel.position.z = 0.18;
-  barrelGroup.add(barrel);
-  add(barrelGroup, new THREE.CylinderGeometry(0.026, 0.026, 0.05, 12), matArmor(0x323230), 0, 0, 0.3, Math.PI / 2, 0, 0);
-  add(barrelGroup, new THREE.CylinderGeometry(0.03, 0.03, 0.02, 12), matArmor(metalHi), 0, 0, 0.22, Math.PI / 2, 0, 0);
-  add(barrelGroup, new THREE.CylinderGeometry(0.02, 0.028, 0.035, 12), matArmor(metalHi), 0, 0, 0.44, Math.PI / 2, 0, 0);
+  sleeve.rotation.x = Math.PI / 2;
+  sleeve.position.z = 0.2;
+  barrelGroup.add(sleeve);
+  add(barrelGroup, new THREE.CylinderGeometry(0.028, 0.028, 0.045, 12), carcSteel(0x2e302c), 0, 0, 0.32, Math.PI / 2, 0, 0);
+  add(barrelGroup, new THREE.CylinderGeometry(0.032, 0.032, 0.022, 12), carcSteel(0x5a5e56), 0, 0, 0.22, Math.PI / 2, 0, 0);
+  // Muzzle reference / tip
+  add(barrelGroup, new THREE.CylinderGeometry(0.018, 0.022, 0.04, 12), carcSteel(0x4a4e48), 0, 0, 0.42, Math.PI / 2, 0, 0);
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0, 0, 0.5);
+  tip.position.set(0, 0, 0.48);
   barrelGroup.add(tip);
   turret.add(barrelGroup);
   g.add(turret);
-  return finishTank(0.52, 0.17, 2.5, 1.25);
+  // Hull ~0.9 rad/s pivot feel; turret 0.70 rad/s = 40°/s (real M1A1).
+  return finishTank(0.58, 0.18, 0.95, 0.7, { abrams: true });
 }
 
 /** Humvee / Technical / buggy — wheeled, not a rescaled tank. */

@@ -349,11 +349,12 @@ fn shortest_angle(from: f32, to: f32) -> f32 {
     d
 }
 
-/// Visible traverse (~66°/s) — the gun waits until this finishes.
-const TANK_TURRET_RATE: f32 = 1.15;
-const TANK_AIM_ALIGN: f32 = 0.07;
-const TANK_MG_RANGE: f32 = 5.4;
-const TANK_MG_COOLDOWN_MS: u32 = 130;
+/// M1A1 turret traverse ≈ 40°/s (360° ≈ 9 s) → 0.70 rad/s.
+const TANK_TURRET_RATE: f32 = 0.70;
+const TANK_AIM_ALIGN: f32 = 0.05;
+/// Coax M240 — shorter than main gun, still beyond rifle.
+const TANK_MG_RANGE: f32 = 6.5;
+const TANK_MG_COOLDOWN_MS: u32 = 100;
 /// M270 pod slew — heavier than a tank turret, still waits for bearing.
 const MLRS_POD_RATE: f32 = 0.72;
 const MLRS_AIM_ALIGN: f32 = 0.10;
@@ -435,16 +436,21 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         } else {
             (base * 1.28).max(base)
         }
-    } else if armored && attacker_kind.contains("tank") && soft_vehicle {
-        // Tank gun vs soft launcher — catastrophic.
-        (base * 2.1).max(base)
+    } else if armored && attacker_kind.contains("tank") {
+        // M1A1 M829 APFSDS — designed to defeat peer armor; soft AFVs catastrophic.
+        if soft_vehicle {
+            (base * 2.3).max(base)
+        } else {
+            (base * 1.22).max(base)
+        }
     } else if target.building
         && (attacker_kind.contains("abrams")
             || attacker_kind.contains("paladin")
             || attacker_kind.contains("marauder")
-            || attacker_kind.contains("overlord"))
+            || attacker_kind.contains("overlord")
+            || attacker_kind.contains("tank"))
     {
-        (base * 1.15).max(base)
+        (base * 1.12).max(base)
     } else if target.building && (attacker_kind == "turret" || attacker_kind == "stinger_site") {
         (base * 0.75).max(280.0)
     } else if target.building && attacker_kind == "firebase" {
@@ -478,7 +484,8 @@ fn shot_hit_chance(
     let range = range.max(0.05);
     // Distance where hit chance has dropped to ~50% of point-blank.
     let d0 = if attacker_kind.contains("tank") {
-        range * 0.45
+        // M1A1 ballistic computer + laser RF — stays accurate farther out.
+        range * 0.55
     } else if attacker_kind.contains("mlrs") {
         range * 0.52
     } else if attacker_kind == "bunker" {
@@ -495,7 +502,7 @@ fn shot_hit_chance(
 
     // Point-blank connect rate (before size / cover / prone).
     let weapon_near = if attacker_kind.contains("tank") {
-        0.86
+        0.90
     } else if attacker_kind == "turret" || attacker_kind.contains("missile") {
         0.92
     } else if attacker_kind.contains("mlrs") {
