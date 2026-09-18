@@ -103,29 +103,29 @@ const PROFILES: [BotProfile; OPENING_BOT_COUNT] = [
 impl BotStyle {
     fn first_wave_tick(self) -> u64 {
         match self {
-            BotStyle::Reckless => 90,
-            BotStyle::Aggressive => 140,
-            BotStyle::Balanced => 200,
-            BotStyle::Counter => 320,
-            BotStyle::Defensive => 480,
+            BotStyle::Reckless => 40,
+            BotStyle::Aggressive => 55,
+            BotStyle::Balanced => 80,
+            BotStyle::Counter => 110,
+            BotStyle::Defensive => 140,
         }
     }
 
     fn rest_ticks(self) -> u64 {
         match self {
-            BotStyle::Reckless => 70,
-            BotStyle::Aggressive => 90,
-            BotStyle::Balanced => 130,
-            BotStyle::Counter => 100,
-            BotStyle::Defensive => 200,
+            BotStyle::Reckless => 45,
+            BotStyle::Aggressive => 55,
+            BotStyle::Balanced => 75,
+            BotStyle::Counter => 65,
+            BotStyle::Defensive => 100,
         }
     }
 
     fn react_ticks(self) -> u64 {
         match self {
-            BotStyle::Reckless | BotStyle::Aggressive => 18,
-            BotStyle::Balanced | BotStyle::Counter => 22,
-            BotStyle::Defensive => 16,
+            BotStyle::Reckless | BotStyle::Aggressive => 12,
+            BotStyle::Balanced | BotStyle::Counter => 16,
+            BotStyle::Defensive => 14,
         }
     }
 
@@ -134,37 +134,37 @@ impl BotStyle {
         match self {
             BotStyle::Reckless => {
                 if threatened || hq_hurt {
-                    0.45
+                    0.55
                 } else {
-                    0.72
+                    0.85
                 }
             }
             BotStyle::Aggressive => {
                 if threatened {
-                    0.50
+                    0.55
                 } else {
-                    0.68
+                    0.78
                 }
             }
             BotStyle::Balanced => {
                 if threatened {
-                    0.38
+                    0.45
                 } else {
-                    0.55
+                    0.70
                 }
             }
             BotStyle::Defensive => {
                 if threatened {
-                    0.22
+                    0.30
                 } else {
-                    0.32
+                    0.55
                 }
             }
             BotStyle::Counter => {
                 if threatened || hq_hurt {
-                    0.70
+                    0.80
                 } else {
-                    0.22
+                    0.45
                 }
             }
         }
@@ -172,11 +172,20 @@ impl BotStyle {
 
     fn min_push_power(self) -> f32 {
         match self {
-            BotStyle::Reckless => 16.0,
-            BotStyle::Aggressive => 24.0,
-            BotStyle::Balanced => 30.0,
-            BotStyle::Defensive => 20.0,
-            BotStyle::Counter => 34.0,
+            BotStyle::Reckless => 3.0,
+            BotStyle::Aggressive => 3.5,
+            BotStyle::Balanced => 4.0,
+            BotStyle::Defensive => 3.0,
+            BotStyle::Counter => 4.0,
+        }
+    }
+
+    /// Minimum ready units before a home rally will march.
+    fn min_push_squad(self) -> usize {
+        match self {
+            BotStyle::Reckless | BotStyle::Aggressive => 3,
+            BotStyle::Balanced | BotStyle::Defensive => 3,
+            BotStyle::Counter => 4,
         }
     }
 
@@ -639,15 +648,20 @@ fn command_home(
     let power: f32 = ready.iter().map(|u| unit_power(u)).sum();
     let tanks = ready.iter().filter(|u| u.tank).count();
     let inf = ready.iter().filter(|u| !u.tank).count();
-    let formed = power >= style.min_push_power() && ((tanks >= 1 && inf >= 3) || inf >= 8);
+    let min_n = style.min_push_squad();
+    // Small opening armies must still march — don't wait for a full combined-arms blob.
+    let formed = ready.len() >= min_n
+        && (power >= style.min_push_power()
+            || tanks >= 1
+            || inf >= min_n);
     if !formed {
         return;
     }
 
-    // Commit one mixed squad; leave a garrison at the rally.
+    // Commit one squad; leave a thin garrison when possible.
     let keep = ((ready.len() as f32) * (1.0 - style.assault_ratio(false, false)))
         .round() as usize;
-    let keep = keep.min(ready.len().saturating_sub(4));
+    let keep = keep.min(ready.len().saturating_sub(2));
     let mut ranked = ready;
     ranked.sort_by(|a, b| {
         role_push(b)
