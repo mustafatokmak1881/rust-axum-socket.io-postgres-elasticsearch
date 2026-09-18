@@ -366,7 +366,12 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         }
     } else if armored && attacker_kind.contains("mortar") {
         (base * 0.22).max(55.0)
-    } else if armored && attacker_kind.contains("abrams") {
+    } else if armored
+        && (attacker_kind.contains("abrams")
+            || attacker_kind.contains("paladin")
+            || attacker_kind.contains("marauder")
+            || attacker_kind.contains("overlord"))
+    {
         // DU / heavy APFSDS — designed to crack peer armor.
         if soft_vehicle {
             (base * 2.4).max(base)
@@ -376,7 +381,12 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     } else if armored && attacker_kind.contains("tank") && soft_vehicle {
         // Tank gun vs soft launcher — catastrophic.
         (base * 2.1).max(base)
-    } else if target.building && attacker_kind.contains("abrams") {
+    } else if target.building
+        && (attacker_kind.contains("abrams")
+            || attacker_kind.contains("paladin")
+            || attacker_kind.contains("marauder")
+            || attacker_kind.contains("overlord"))
+    {
         (base * 1.15).max(base)
     } else if target.building && attacker_kind == "turret" {
         (base * 0.85).max(400.0)
