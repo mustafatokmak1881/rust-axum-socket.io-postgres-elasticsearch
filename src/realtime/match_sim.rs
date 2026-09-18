@@ -1679,13 +1679,22 @@ impl MatchSim {
                         let unit_kind = entity.train_queue.pop_front().unwrap().unit;
                         if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
                             let uid = Uuid::new_v4();
-                            let (sx, sy) = self.find_free_spawn_near(
-                                entity.x,
-                                entity.y,
-                                unit_radius(def.unit),
-                                uid,
-                                Some((entity.x, entity.y, building_radius(&entity.kind))),
-                            );
+                            let (sx, sy) = if is_air_kind(def.unit) {
+                                self.find_air_spawn_near(
+                                    entity.x,
+                                    entity.y,
+                                    unit_radius(def.unit),
+                                    uid,
+                                )
+                            } else {
+                                self.find_free_spawn_near(
+                                    entity.x,
+                                    entity.y,
+                                    unit_radius(def.unit),
+                                    uid,
+                                    Some((entity.x, entity.y, building_radius(&entity.kind))),
+                                )
+                            };
                             let spawn = Entity {
                                 id: uid,
                                 kind: def.unit.into(),
@@ -1749,6 +1758,7 @@ impl MatchSim {
             };
 
             let self_r = unit_radius(&entity.kind);
+            let airborne = is_air_kind(&entity.kind);
             // Move orders control pathing only — units may still shoot while marching.
             let obeying_move = entity.move_to.is_some();
             // Squads walk through friendlies toward the click; buildings / enemies still block.
@@ -1781,12 +1791,19 @@ impl MatchSim {
                     let tdy = t.y - entity.y;
                     let tdist = (tdx * tdx + tdy * tdy).sqrt();
                     let stop_at = (entity.range - 0.35).max(self_r + entity_radius(t) * 0.35);
-                    let cover = self.shot_cover(entity.id, entity.x, entity.y, t);
+                    let cover_blocked = if airborne {
+                        false
+                    } else {
+                        self.shot_cover(entity.id, entity.x, entity.y, t).blocked
+                    };
                     let bot_cmd = self.players.get(&entity.owner).is_some_and(|p| p.is_bot());
                     // Bots treat a march as attack-move: halt and fight anyone they can shoot.
-                    let can_shoot = tdist <= entity.range && !cover.blocked;
-                    let in_pocket = tdist <= stop_at && !cover.blocked;
-                    if (!obeying_move && in_pocket) || (bot_cmd && can_shoot) {
+                    let can_shoot = tdist <= entity.range && !cover_blocked;
+                    let in_pocket = tdist <= stop_at && !cover_blocked;
+                    if (!obeying_move && in_pocket)
+                        || (bot_cmd && can_shoot)
+                        || (airborne && can_shoot && !obeying_move)
+                    {
                         hold_for_attack = true;
                         goal = None;
                         entity.detour = None;
@@ -1805,6 +1822,33 @@ impl MatchSim {
 
             if !hold_for_attack {
                 if let Some((gx, gy)) = goal {
+                    if airborne {
+                        // Generals-style air: fly straight over terrain and buildings.
+                        let prev_x = entity.x;
+                        let prev_y = entity.y;
+                        let gdx = gx - entity.x;
+                        let gdy = gy - entity.y;
+                        let toward_goal = (gdx * gdx + gdy * gdy).sqrt();
+                        let step = entity.speed * (dt_ms as f32 / 1000.0);
+                        let arrive_r = (entity.range * 0.15).clamp(0.35, 1.2);
+                        if toward_goal <= arrive_r {
+                            entity.x = gx;
+                            entity.y = gy;
+                            entity.move_to = None;
+                            entity.stuck_frames = 0;
+                        } else if toward_goal > 0.001 {
+                            let travel = step.min(toward_goal);
+                            entity.x += (gdx / toward_goal) * travel;
+                            entity.y += (gdy / toward_goal) * travel;
+                            entity.stuck_frames = 0;
+                        }
+                        let map = self.map_size as f32;
+                        entity.x = entity.x.clamp(0.5, map - 0.5);
+                        entity.y = entity.y.clamp(0.5, map - 0.5);
+                        if (entity.x - prev_x).abs() > 0.0001 || (entity.y - prev_y).abs() > 0.0001 {
+                            entity.dirty = true;
+                        }
+                    } else {
                     // Detour is short-lived: expire it so we re-aim at the true goal every few ticks.
                     if entity.detour_ttl > 0 {
                         entity.detour_ttl = entity.detour_ttl.saturating_sub(1);
@@ -1985,6 +2029,7 @@ impl MatchSim {
                             }
                         }
                     }
+                    } // end ground path (else !airborne)
                 } else {
                     entity.detour = None;
                     entity.detour_ttl = 0;
@@ -2005,7 +2050,14 @@ impl MatchSim {
                     let dx = target.x - entity.x;
                     let dy = target.y - entity.y;
                     let dist = (dx * dx + dy * dy).sqrt();
-                    let cover = self.shot_cover(entity.id, entity.x, entity.y, target);
+                    let cover = if is_air_kind(&entity.kind) {
+                        ShotCover {
+                            blocked: false,
+                            exposure: 1.0,
+                        }
+                    } else {
+                        self.shot_cover(entity.id, entity.x, entity.y, target)
+                    };
                     let mut aimed = true;
                     if (entity.kind.contains("tank") || entity.kind.contains("mlrs"))
                         && dist > 0.001
@@ -3444,6 +3496,47 @@ impl MatchSim {
         )
     }
 
+    /// Pad beside an airfield — ignores ground buildings (unit is airborne on spawn).
+    fn find_air_spawn_near(
+        &self,
+        bx: f32,
+        by: f32,
+        radius: f32,
+        self_id: Uuid,
+    ) -> (f32, f32) {
+        let map = self.map_size as f32;
+        for k in 0..64 {
+            let ang = k as f32 * 0.65;
+            let dist = 1.8 + (k as f32) * 0.11;
+            let x = (bx + ang.cos() * dist).clamp(0.5, map - 0.5);
+            let y = (by + ang.sin() * dist).clamp(0.5, map - 0.5);
+            let mut blocked = false;
+            self.grid.for_each_nearby(x, y, radius + 0.35, |id| {
+                let Some(e) = self.entities.get(&id) else {
+                    return false;
+                };
+                if e.id == self_id || e.hp <= 0.0 || !e.unit || !is_air_kind(&e.kind) {
+                    return false;
+                }
+                let dx = e.x - x;
+                let dy = e.y - y;
+                let min_d = radius + unit_radius(&e.kind) + 0.15;
+                if dx * dx + dy * dy < min_d * min_d {
+                    blocked = true;
+                    return true;
+                }
+                false
+            });
+            if !blocked {
+                return (x, y);
+            }
+        }
+        (
+            (bx + 2.2).clamp(0.5, map - 0.5),
+            by.clamp(0.5, map - 0.5),
+        )
+    }
+
     /// Tanks flatten enemy infantry they drive over.
     fn crush_infantry_under_tanks(&mut self) {
         let tanks: Vec<(Uuid, u8, f32, f32, f32)> = self
@@ -3497,7 +3590,7 @@ impl MatchSim {
         let ids: Vec<Uuid> = self
             .entities
             .values()
-            .filter(|e| e.unit)
+            .filter(|e| e.unit && !is_air_kind(&e.kind))
             .map(|e| e.id)
             .collect();
         if ids.len() < 2 {

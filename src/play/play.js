@@ -3744,7 +3744,11 @@ function unitsInScreenBox(x0, y0, x1, y1) {
   const ids = [];
   for (const entity of state.entities.values()) {
     if (!entity.unit || entity.owner !== you) continue;
-    const p = worldToClient(entity.x, entity.y, 0.12);
+    const p = worldToClient(
+      entity.x,
+      entity.y,
+      isAirUnitKind(entity.kind) ? 0.85 : 0.12,
+    );
     if (!p) continue;
     if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
       ids.push(entity.id);
@@ -3777,9 +3781,10 @@ function syncSelectionMarkers() {
     let ring = mesh.userData.selRing;
     if (on && !ring) {
       const tank = !!mesh.userData.isTank;
+      const air = !!mesh.userData.isAir;
       const building = !!mesh.userData.building;
-      const inner = building ? 0.55 : tank ? 0.08 : 0.035;
-      const outer = building ? 0.68 : tank ? 0.1 : 0.05;
+      const inner = building ? 0.55 : air ? 0.16 : tank ? 0.08 : 0.035;
+      const outer = building ? 0.68 : air ? 0.22 : tank ? 0.1 : 0.05;
       const geo = new THREE.RingGeometry(inner, outer, 20);
       const mat = new THREE.MeshBasicMaterial({
         color: 0x9fef4a,
@@ -4008,69 +4013,131 @@ function entityColors(entity) {
 
 function makeNameSprite(text, colors) {
   const canvas = document.createElement("canvas");
-  canvas.width = 192;
-  canvas.height = 48;
+  canvas.width = 256;
+  canvas.height = 64;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Compact tricolor strip above the name
-  const barW = 54;
-  const barH = 3;
+  const label = String(text || "?").slice(0, 18);
+  ctx.font = "600 22px 'Segoe UI', system-ui, sans-serif";
+  const tw = Math.ceil(ctx.measureText(label).width);
+  const padX = 14;
+  const boxW = Math.min(canvas.width - 8, Math.max(88, tw + padX * 2));
+  const boxH = 28;
+  const boxX = (canvas.width - boxW) / 2;
+  const boxY = 22;
+
+  // Soft plaque so names read on sand / fog / chaos.
+  ctx.fillStyle = "rgba(8, 12, 6, 0.72)";
+  roundRect(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(220, 230, 190, 0.28)";
+  ctx.lineWidth = 1.25;
+  roundRect(ctx, boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1, 5.5);
+  ctx.stroke();
+
+  // Compact tricolor ownership strip
+  const barW = Math.min(boxW - 16, 64);
+  const barH = 4;
   const barX = (canvas.width - barW) / 2;
   const bandW = barW / 3;
   for (let i = 0; i < 3; i++) {
     ctx.fillStyle = `#${(colors[i] >>> 0).toString(16).padStart(6, "0")}`;
-    ctx.fillRect(barX + i * bandW, 4, bandW, barH);
+    ctx.fillRect(barX + i * bandW, 10, bandW, barH);
   }
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX + 0.5, 10.5, barW - 1, barH - 1);
 
-  ctx.font = "bold 16px Segoe UI, Tahoma, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = "rgba(0,0,0,0.85)";
-  ctx.fillStyle = "#f4f1e8";
-  const label = String(text || "?").slice(0, 16);
-  ctx.strokeText(label, canvas.width / 2, 28);
-  ctx.fillText(label, canvas.width / 2, 28);
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = "rgba(0,0,0,0.9)";
+  ctx.fillStyle = "#f3f6ea";
+  ctx.strokeText(label, canvas.width / 2, boxY + boxH / 2 + 0.5);
+  ctx.fillText(label, canvas.width / 2, boxY + boxH / 2 + 0.5);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
+  texture.anisotropy = 4;
   const mat = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
     depthTest: false,
+    depthWrite: false,
   });
   const sprite = new THREE.Sprite(mat);
   sprite.scale.set(1.85, 0.46, 1);
   sprite.center.set(0.5, 0);
+  sprite.renderOrder = 20;
   return sprite;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function ownerLabelScale(entity) {
+  if (entity?.building) {
+    if (entity.kind === "hq") return { x: 1.15, y: 0.29 };
+    if (entity.kind === "bunker" || entity.kind === "turret") return { x: 0.72, y: 0.18 };
+    return { x: 0.95, y: 0.24 };
+  }
+  const k = String(entity?.kind || "");
+  if (isAirUnitKind(k)) return { x: 0.72, y: 0.18 };
+  if (k.includes("tank") || k.includes("mlrs") || k.includes("overlord")) {
+    return { x: 0.62, y: 0.155 };
+  }
+  if (
+    k.includes("humvee") ||
+    k.includes("technical") ||
+    k.includes("buggy") ||
+    k.includes("crawler")
+  ) {
+    return { x: 0.55, y: 0.14 };
+  }
+  // Infantry — small but legible
+  return { x: 0.48, y: 0.12 };
+}
+
+function applyOwnerLabelScale(sprite, entity) {
+  const s = ownerLabelScale(entity);
+  sprite.scale.set(s.x, s.y, 1);
 }
 
 function attachOwnerMarkings(mesh, entity) {
   const colors = entityColors(entity);
   const name = entity.owner_name || "Player";
   const sprite = makeNameSprite(name, colors);
-  if (!entity.building) {
-    const tank = String(entity.kind || "").includes("tank");
-    sprite.scale.set(tank ? 0.32 : 0.28, tank ? 0.085 : 0.07, 1);
-  }
+  applyOwnerLabelScale(sprite, entity);
   sprite.position.set(0, labelHeightFor(entity), 0);
   sprite.name = "ownerLabel";
   mesh.add(sprite);
   mesh.userData.ownerLabel = sprite;
-  mesh.userData.labelKey = `${name}|${colors.join(",")}`;
+  mesh.userData.labelKey = `${name}|${colors.join(",")}|v2`;
 }
 
 function labelHeightFor(entity) {
   if (entity.building) {
-    if (entity.kind === "hq") return 2.05;
-    if (entity.kind === "bunker") return 0.42;
-    if (entity.kind === "radar") return 1.05;
-    if (entity.kind === "turret") return 0.85;
-    return 1.5;
+    if (entity.kind === "hq") return 2.15;
+    if (entity.kind === "bunker") return 0.48;
+    if (entity.kind === "radar") return 1.1;
+    if (entity.kind === "turret") return 0.92;
+    return 1.55;
   }
+  if (isAirUnitKind(entity.kind)) return 1.15;
   const h = unitDims(entity.kind).h || 0.08;
-  return h + (String(entity.kind || "").includes("tank") || String(entity.kind || "").includes("mlrs") ? 0.1 : 0.05);
+  const tank =
+    String(entity.kind || "").includes("tank") ||
+    String(entity.kind || "").includes("mlrs");
+  return h + (tank ? 0.14 : 0.08);
 }
 
 function activeLoadProgress(entity) {
@@ -5065,33 +5132,107 @@ function createLightVehicleMesh(teamColor, opts = {}) {
   return m;
 }
 
-function createAirMesh(teamColor) {
+function createAirMesh(teamColor, kind = "") {
+  const k = String(kind || "");
+  const heli =
+    k.includes("comanche") ||
+    k.includes("helix") ||
+    k.includes("chinook");
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isAir = true;
+  g.userData.isHeli = heli;
+  g.userData.airAltitude = heli ? 0.72 : 0.95;
   g.userData.tintParts = [];
-  g.userData.unitHeight = 0.35;
+  g.userData.unitHeight = heli ? 0.55 : 0.45;
+  g.userData.kind = k;
   const accent = teamColor >>> 0;
-  const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.1, 0.04, 0.28),
-    matStd(0x3a3c38, { metalness: 0.45, roughness: 0.4 }),
-  );
-  body.position.y = 0.02;
-  g.add(body);
-  g.userData.tintParts.push(body);
-  const wing = new THREE.Mesh(
-    new THREE.BoxGeometry(0.36, 0.012, 0.08),
-    matStd(accent, { metalness: 0.35, roughness: 0.5 }),
-  );
-  wing.position.set(0, 0.025, -0.02);
-  g.add(wing);
-  g.userData.tintParts.push(wing);
-  const tail = new THREE.Mesh(
-    new THREE.BoxGeometry(0.04, 0.06, 0.06),
-    matStd(0x2a2c28, { metalness: 0.4, roughness: 0.45 }),
-  );
-  tail.position.set(0, 0.05, -0.12);
-  g.add(tail);
+  const metal = 0x3a3c38;
+  const dark = 0x2a2c28;
+
+  if (heli) {
+    // Fuselage
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 0.07, 0.34),
+      matStd(metal, { metalness: 0.4, roughness: 0.45 }),
+    );
+    body.position.y = 0.04;
+    g.add(body);
+    g.userData.tintParts.push(body);
+    const nose = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.05, 0.1),
+      matStd(accent, { metalness: 0.35, roughness: 0.5 }),
+    );
+    nose.position.set(0, 0.04, 0.2);
+    g.add(nose);
+    g.userData.tintParts.push(nose);
+    // Main rotor
+    const hub = new THREE.Group();
+    hub.name = "airRotor";
+    hub.position.set(0, 0.12, 0);
+    g.add(hub);
+    const blade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.55, 0.008, 0.04),
+      matStd(dark, { metalness: 0.5, roughness: 0.4 }),
+    );
+    hub.add(blade);
+    const blade2 = blade.clone();
+    blade2.rotation.y = Math.PI / 2;
+    hub.add(blade2);
+    // Tail
+    const boom = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.03, 0.22),
+      matStd(metal, { metalness: 0.4, roughness: 0.45 }),
+    );
+    boom.position.set(0, 0.05, -0.24);
+    g.add(boom);
+    const tailRotor = new THREE.Mesh(
+      new THREE.BoxGeometry(0.02, 0.12, 0.03),
+      matStd(dark, { metalness: 0.45, roughness: 0.4 }),
+    );
+    tailRotor.name = "airTailRotor";
+    tailRotor.position.set(0.04, 0.08, -0.34);
+    g.add(tailRotor);
+    if (k.includes("chinook")) {
+      const rearRotor = hub.clone();
+      rearRotor.position.set(0, 0.12, -0.18);
+      g.add(rearRotor);
+      body.scale.set(1.15, 1.1, 1.25);
+    }
+  } else {
+    // Jet fighter silhouette
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.09, 0.045, 0.38),
+      matStd(metal, { metalness: 0.5, roughness: 0.4 }),
+    );
+    body.position.y = 0.03;
+    g.add(body);
+    g.userData.tintParts.push(body);
+    const wing = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.012, 0.12),
+      matStd(accent, { metalness: 0.4, roughness: 0.45 }),
+    );
+    wing.position.set(0, 0.03, -0.02);
+    g.add(wing);
+    g.userData.tintParts.push(wing);
+    const tail = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.09, 0.08),
+      matStd(dark, { metalness: 0.45, roughness: 0.4 }),
+    );
+    tail.position.set(0, 0.07, -0.16);
+    g.add(tail);
+    const canopy = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.03, 0.08),
+      matStd(0x1a2830, { metalness: 0.2, roughness: 0.25 }),
+    );
+    canopy.position.set(0, 0.06, 0.08);
+    g.add(canopy);
+  }
+
+  const muzzle = new THREE.Object3D();
+  muzzle.name = "muzzle";
+  muzzle.position.set(0, 0.02, 0.2);
+  g.add(muzzle);
   return g;
 }
 
@@ -5131,7 +5272,7 @@ function createUnitMesh(kind, teamColor) {
         : "usa";
 
   // Air — temporary simple elevated mesh
-  if (isAirUnitKind(k)) return createAirMesh(teamColor);
+  if (isAirUnitKind(k)) return createAirMesh(teamColor, k);
 
   // Artillery / rocket vehicles
   if (
@@ -5361,7 +5502,10 @@ function upsertMesh(entity) {
       kind.includes("rpg");
     const needsWalkRig =
       !mesh.userData.isUnitRig ||
-      (isAir && !mesh.userData.isAir) ||
+      (isAir &&
+        (!mesh.userData.isAir ||
+          mesh.userData.airAltitude == null ||
+          !mesh.getObjectByName("muzzle"))) ||
       (isMlrs &&
         (!mesh.userData.isMlrs || (mesh.userData.mlrsRigVersion || 0) < 1)) ||
       (isTank &&
@@ -5430,7 +5574,7 @@ function upsertMesh(entity) {
   } else if (mesh.userData.isUnitRig) {
     applyUnitMotion(mesh, entity);
     if (mesh.userData.isAir || isAirUnitKind(entity.kind)) {
-      mesh.position.y = 0.55;
+      mesh.position.y = mesh.userData.airAltitude || 0.85;
     }
     if (mesh.userData.lastTint !== colors[0]) {
       tintUnitMesh(mesh, colors);
@@ -5474,23 +5618,21 @@ function upsertMesh(entity) {
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;
   if (label) {
-    const key = `${entity.owner_name}|${colors.join(",")}`;
+    const key = `${entity.owner_name}|${colors.join(",")}|v2`;
     if (mesh.userData.labelKey !== key) {
       mesh.remove(label);
       label.material.map?.dispose();
       label.material.dispose();
       const sprite = makeNameSprite(entity.owner_name || "Player", colors);
-      if (!entity.building) {
-        const tank =
-          String(entity.kind || "").includes("tank") ||
-          String(entity.kind || "").includes("mlrs");
-        sprite.scale.set(tank ? 0.32 : 0.28, tank ? 0.085 : 0.07, 1);
-      }
+      applyOwnerLabelScale(sprite, entity);
       sprite.position.set(0, labelHeightFor(entity), 0);
       sprite.name = "ownerLabel";
       mesh.add(sprite);
       mesh.userData.ownerLabel = sprite;
       mesh.userData.labelKey = key;
+    } else {
+      applyOwnerLabelScale(label, entity);
+      label.position.y = labelHeightFor(entity);
     }
   }
 }
@@ -5562,13 +5704,19 @@ function applyUnitMotion(mesh, entity) {
   }
   const now = performance.now();
   const kind = String(entity.kind || mesh.userData.kind || "");
-  mesh.userData.moveSpeed = kind.includes("tank")
-    ? 0.58
-    : kind.includes("mlrs")
-      ? 0.42
-      : kind.includes("mortar") || kind.includes("missile")
-        ? 0.14
-        : 0.2;
+  mesh.userData.moveSpeed = isAirUnitKind(kind)
+    ? kind.includes("raptor") || kind.includes("mig")
+      ? 1.15
+      : kind.includes("chinook")
+        ? 0.7
+        : 0.95
+    : kind.includes("tank")
+      ? 0.58
+      : kind.includes("mlrs")
+        ? 0.42
+        : kind.includes("mortar") || kind.includes("missile")
+          ? 0.14
+          : 0.2;
   const prevX = mesh.userData.lastX;
   const prevZ = mesh.userData.lastZ;
   const prevAt = mesh.userData.snapAt;
@@ -5807,6 +5955,27 @@ function updateInfantryDrive(mesh, dt) {
   } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 220) {
     mesh.userData.moving = false;
   }
+}
+
+function updateAirDrive(mesh, dt) {
+  if (!mesh?.userData?.isAir || mesh.userData.knock) return;
+  if (mesh.userData.destX == null || mesh.userData.destZ == null) return;
+  const alt = mesh.userData.airAltitude || 0.85;
+  slideToward(mesh, dt);
+  mesh.position.y = alt;
+  const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
+  if (speed > 0.05) {
+    mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+    mesh.userData.moving = true;
+  } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 280) {
+    mesh.userData.moving = false;
+  }
+  // Spin rotors
+  const spin = (mesh.userData.moving ? 18 : 10) * dt;
+  mesh.traverse((obj) => {
+    if (obj.name === "airRotor") obj.rotation.y += spin;
+    if (obj.name === "airTailRotor") obj.rotation.x += spin * 1.6;
+  });
 }
 
 function updateInfantryWalk(mesh, dt, now) {
@@ -7315,6 +7484,7 @@ function animate() {
       else smoothUnitFacing(mesh, dt);
       updateTankDrive(mesh, dt);
       updateInfantryDrive(mesh, dt);
+      updateAirDrive(mesh, dt);
       updateInfantryWalk(mesh, dt, now);
     }
   }
