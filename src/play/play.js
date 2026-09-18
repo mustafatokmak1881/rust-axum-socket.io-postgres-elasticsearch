@@ -16,6 +16,7 @@ const state = {
   selectedUnits: [],
   selectedBuilding: null,
   buildable: [],
+  trainable: [],
   faction: "usa",
   ready: false,
   reconnectAttempt: 0,
@@ -203,7 +204,7 @@ function joinMatchId(raw) {
     return;
   }
   $("#lobby-id").value = lobby_id;
-  send({ t: "join_lobby", lobby_id });
+  send({ t: "join_lobby", lobby_id, faction: state.faction || "usa" });
   toast("Joining match…");
 }
 
@@ -250,6 +251,7 @@ function renderScoreboard() {
         r.you ? "you" : "",
         ally ? "ally" : "",
         r.alive ? "alive" : "dead",
+        "jumpable",
       ]
         .filter(Boolean)
         .join(" ");
@@ -261,7 +263,9 @@ function renderScoreboard() {
       const status = r.alive
         ? `<span class="status on">ACTIVE</span>`
         : `<span class="status off">DEAD</span>`;
-      return `<tr class="${cls}">
+      const hqX = r.hq_x != null ? Number(r.hq_x) : "";
+      const hqY = r.hq_y != null ? Number(r.hq_y) : "";
+      return `<tr class="${cls}" data-owner="${escapeHtml(r.id || "")}" data-hq-x="${hqX}" data-hq-y="${hqY}" title="Command Center'a git">
         <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
         <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag} · ${teamLabel}</small></div></td>
         <td>${status}</td>
@@ -275,6 +279,43 @@ function renderScoreboard() {
       </tr>`;
     })
     .join("");
+}
+
+function centerCameraOnOwner(ownerId, hqX, hqY) {
+  if (!controls || !camera || !state.match) return;
+  let x = Number(hqX);
+  let y = Number(hqY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    let hq = null;
+    for (const entity of state.entities.values()) {
+      if (entity.owner === ownerId && entity.kind === "hq") {
+        hq = entity;
+        break;
+      }
+    }
+    if (!hq) {
+      toast("Command Center görünmüyor / yok");
+      return;
+    }
+    x = hq.x;
+    y = hq.y;
+  }
+  panCameraTo(x, y);
+  const row = (state.scoreboard || []).find((r) => r.id === ownerId);
+  const label = row
+    ? `${String(row.faction || "").toUpperCase()} · ${row.name || "HQ"}`
+    : "Command Center";
+  toast(label);
+}
+
+function centerCameraOnHq() {
+  if (!state.match) return;
+  const self = (state.scoreboard || []).find((r) => r.you);
+  if (self) {
+    centerCameraOnOwner(self.id, self.hq_x, self.hq_y);
+    return;
+  }
+  centerCameraOnOwner(state.match.you, null, null);
 }
 
 function setScoreboardOpen(open) {
@@ -305,19 +346,24 @@ function clearWorldMeshes() {
 function enterMatch(snapshot) {
   state.match = snapshot;
   state.scoreboard = snapshot.scoreboard || [];
+  if (snapshot.you_faction) {
+    state.faction = snapshot.you_faction;
+    syncFactionButtons();
+  }
   state.entities.clear();
   clearWorldMeshes();
   aoiRadius = Number(snapshot.aoi_radius) || 28;
-  globalVision = snapshot.global_vision !== false;
+  globalVision = snapshot.global_vision === true;
   for (const entity of snapshot.entities || []) {
     state.entities.set(entity.id, entity);
   }
   $("#lobby-screen").hidden = true;
   $("#match-screen").hidden = false;
+  const fac = String(snapshot.you_faction || state.faction || "usa").toUpperCase();
   if (snapshot.ffa) {
-    toast("FFA — everyone is hostile");
+    toast(`${fac} · FFA — everyone is hostile`);
   } else {
-    toast(`Allied · you are Team ${Number(snapshot.team) + 1} (shared vision)`);
+    toast(`${fac} · Team ${Number(snapshot.team) + 1} (shared vision)`);
   }
   // Fullscreen only from click handlers (create/join/pointer) — browsers block gesture-less FS.
   void setupMatchScene(snapshot);
@@ -385,22 +431,6 @@ function panCameraTo(lookX, lookZ, quiet) {
   send({ t: "set_focus", x: lookX, y: lookZ });
 }
 
-function centerCameraOnHq() {
-  if (!controls || !camera || !state.match) return;
-  let hq = null;
-  for (const entity of state.entities.values()) {
-    if (entity.owner === state.match.you && entity.kind === "hq") {
-      hq = entity;
-      break;
-    }
-  }
-  if (!hq) {
-    toast("Command Center not found");
-    return;
-  }
-  panCameraTo(hq.x, hq.y);
-}
-
 function updateResources(res) {
   if (!res) return;
   $("#res-supplies").textContent = res.supplies;
@@ -446,16 +476,52 @@ function renderBuildList(items) {
     .join("");
 }
 
+const BUILDING_LABELS = {
+  barracks: "Barracks",
+  war_factory: "War Factory",
+  arms_dealer: "Arms Dealer",
+  airfield: "Airfield",
+  palace: "Palace",
+  supply: "Supply Center",
+  supply_stash: "Supply Stash",
+};
+
 function renderUnitList(items) {
-  $("#unit-list").innerHTML = items
-    .map(
-      (item) => `
+  state.trainable = items || [];
+  refreshTrainablePanel();
+}
+
+function refreshTrainablePanel() {
+  const items = state.trainable || [];
+  const selected = state.selectedBuilding
+    ? state.entities.get(state.selectedBuilding)
+    : null;
+  const fromKind = selected?.building ? String(selected.kind || "") : "";
+  const filtered = fromKind
+    ? items.filter((item) => item.from_building === fromKind)
+    : items;
+  const hint = fromKind
+    ? BUILDING_LABELS[fromKind] || fromKind
+    : "select a production building";
+  $("#unit-list").innerHTML =
+    `<div class="unit-hint" style="opacity:.7;font-size:12px;margin:0 0 6px">${escapeHtml(
+      String(state.faction || "usa").toUpperCase(),
+    )} · ${escapeHtml(hint)}</div>` +
+    (filtered.length
+      ? filtered
+          .map(
+            (item) => `
       <button type="button" class="unit-item" data-unit="${escapeHtml(item.unit)}" data-from="${escapeHtml(item.from_building)}">
         <strong>${escapeHtml(item.name)}</strong>
-        <small>from ${escapeHtml(item.from_building)} · ${item.cost_supplies}s/${item.cost_fuel}f · ${Math.round((item.train_ms || 0) / 1000)}s</small>
+        <small>${item.cost_supplies}s/${item.cost_fuel}f/${item.cost_munitions || 0}m · ${Math.round((item.train_ms || 0) / 1000)}s</small>
       </button>`,
-    )
-    .join("");
+          )
+          .join("")
+      : `<small style="opacity:.65">${
+          fromKind
+            ? "No units from this building"
+            : "Click barracks / factory / arms dealer to train"
+        }</small>`);
 }
 
 function queueDelta(msg) {
@@ -494,10 +560,11 @@ function applyDelta(msg) {
   if (typeof msg.global_vision === "boolean") {
     const wasOpen = globalVision;
     globalVision = msg.global_vision;
-    if (wasOpen && !globalVision) {
-      // Fog just closed — restamp with real vision discs.
+    if (wasOpen !== globalVision) {
       lastVisionAt = 0;
       refreshLiveVision();
+      if (globalVision) toast("Dev map: full vision ON (M)");
+      else toast("Dev map: fog restored (M)");
     }
   }
   if (msg.scoreboard) {
@@ -550,7 +617,10 @@ function applyDelta(msg) {
     const before = state.selectedUnits.length;
     state.selectedUnits = state.selectedUnits.filter((id) => !dead.has(id));
     if (state.selectedUnits.length !== before) syncSelectionMarkers();
-    if (dead.has(state.selectedBuilding)) state.selectedBuilding = null;
+    if (dead.has(state.selectedBuilding)) {
+      state.selectedBuilding = null;
+      refreshTrainablePanel();
+    }
   }
   for (const entity of msg.entities || []) {
     const prev = state.entities.get(entity.id);
@@ -1493,7 +1563,7 @@ let fogVisionData = null;   // Uint8Array size*size — 0/1 currently visible
 let fogDataTexture = null;
 let aoiRadius = 20;
 /** Opening window: full map visible until server closes fog. */
-let globalVision = true;
+let globalVision = false;
 let lastFocusSentAt = 0;
 let lastFocusSent = { x: 0, z: 0 };
 const edgeMouse = { x: 0, y: 0, w: 1, h: 1, inside: false, overUi: false };
@@ -3695,6 +3765,7 @@ function setSelectedUnits(ids, toastMsg) {
   }
   state.selectedUnits = ids;
   state.selectedBuilding = null;
+  refreshTrainablePanel();
   syncSelectionMarkers();
   if (toastMsg) toast(toastMsg);
 }
@@ -3778,11 +3849,13 @@ function finishBoxSelect(event) {
       state.selectedBuilding = best.id;
       clearUnitSelection();
       syncSelectionMarkers();
+      refreshTrainablePanel();
       toast(`Selected ${best.kind}`);
     } else if (!boxSelect.additive) {
       clearUnitSelection();
       state.selectedBuilding = null;
       syncSelectionMarkers();
+      refreshTrainablePanel();
       send({ t: "set_focus", x: point.x, y: point.z });
     }
     return;
@@ -4247,19 +4320,30 @@ function matStd(color, opts = {}) {
   });
 }
 
-function createRangerMesh(teamColor) {
+function createRangerMesh(teamColor, opts = {}) {
+  const style = opts.style || "usa";
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isInfantry = true;
-  g.userData.rigVersion = 4;
+  g.userData.rigVersion = 5;
   g.userData.tintParts = [];
   g.userData.walkPhase = Math.random() * Math.PI * 2;
   g.userData.moving = false;
+  g.userData.factionStyle = style;
   g.rotation.order = "YXZ";
 
-  const camo = 0x4f6340;
-  const camoDark = 0x3a4a30;
-  const vest = 0x2c3326;
+  let camo = 0x4f6340;
+  let camoDark = 0x3a4a30;
+  let vest = 0x2c3326;
+  if (style === "china") {
+    camo = 0x6a4030;
+    camoDark = 0x4a2818;
+    vest = 0x3a2018;
+  } else if (style === "gla") {
+    camo = 0x8a7a50;
+    camoDark = 0x5a4a30;
+    vest = 0x4a3a28;
+  }
   const boot = 0x1a1612;
   const leather = 0x3b2a1c;
   const skin = 0xc9a882;
@@ -4554,19 +4638,31 @@ function createMortarMesh(teamColor) {
 
 function createTankMesh(teamColor, opts = {}) {
   const heavy = !!opts.heavy;
+  const style = opts.style || "usa";
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.tintParts = [];
-  g.userData.tankRigVersion = 6;
+  g.userData.tankRigVersion = 7;
   g.userData.isAbrams = heavy;
+  g.userData.factionStyle = style;
 
-  const hull = heavy ? 0x3f4634 : 0x4a5538;
-  const hullDark = heavy ? 0x2c3224 : 0x353c2c;
-  const hullLight = heavy ? 0x525a42 : 0x5a6648;
+  // USA olive · China olive-red · GLA desert scrap
+  let hull = heavy ? 0x3f4634 : 0x4a5538;
+  let hullDark = heavy ? 0x2c3224 : 0x353c2c;
+  let hullLight = heavy ? 0x525a42 : 0x5a6648;
+  if (style === "china") {
+    hull = heavy ? 0x4a3a28 : 0x5a4830;
+    hullDark = 0x322818;
+    hullLight = 0x6a5840;
+  } else if (style === "gla") {
+    hull = heavy ? 0x6a5a38 : 0x7a6a48;
+    hullDark = 0x4a3e28;
+    hullLight = 0x8a7a58;
+  }
   const track = 0x1a1814;
   const rubber = 0x11100e;
   const metal = 0x2a2a26;
-  const rust = 0x3a3228;
+  const rust = style === "gla" ? 0x5a4030 : 0x3a3228;
   const accent = teamColor >>> 0;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
@@ -4961,9 +5057,10 @@ function isHeavyTankKind(kind) {
   );
 }
 
-function createLightVehicleMesh(teamColor) {
-  const m = createTankMesh(teamColor, { heavy: false });
-  m.scale.setScalar(0.72);
+function createLightVehicleMesh(teamColor, opts = {}) {
+  const style = opts.style || "usa";
+  const m = createTankMesh(teamColor, { heavy: false, style });
+  m.scale.setScalar(style === "gla" ? 0.68 : 0.72);
   m.userData.isLightVehicle = true;
   return m;
 }
@@ -5000,6 +5097,38 @@ function createAirMesh(teamColor) {
 
 function createUnitMesh(kind, teamColor) {
   const k = String(kind || "");
+  // Infer Generals faction silhouette from unit id (rosters never share ids).
+  const style =
+    k.includes("battlemaster") ||
+    k.includes("overlord") ||
+    k.includes("gatling") ||
+    k.includes("inferno") ||
+    k.includes("troop_crawler") ||
+    k.includes("listening_outpost") ||
+    k.includes("ecm") ||
+    k.includes("red_guard") ||
+    k.includes("tank_hunter") ||
+    k.includes("hacker") ||
+    k.includes("lotus") ||
+    k.includes("mig") ||
+    k.includes("helix")
+      ? "china"
+      : k.includes("scorpion") ||
+          k.includes("marauder") ||
+          k.includes("technical") ||
+          k.includes("buggy") ||
+          k.includes("quad") ||
+          k.includes("bomb_truck") ||
+          k.includes("scud") ||
+          k.includes("radar_van") ||
+          k.includes("battle_bus") ||
+          k.includes("rebel") ||
+          k.includes("rpg") ||
+          k.includes("terrorist") ||
+          k.includes("hijacker") ||
+          k.includes("jarmen")
+        ? "gla"
+        : "usa";
 
   // Air — temporary simple elevated mesh
   if (isAirUnitKind(k)) return createAirMesh(teamColor);
@@ -5021,7 +5150,7 @@ function createUnitMesh(kind, teamColor) {
     k.includes("marauder") ||
     k.includes("overlord")
   ) {
-    return createTankMesh(teamColor, { heavy: true });
+    return createTankMesh(teamColor, { heavy: true, style });
   }
   if (
     k.includes("battlemaster") ||
@@ -5031,7 +5160,7 @@ function createUnitMesh(kind, teamColor) {
     k.includes("microwave") ||
     (k.includes("tank") && !k.includes("hunter"))
   ) {
-    return createTankMesh(teamColor);
+    return createTankMesh(teamColor, { style });
   }
 
   // Light vehicles
@@ -5040,9 +5169,12 @@ function createUnitMesh(kind, teamColor) {
     k.includes("technical") ||
     k.includes("rocket_buggy") ||
     k.includes("radar_van") ||
-    k.includes("buggy")
+    k.includes("buggy") ||
+    k.includes("troop_crawler") ||
+    k.includes("battle_bus") ||
+    k.includes("bomb_truck")
   ) {
-    return createLightVehicleMesh(teamColor);
+    return createLightVehicleMesh(teamColor, { style });
   }
 
   // Rocket / AT infantry → mortar pose
@@ -5069,13 +5201,13 @@ function createUnitMesh(kind, teamColor) {
     k.includes("jarmen") ||
     k.includes("burton")
   ) {
-    return createRangerMesh(teamColor);
+    return createRangerMesh(teamColor, { style });
   }
 
   // Fallback
   if (k.includes("missile") || k.includes("mortar")) return createMortarMesh(teamColor);
-  if (k.includes("tank") || k.includes("cannon")) return createTankMesh(teamColor);
-  return createRangerMesh(teamColor);
+  if (k.includes("tank") || k.includes("cannon")) return createTankMesh(teamColor, { style });
+  return createRangerMesh(teamColor, { style });
 }
 
 
@@ -5235,7 +5367,7 @@ function upsertMesh(entity) {
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
-          (mesh.userData.tankRigVersion || 0) < 6 ||
+          (mesh.userData.tankRigVersion || 0) < 7 ||
           (isHeavy && !mesh.userData.isAbrams) ||
           (!isHeavy && mesh.userData.isAbrams))) ||
       (isMortar && !mesh.userData.isMortar) ||
@@ -5243,7 +5375,7 @@ function upsertMesh(entity) {
         !isMlrs &&
         !isMortar &&
         !isAir &&
-        (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
+        (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 5));
     if (needsWalkRig) {
       Sfx.stopEngine(entity.id);
       scene.remove(mesh);
@@ -7207,14 +7339,14 @@ $("#faction-row").addEventListener("click", (event) => {
 
 $("#btn-create").addEventListener("click", () => {
   void enterGameFullscreen();
-  send({ t: "set_faction", faction: state.faction });
   send({
     t: "create_lobby",
     max_players: Number($("#max-players").value) || 50,
     map_size: Number($("#map-size").value) || 128,
     ffa: $("#ffa").checked,
+    faction: state.faction || "usa",
   });
-  toast("Starting match…");
+  toast(`Starting ${String(state.faction || "usa").toUpperCase()} match…`);
 });
 
 $("#btn-join").addEventListener("click", () => {
@@ -7297,6 +7429,14 @@ window.addEventListener("keydown", (event) => {
     if (!state.match) return;
     event.preventDefault();
     centerCameraOnHq();
+    return;
+  }
+
+  // M — dev: personal full-map vision toggle (server-side; others stay fogged).
+  if (event.key === "m" || event.key === "M") {
+    if (!state.match || $("#match-screen")?.hidden) return;
+    event.preventDefault();
+    send({ t: "toggle_debug_vision" });
   }
 });
 
@@ -7328,6 +7468,16 @@ $("#unit-list").addEventListener("click", (event) => {
     building_id: state.selectedBuilding,
     unit: btn.dataset.unit,
   });
+});
+
+$("#scoreboard-body")?.addEventListener("pointerdown", (event) => {
+  const row = event.target.closest("tr[data-owner]");
+  if (!row) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const owner = row.dataset.owner;
+  if (!owner) return;
+  centerCameraOnOwner(owner, row.dataset.hqX, row.dataset.hqY);
 });
 
 $("#store-items").addEventListener("click", async (event) => {

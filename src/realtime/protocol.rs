@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+fn default_faction() -> String {
+    "usa".into()
+}
+
+pub fn normalize_faction(faction: &str) -> String {
+    match faction.to_ascii_lowercase().as_str() {
+        "china" => "china".into(),
+        "gla" => "gla".into(),
+        _ => "usa".into(),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMsg {
@@ -10,9 +22,14 @@ pub enum ClientMsg {
         map_size: u16,
         #[serde(default)]
         ffa: bool,
+        /// `"usa"` | `"china"` | `"gla"` — applied when the match starts.
+        #[serde(default = "default_faction")]
+        faction: String,
     },
     JoinLobby {
         lobby_id: Uuid,
+        #[serde(default = "default_faction")]
+        faction: String,
     },
     LeaveLobby,
     SetFaction {
@@ -48,6 +65,8 @@ pub enum ClientMsg {
         x: f32,
         y: f32,
     },
+    /// Dev only: toggle personal full-map vision (does not affect other players).
+    ToggleDebugVision,
     Ping {
         n: u64,
     },
@@ -86,7 +105,7 @@ pub enum ServerMsg {
         /// Full commander roster — sent about once per second for Tab scoreboard.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scoreboard: Option<Vec<ScoreboardRow>>,
-        /// First 5 minutes: whole map is visible to everyone.
+        /// Dev: this client has personal full-map vision (M key). Never match-wide.
         #[serde(default)]
         global_vision: bool,
     },
@@ -182,6 +201,11 @@ pub struct ScoreboardRow {
     pub munitions: i32,
     pub power: i32,
     pub power_used: i32,
+    /// Living Command Center — Tab click jumps the camera here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hq_x: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hq_y: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,10 +254,13 @@ pub struct MatchSnapshot {
     pub tick: u64,
     pub you: Uuid,
     pub you_name: String,
+    /// `"usa"` | `"china"` | `"gla"` — drives this player's build/train roster.
+    #[serde(default = "default_faction")]
+    pub you_faction: String,
     pub team: u8,
     pub ffa: bool,
     pub aoi_radius: f32,
-    /// Opening window — everyone sees the whole map.
+    /// Dev: personal full-map vision for this viewer (M key). Default fog.
     #[serde(default)]
     pub global_vision: bool,
     pub focus: [f32; 2],

@@ -19,6 +19,13 @@ pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 50;
 
+/// Total living+queued units at the home HQ.
+pub const HOME_UNIT_BUDGET: usize = 50;
+/// Extra total units unlocked per captured colony HQ.
+pub const COLONY_UNIT_BUDGET: usize = 25;
+/// Wipe / claim radius around a fallen HQ (city footprint).
+pub const CITY_CLAIM_RADIUS: f32 = 14.0;
+
 #[derive(Clone, Debug)]
 pub struct PlayerState {
     pub user_id: Uuid,
@@ -38,6 +45,10 @@ pub struct PlayerState {
     pub explored: aoi::ExploredMap,
     /// Computer commander — `None` for human players.
     pub bot: Option<BotMind>,
+    /// Dev cheat: this commander sees the whole map (M key). Others still fogged.
+    pub debug_omniscient: bool,
+    /// Captured colony count (extra HQs beyond the first). Drives army budget.
+    pub colonies: u32,
 }
 
 impl PlayerState {
@@ -161,6 +172,8 @@ pub struct Entity {
     pub aim_yaw: f32,
     /// Roof MG cyclic; independent of the main gun reload.
     pub mg_cooldown_ms: u32,
+    /// Last commander who damaged this entity (for HQ capture attribution).
+    pub last_hit_by: Option<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -639,8 +652,6 @@ pub struct MatchSim {
     pub max_duration: Duration,
     /// Pending stream jobs (build completes etc.) mirrored conceptually to Redis Streams.
     pub stream_jobs: VecDeque<StreamJob>,
-    /// Becomes false once the opening global-vision window ends (triggers one AOI resync).
-    global_vision_open: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -672,7 +683,6 @@ impl MatchSim {
             created_at: Instant::now(),
             max_duration: Duration::from_secs(30 * 60),
             stream_jobs: VecDeque::new(),
-            global_vision_open: true,
         };
 
         for (user_id, name, faction, team, flag) in roster.into_iter() {
@@ -773,6 +783,8 @@ impl MatchSim {
                 aoi_known: HashSet::new(),
                 explored: aoi::ExploredMap::new(self.map_size),
                 bot,
+                debug_omniscient: false,
+                colonies: 0,
             },
         );
 
@@ -807,6 +819,7 @@ impl MatchSim {
             prone_until_tick: 0,
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
+            last_hit_by: None,
         });
         self.spawn_starting_force(user_id, team, x, y);
         self.reveal_vision_for(user_id);
@@ -990,6 +1003,7 @@ impl MatchSim {
             prone_until_tick: 0,
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
+            last_hit_by: None,
         });
     }
 
@@ -1056,10 +1070,11 @@ impl MatchSim {
             tick: self.tick,
             you: user_id,
             you_name: player.label(),
+            you_faction: player.faction.clone(),
             team: player.team,
             ffa: self.ffa,
             aoi_radius: aoi::AOI_RADIUS,
-            global_vision: self.global_vision_active(),
+            global_vision: self.player_has_global_vision(user_id),
             focus,
             explored: player.explored.to_bytes(),
             resources: player.resources.view(),
@@ -1079,9 +1094,13 @@ impl MatchSim {
                 let mut infantry = 0u32;
                 let mut tanks = 0u32;
                 let mut buildings = 0u32;
+                let mut hq_pos: Option<(f32, f32)> = None;
                 for e in self.entities.values() {
                     if e.owner != p.user_id || e.hp <= 0.0 {
                         continue;
+                    }
+                    if e.kind == "hq" && hq_pos.is_none() {
+                        hq_pos = Some((e.x, e.y));
                     }
                     if e.building {
                         buildings += 1;
@@ -1110,6 +1129,8 @@ impl MatchSim {
                     munitions: p.resources.munitions,
                     power: p.resources.power,
                     power_used: p.resources.power_used,
+                    hq_x: hq_pos.map(|(x, _)| x),
+                    hq_y: hq_pos.map(|(_, y)| y),
                 }
             })
             .collect();
@@ -1126,7 +1147,7 @@ impl MatchSim {
     /// Stamp current unit/building vision into the player's explored map.
     /// Allied matches share teammate vision discs.
     pub fn reveal_vision_for(&mut self, user_id: Uuid) -> Vec<u16> {
-        if self.global_vision_active() {
+        if self.player_has_global_vision(user_id) {
             if let Some(player) = self.players.get_mut(&user_id) {
                 player.explored.reveal_all();
             }
@@ -1155,11 +1176,26 @@ impl MatchSim {
         newly
     }
 
-    /// First five minutes of the match: full map intel for every commander.
-    pub fn global_vision_active(&self) -> bool {
-        // DEV: keep the full map open. Re-enable FoW later via GLOBAL_VISION_SECS.
-        true
-        // self.created_at.elapsed() < Duration::from_secs(aoi::GLOBAL_VISION_SECS)
+    /// Dev only: this commander pressed M (personal full-map; others stay fogged).
+    pub fn player_has_global_vision(&self, user_id: Uuid) -> bool {
+        self.players
+            .get(&user_id)
+            .is_some_and(|p| p.debug_omniscient)
+    }
+
+    pub fn toggle_debug_vision(&mut self, user_id: Uuid) -> bool {
+        let Some(player) = self.players.get_mut(&user_id) else {
+            return false;
+        };
+        player.debug_omniscient = !player.debug_omniscient;
+        let on = player.debug_omniscient;
+        if on {
+            player.explored.reveal_all();
+            player.aoi_known.clear(); // force full resync of visibles
+        } else {
+            player.aoi_known.clear();
+        }
+        on
     }
 
     pub fn place_building(
@@ -1307,6 +1343,7 @@ impl MatchSim {
             prone_until_tick: 0,
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
+            last_hit_by: None,
         });
 
         // Redis-stream style delayed job marker.
@@ -1357,6 +1394,11 @@ impl MatchSim {
         if owned >= cap {
             return Err("Army cap reached");
         }
+        let budget = self.unit_budget_for(user_id);
+        let total = self.count_all_units_with_queue(user_id);
+        if total >= budget {
+            return Err("Colony unit budget full");
+        }
 
         let player = self.players.get_mut(&user_id).unwrap();
         if player.resources.supplies < def.cost_supplies
@@ -1392,6 +1434,34 @@ impl MatchSim {
             .map(|e| e.train_queue.iter().filter(|j| j.unit == unit).count())
             .sum::<usize>();
         living + queued
+    }
+
+    fn count_all_units_with_queue(&self, owner: Uuid) -> usize {
+        let living = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.unit && e.hp > 0.0)
+            .count();
+        let queued = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.building && e.hp > 0.0)
+            .map(|e| e.train_queue.len())
+            .sum::<usize>();
+        living + queued
+    }
+
+    /// Home 50 + 25 per extra HQ (colony).
+    pub fn unit_budget_for(&self, owner: Uuid) -> usize {
+        let hqs = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.kind == "hq" && e.hp > 0.0)
+            .count();
+        if hqs == 0 {
+            return 0;
+        }
+        HOME_UNIT_BUDGET + COLONY_UNIT_BUDGET.saturating_mul(hqs.saturating_sub(1))
     }
 
     pub fn move_units(&mut self, user_id: Uuid, ids: &[Uuid], x: f32, y: f32) {
@@ -1575,12 +1645,6 @@ impl MatchSim {
             return;
         }
         self.tick += 1;
-        if self.global_vision_open && !self.global_vision_active() {
-            self.global_vision_open = false;
-            for player in self.players.values_mut() {
-                player.aoi_known.clear();
-            }
-        }
         let dt_ms = 1000 / TICK_HZ;
         self.grid
             .rebuild(self.entities.values().map(|e| (e.id, e.x, e.y)));
@@ -1656,6 +1720,7 @@ impl MatchSim {
                                 prone_until_tick: 0,
                                 aim_yaw: 0.0,
                                 mg_cooldown_ms: 0,
+                                last_hit_by: None,
                             };
                             self.put_entity(spawn);
                         }
@@ -1999,6 +2064,7 @@ impl MatchSim {
                         let kind = entity.kind.clone();
                         let from_id = entity.id;
                         let team = entity.team;
+                        let attacker_owner = entity.owner;
                         let hit_p = shot_hit_chance(&kind, target, dist, entity.range, cover.exposure);
                         let mut rng = rand::thread_rng();
                         let hit = rng.gen_range(0.0..1.0) < hit_p;
@@ -2020,6 +2086,7 @@ impl MatchSim {
                         if let Some(t) = self.entities.get_mut(&tid) {
                             if hit {
                                 t.hp -= dmg;
+                                t.last_hit_by = Some(attacker_owner);
                                 t.dirty = true;
                             }
                             if t.unit && is_soft_unit(&t.kind) {
@@ -2049,11 +2116,11 @@ impl MatchSim {
                             hit,
                         });
                         if hit && kind.contains("mlrs") {
-                            self.apply_mlrs_blast(team, fx, fy, ix, iy, tid);
+                            self.apply_mlrs_blast(team, attacker_owner, fx, fy, ix, iy, tid);
                         } else if hit && kind.contains("tank") && !kind.contains("mg") {
-                            self.apply_shell_blast(team, fx, fy, tx, ty, tid);
+                            self.apply_shell_blast(team, attacker_owner, fx, fy, tx, ty, tid);
                         } else if hit && kind.contains("mortar") {
-                            self.apply_mortar_blast(team, fx, fy, tx, ty, tid);
+                            self.apply_mortar_blast(team, attacker_owner, fx, fy, tx, ty, tid);
                         }
                     }
                 } else {
@@ -2119,9 +2186,7 @@ impl MatchSim {
                 self.refund_building_economy(&entity);
                 self.removed.push(id);
                 if entity.kind == "hq" {
-                    if let Some(player) = self.players.get_mut(&entity.owner) {
-                        player.alive = false;
-                    }
+                    self.on_hq_destroyed(entity);
                 }
             }
         }
@@ -2130,10 +2195,162 @@ impl MatchSim {
         self.check_victory();
     }
 
+    /// HQ falls → wipe local garrison buildings, grant site to the killer as a colony HQ.
+    fn on_hq_destroyed(&mut self, hq: Entity) {
+        let hx = hq.x;
+        let hy = hq.y;
+        let former = hq.owner;
+        let claim_r2 = CITY_CLAIM_RADIUS * CITY_CLAIM_RADIUS;
+
+        let wipe: Vec<Uuid> = self
+            .entities
+            .values()
+            .filter(|e| {
+                e.owner == former
+                    && e.building
+                    && e.hp > 0.0
+                    && e.kind != "hq"
+                    && {
+                        let dx = e.x - hx;
+                        let dy = e.y - hy;
+                        dx * dx + dy * dy <= claim_r2
+                    }
+            })
+            .map(|e| e.id)
+            .collect();
+        for wid in wipe {
+            if let Some(e) = self.take_entity(wid) {
+                self.refund_building_economy(&e);
+                self.removed.push(wid);
+            }
+        }
+
+        let remaining_hq = self
+            .entities
+            .values()
+            .filter(|e| e.owner == former && e.kind == "hq" && e.hp > 0.0)
+            .count();
+        if remaining_hq == 0 {
+            if let Some(player) = self.players.get_mut(&former) {
+                player.alive = false;
+                player.colonies = 0;
+            }
+        } else if let Some(player) = self.players.get_mut(&former) {
+            player.colonies = remaining_hq.saturating_sub(1) as u32;
+        }
+
+        if let Some(conqueror) = self.resolve_conqueror(&hq) {
+            self.grant_colony_hq(conqueror, hx, hy);
+        }
+    }
+
+    fn is_hostile_commander(&self, attacker: Uuid, victim_owner: Uuid, victim_team: u8) -> bool {
+        if attacker == victim_owner {
+            return false;
+        }
+        let Some(ap) = self.players.get(&attacker) else {
+            return false;
+        };
+        if !ap.alive {
+            return false;
+        }
+        if self.ffa {
+            return true;
+        }
+        ap.team != victim_team
+    }
+
+    fn resolve_conqueror(&self, hq: &Entity) -> Option<Uuid> {
+        if let Some(uid) = hq.last_hit_by {
+            if self.is_hostile_commander(uid, hq.owner, hq.team) {
+                return Some(uid);
+            }
+        }
+        let claim_r2 = CITY_CLAIM_RADIUS * CITY_CLAIM_RADIUS;
+        let mut best: Option<(Uuid, f32)> = None;
+        for e in self.entities.values() {
+            if e.hp <= 0.0 || !(e.unit || e.building) {
+                continue;
+            }
+            if !self.is_hostile_commander(e.owner, hq.owner, hq.team) {
+                continue;
+            }
+            let dx = e.x - hq.x;
+            let dy = e.y - hq.y;
+            let d2 = dx * dx + dy * dy;
+            if d2 > claim_r2 {
+                continue;
+            }
+            if best.map(|(_, bd)| d2 < bd).unwrap_or(true) {
+                best = Some((e.owner, d2));
+            }
+        }
+        best.map(|(o, _)| o)
+    }
+
+    /// Spawn a ready HQ for the conqueror on the captured site (colony / forward base).
+    fn grant_colony_hq(&mut self, owner: Uuid, x: f32, y: f32) {
+        let Some(player) = self.players.get(&owner) else {
+            return;
+        };
+        if !player.alive {
+            return;
+        }
+        let team = player.team;
+        let flag = player.flag.clone();
+        let map = self.map_size as f32;
+        let fx = x.clamp(1.5, map - 1.5);
+        let fy = y.clamp(1.5, map - 1.5);
+        let hq_id = Uuid::new_v4();
+        self.put_entity(Entity {
+            id: hq_id,
+            kind: "hq".into(),
+            owner,
+            team,
+            x: fx,
+            y: fy,
+            hp: 7500.0,
+            max_hp: 7500.0,
+            building: true,
+            unit: false,
+            flag,
+            build_remaining_ms: 0,
+            train_queue: VecDeque::new(),
+            target: None,
+            move_to: None,
+            speed: 0.0,
+            damage: 0.0,
+            range: 0.0,
+            attack_cooldown_ms: 0,
+            mag_ammo: 0,
+            dirty: true,
+            stuck_frames: 0,
+            detour: None,
+            detour_ttl: 0,
+            last_escape_ang: 0.0,
+            prone: false,
+            prone_until_tick: 0,
+            aim_yaw: 0.0,
+            mg_cooldown_ms: 0,
+            last_hit_by: None,
+        });
+        let hqs = self
+            .entities
+            .values()
+            .filter(|e| e.owner == owner && e.kind == "hq" && e.hp > 0.0)
+            .count();
+        if let Some(player) = self.players.get_mut(&owner) {
+            player.colonies = hqs.saturating_sub(1) as u32;
+            player.focus = [fx, fy];
+        }
+        self.reveal_vision_for(owner);
+    }
+
     /// Mortar bomb splash — smaller than tank HE, lethal to nearby infantry.
     fn apply_mortar_blast(
         &mut self,
         team: u8,
+        attacker: Uuid,
         from_x: f32,
         from_y: f32,
         x: f32,
@@ -2196,6 +2413,7 @@ impl MatchSim {
             }
             if let Some(e) = self.entities.get_mut(&id) {
                 e.hp -= dmg;
+                e.last_hit_by = Some(attacker);
                 e.dirty = true;
                 if is_infantry {
                     e.prone_until_tick = e.prone_until_tick.max(self.tick + 36);
@@ -2208,6 +2426,7 @@ impl MatchSim {
     fn apply_mlrs_blast(
         &mut self,
         team: u8,
+        attacker: Uuid,
         from_x: f32,
         from_y: f32,
         x: f32,
@@ -2278,6 +2497,7 @@ impl MatchSim {
             }
             if let Some(e) = self.entities.get_mut(&id) {
                 e.hp -= dmg;
+                e.last_hit_by = Some(attacker);
                 e.dirty = true;
                 if is_infantry {
                     e.prone_until_tick = e.prone_until_tick.max(self.tick + 40);
@@ -2291,6 +2511,7 @@ impl MatchSim {
     fn apply_shell_blast(
         &mut self,
         team: u8,
+        attacker: Uuid,
         from_x: f32,
         from_y: f32,
         x: f32,
@@ -2356,6 +2577,7 @@ impl MatchSim {
             }
             if let Some(e) = self.entities.get_mut(&id) {
                 e.hp -= dmg;
+                e.last_hit_by = Some(attacker);
                 e.dirty = true;
             }
         }
@@ -2639,6 +2861,7 @@ impl MatchSim {
         let fx = entity.x;
         let fy = entity.y;
         let from_id = entity.id;
+        let attacker_owner = entity.owner;
         let hit_p = shot_hit_chance("bunker", target, dist, entity.range, cover.exposure);
         let mut rng = rand::thread_rng();
         // MG spray: decent connect rate up close, wilder at edge.
@@ -2652,6 +2875,7 @@ impl MatchSim {
         if let Some(t) = self.entities.get_mut(&tid) {
             if hit {
                 t.hp -= dmg;
+                t.last_hit_by = Some(attacker_owner);
                 t.dirty = true;
             }
             if t.unit && is_soft_unit(&t.kind) {
@@ -2752,6 +2976,7 @@ impl MatchSim {
         let fx = entity.x;
         let fy = entity.y;
         let from_id = entity.id;
+        let attacker_owner = entity.owner;
         let hit_p = shot_hit_chance(&entity.kind, target, dist, entity.range, cover.exposure);
         let mut rng = rand::thread_rng();
         let hit = rng.gen_range(0.0..1.0) < hit_p.max(0.72);
@@ -2764,6 +2989,7 @@ impl MatchSim {
         if let Some(t) = self.entities.get_mut(&tid) {
             if hit {
                 t.hp -= dmg;
+                t.last_hit_by = Some(attacker_owner);
                 t.dirty = true;
             }
             if t.unit && is_soft_unit(&t.kind) {
@@ -2919,6 +3145,7 @@ impl MatchSim {
         if hit {
             if let Some(t) = self.entities.get_mut(&tid) {
                 t.hp -= dmg;
+                t.last_hit_by = Some(entity.owner);
                 t.dirty = true;
                 if t.unit && is_soft_unit(&t.kind) {
                     t.prone_until_tick = t.prone_until_tick.max(self.tick + 18);
@@ -3380,9 +3607,9 @@ impl MatchSim {
 
     /// Own units always; enemies only if they sit inside a friendly vision disc.
     /// Allied (!FFA): teammates and their vision discs are shared.
-    /// During the opening global-vision window, every living entity is visible.
+    /// Dev M-key (`debug_omniscient`) reveals everything for that viewer only.
     fn visible_ids_for(&self, viewer: Uuid) -> HashSet<Uuid> {
-        if self.global_vision_active() {
+        if self.player_has_global_vision(viewer) {
             return self.entities.keys().copied().collect();
         }
         let viewer_team = self.players.get(&viewer).map(|p| p.team);

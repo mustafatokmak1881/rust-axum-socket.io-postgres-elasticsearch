@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::match_sim::{self, MatchSim, MAX_PLAYERS};
 use super::protocol::{
-    ClientMsg, OpenMatchView, ServerMsg, default_catalog,
+    ClientMsg, OpenMatchView, ServerMsg, default_catalog, normalize_faction,
 };
 use crate::store::{Redis, keys, users};
 use crate::error::AppError;
@@ -169,16 +169,19 @@ impl MatchHub {
                 max_players,
                 map_size,
                 ffa,
+                faction,
             } => {
                 if self.inner.user_match.contains_key(&user_id) {
                     if self.resume_match(user_id).await {
                         return Ok(());
                     }
                 }
-                self.create_and_enter_match(user_id, max_players, map_size, ffa)
+                let faction = normalize_faction(&faction);
+                let _ = self.set_faction(user_id, &faction).await;
+                self.create_and_enter_match(user_id, max_players, map_size, ffa, faction)
                     .await?;
             }
-            ClientMsg::JoinLobby { lobby_id } => {
+            ClientMsg::JoinLobby { lobby_id, faction } => {
                 // lobby_id is the live match id (drop-in join).
                 if let Some(existing) = self.inner.user_match.get(&user_id).map(|e| *e) {
                     if existing == lobby_id {
@@ -189,7 +192,9 @@ impl MatchHub {
                         return Err("Already in another match".into());
                     }
                 }
-                self.join_match(user_id, lobby_id).await?;
+                let faction = normalize_faction(&faction);
+                let _ = self.set_faction(user_id, &faction).await;
+                self.join_match(user_id, lobby_id, faction).await?;
             }
             ClientMsg::LeaveLobby => self.leave_lobby(user_id).await?,
             ClientMsg::SetFaction { faction } => {
@@ -236,6 +241,41 @@ impl MatchHub {
             ClientMsg::EquipCosmetic { slot, id } => {
                 self.equip_cosmetic(user_id, &slot, &id).await?;
             }
+            ClientMsg::ToggleDebugVision => {
+                let match_id = *self
+                    .inner
+                    .user_match
+                    .get(&user_id)
+                    .ok_or("Not in a match")?;
+                let runtime = self
+                    .inner
+                    .matches
+                    .get(&match_id)
+                    .map(|e| e.clone())
+                    .ok_or("Match missing")?;
+                let (tick, entities, removed, resources, explored_new, shots, global_vision) = {
+                    let mut rt = runtime.write().await;
+                    let on = rt.sim.toggle_debug_vision(user_id);
+                    let tick = rt.sim.tick;
+                    let (entities, removed, resources, explored_new, shots) =
+                        rt.sim.delta_for(user_id);
+                    (tick, entities, removed, resources, explored_new, shots, on)
+                };
+                self.send(
+                    user_id,
+                    ServerMsg::Delta {
+                        tick,
+                        entities,
+                        removed,
+                        resources,
+                        focus_hint: None,
+                        explored_new,
+                        shots,
+                        scoreboard: None,
+                        global_vision,
+                    },
+                );
+            }
         }
         Ok(())
     }
@@ -246,6 +286,7 @@ impl MatchHub {
         max_players: u8,
         map_size: u16,
         ffa: bool,
+        faction: String,
     ) -> Result<(), String> {
         if self.inner.user_lobby.contains_key(&user_id)
             || self.inner.user_match.contains_key(&user_id)
@@ -260,7 +301,7 @@ impl MatchHub {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "User missing".to_string())?;
 
-        let faction = user.faction.clone().unwrap_or_else(|| "usa".into());
+        let faction = normalize_faction(&faction);
         let match_id = Uuid::new_v4();
 
         let roster = vec![(
@@ -327,7 +368,12 @@ impl MatchHub {
         Ok(())
     }
 
-    async fn join_match(&self, user_id: Uuid, match_id: Uuid) -> Result<(), String> {
+    async fn join_match(
+        &self,
+        user_id: Uuid,
+        match_id: Uuid,
+        faction: String,
+    ) -> Result<(), String> {
         if self.inner.user_lobby.contains_key(&user_id)
             || self.inner.user_match.contains_key(&user_id)
         {
@@ -352,7 +398,7 @@ impl MatchHub {
                 return Err("Match is full".into());
             }
 
-            let faction = user.faction.clone().unwrap_or_else(|| "usa".into());
+            let faction = normalize_faction(&faction);
             rt.sim
                 .add_player(
                     user_id,
@@ -390,10 +436,7 @@ impl MatchHub {
     }
 
     async fn set_faction(&self, user_id: Uuid, faction: &str) -> Result<(), String> {
-        let faction = match faction.to_ascii_lowercase().as_str() {
-            "usa" | "china" | "gla" => faction.to_ascii_lowercase(),
-            _ => return Err("Invalid faction".into()),
-        };
+        let faction = normalize_faction(faction);
 
         if let Some(mut user) = users::load_user(&self.inner.redis, user_id)
             .await
@@ -446,7 +489,7 @@ impl MatchHub {
                             } else {
                                 None
                             };
-                            let global_vision = rt.sim.global_vision_active();
+                            let global_vision = rt.sim.player_has_global_vision(uid);
                             outgoing.push((
                                 uid,
                                 ServerMsg::Delta {

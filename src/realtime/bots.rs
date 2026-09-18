@@ -1193,7 +1193,7 @@ fn expand_base(
             "war_factory",
             "supply",
             "turret",
-            "bunker",
+            "firebase",
         ),
     };
 
@@ -1269,7 +1269,7 @@ fn expand_base(
         Some((factory_kind, 4.2))
     } else if plants < 2 && faction != "gla" && now > 220 && !held(power_kind) {
         Some((power_kind, 4.2))
-    } else if radars < style.radars() && now > 280 && !held("radar") {
+    } else if radars < style.radars() && faction != "gla" && now > 280 && !held("radar") {
         Some(("radar", 5.5))
     } else if bunkers < style.bunkers() && !held(bunker_kind) {
         Some((bunker_kind, 4.0))
