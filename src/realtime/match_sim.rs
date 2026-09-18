@@ -659,7 +659,7 @@ fn generate_ponds(match_id: Uuid, map_size: u16) -> Vec<PondView> {
     }
     let map = map_size as f32;
     let count = 7 + (seed % 5) as usize; // 7–11 ponds
-    let mut ponds = Vec::with_capacity(count);
+    let mut ponds: Vec<PondView> = Vec::with_capacity(count);
     let mut s = seed;
     let mut attempts = 0;
     while ponds.len() < count && attempts < count * 40 {
