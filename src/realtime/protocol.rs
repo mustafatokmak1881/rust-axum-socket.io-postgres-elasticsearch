@@ -200,6 +200,9 @@ pub struct ScoreboardRow {
     pub infantry: u32,
     pub tanks: u32,
     pub buildings: u32,
+    /// Living Command Centers owned (home + captured).
+    #[serde(default)]
+    pub bases: u32,
     pub gold: i32,
     pub power: i32,
     pub power_used: i32,

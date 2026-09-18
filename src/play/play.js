@@ -271,6 +271,7 @@ function renderScoreboard() {
         <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
         <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag} · ${teamLabel}</small></div></td>
         <td>${status}</td>
+        <td>${r.bases ?? 0}</td>
         <td>${r.infantry ?? 0}</td>
         <td>${r.tanks ?? 0}</td>
         <td>${r.buildings ?? 0}</td>

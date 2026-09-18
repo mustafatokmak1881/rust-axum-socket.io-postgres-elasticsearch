@@ -1369,13 +1369,17 @@ impl MatchSim {
                 let mut infantry = 0u32;
                 let mut tanks = 0u32;
                 let mut buildings = 0u32;
+                let mut bases = 0u32;
                 let mut hq_pos: Option<(f32, f32)> = None;
                 for e in self.entities.values() {
                     if e.owner != p.user_id || e.hp <= 0.0 {
                         continue;
                     }
-                    if e.kind == "hq" && hq_pos.is_none() {
-                        hq_pos = Some((e.x, e.y));
+                    if e.kind == "hq" {
+                        bases += 1;
+                        if hq_pos.is_none() {
+                            hq_pos = Some((e.x, e.y));
+                        }
                     }
                     if e.building {
                         buildings += 1;
@@ -1399,6 +1403,7 @@ impl MatchSim {
                     infantry,
                     tanks,
                     buildings,
+                    bases,
                     gold: p.resources.gold,
                     power: p.resources.power,
                     power_used: p.resources.power_used,
@@ -1410,6 +1415,7 @@ impl MatchSim {
         rows.sort_by(|a, b| {
             b.alive
                 .cmp(&a.alive)
+                .then_with(|| b.bases.cmp(&a.bases))
                 .then_with(|| (b.infantry + b.tanks).cmp(&(a.infantry + a.tanks)))
                 .then_with(|| b.gold.cmp(&a.gold))
                 .then_with(|| a.name.cmp(&b.name))
