@@ -196,9 +196,7 @@ pub struct ScoreboardRow {
     pub infantry: u32,
     pub tanks: u32,
     pub buildings: u32,
-    pub supplies: i32,
-    pub fuel: i32,
-    pub munitions: i32,
+    pub gold: i32,
     pub power: i32,
     pub power_used: i32,
     /// Living Command Center — Tab click jumps the camera here.
@@ -210,9 +208,7 @@ pub struct ScoreboardRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcesView {
-    pub supplies: i32,
-    pub fuel: i32,
-    pub munitions: i32,
+    pub gold: i32,
     pub power: i32,
     pub power_used: i32,
 }
@@ -280,9 +276,7 @@ pub struct BuildableInfo {
     pub name: String,
     #[serde(default)]
     pub faction: String,
-    pub cost_supplies: i32,
-    pub cost_fuel: i32,
-    pub cost_munitions: i32,
+    pub cost_gold: i32,
     pub build_ms: u32,
     pub power: i32,
 }
@@ -294,9 +288,7 @@ pub struct TrainableInfo {
     #[serde(default)]
     pub faction: String,
     pub from_building: String,
-    pub cost_supplies: i32,
-    pub cost_fuel: i32,
-    pub cost_munitions: i32,
+    pub cost_gold: i32,
     pub train_ms: u32,
     pub hp: f32,
     pub damage: f32,

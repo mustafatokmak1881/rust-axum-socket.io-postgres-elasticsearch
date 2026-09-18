@@ -291,7 +291,7 @@ pub fn seed_opening_bots(sim: &mut MatchSim) {
         let team = if sim.ffa {
             80 + sim.players.values().filter(|p| p.is_bot()).count() as u8
         } else {
-            0
+            1 // opposing coalition — never share FoW with the human host
         };
         let name = if batch == 0 {
             format!("{} · {}", profile.name, profile.country)

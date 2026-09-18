@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use rand::seq::SliceRandom;
 use rand::Rng;
 use uuid::Uuid;
 
@@ -103,29 +102,31 @@ pub fn color_scheme_for_slot(slot: usize) -> [u32; 3] {
 
 #[derive(Clone, Debug)]
 pub struct Resources {
-    pub supplies: i32,
-    pub fuel: i32,
-    pub munitions: i32,
+    /// Single spendable currency (was supplies/fuel/munitions).
+    pub gold: i32,
+    /// Available power from finished generators (+ HQ base).
     pub power: i32,
+    /// Power reserved by finished consumer buildings.
     pub power_used: i32,
 }
 
 impl Resources {
     pub fn starter() -> Self {
         Self {
-            supplies: 10_000,
-            fuel: 10_000,
-            munitions: 10_000,
-            power: 10_000,
+            gold: 10_000,
+            // HQ grants base power on spawn — start dark until then.
+            power: 0,
             power_used: 0,
         }
     }
 
+    pub fn has_power(&self) -> bool {
+        self.power_used <= self.power
+    }
+
     pub fn view(&self) -> ResourcesView {
         ResourcesView {
-            supplies: self.supplies,
-            fuel: self.fuel,
-            munitions: self.munitions,
+            gold: self.gold,
             power: self.power,
             power_used: self.power_used,
         }
@@ -188,9 +189,7 @@ pub struct BuildDef {
     pub name: &'static str,
     /// `"usa"` | `"china"` | `"gla"` | `"any"`
     pub faction: &'static str,
-    pub cost_supplies: i32,
-    pub cost_fuel: i32,
-    pub cost_munitions: i32,
+    pub cost_gold: i32,
     pub build_ms: u32,
     pub power: i32,
     pub hp: f32,
@@ -202,9 +201,7 @@ pub struct UnitDef {
     pub name: &'static str,
     pub faction: &'static str,
     pub from_building: &'static str,
-    pub cost_supplies: i32,
-    pub cost_fuel: i32,
-    pub cost_munitions: i32,
+    pub cost_gold: i32,
     pub train_ms: u32,
     pub hp: f32,
     pub damage: f32,
@@ -212,6 +209,11 @@ pub struct UnitDef {
     pub range: f32,
     /// Time between shots (realistic reload / burst spacing).
     pub attack_ms: u32,
+}
+
+#[inline]
+fn is_power_producer(kind: &str) -> bool {
+    matches!(kind, "power_plant" | "nuclear_reactor")
 }
 
 pub fn buildables() -> &'static [BuildDef] {
@@ -704,53 +706,51 @@ impl MatchSim {
         sim
     }
 
-    /// Non-FFA: shuffle commanders into two balanced sides (e.g. 6 → 3v3).
+    /// Non-FFA skirmish: all humans co-op on team 0, all bots on team 1.
+    /// (Random 50/50 used to put ~half the AIs on your side → shared vision lit the whole map.)
     fn rebalance_allied_teams(&mut self) {
-        let mut ids: Vec<Uuid> = self.players.keys().copied().collect();
-        if ids.len() < 2 {
+        let humans: Vec<Uuid> = self
+            .players
+            .values()
+            .filter(|p| !p.is_bot())
+            .map(|p| p.user_id)
+            .collect();
+        let bots: Vec<Uuid> = self
+            .players
+            .values()
+            .filter(|p| p.is_bot())
+            .map(|p| p.user_id)
+            .collect();
+        if humans.is_empty() && bots.len() < 2 {
             return;
         }
-        let mut rng = rand::thread_rng();
-        ids.shuffle(&mut rng);
-        let split = ids.len() / 2;
-        // Odd counts: randomly give the extra seat to team 0 or 1.
-        let team0_count = if ids.len() % 2 == 1 && rng.gen_bool(0.5) {
-            split + 1
-        } else {
-            split
-        };
-        for (i, id) in ids.iter().enumerate() {
-            let team = if i < team0_count { 0u8 } else { 1u8 };
+        for id in &humans {
             if let Some(player) = self.players.get_mut(id) {
-                player.team = team;
+                player.team = 0;
             }
             for entity in self.entities.values_mut() {
                 if entity.owner == *id {
-                    entity.team = team;
+                    entity.team = 0;
+                    entity.dirty = true;
+                }
+            }
+        }
+        for id in &bots {
+            if let Some(player) = self.players.get_mut(id) {
+                player.team = 1;
+            }
+            for entity in self.entities.values_mut() {
+                if entity.owner == *id {
+                    entity.team = 1;
                     entity.dirty = true;
                 }
             }
         }
     }
 
-    /// Join mid-match onto the smaller allied side (coin-flip if tied).
+    /// Join mid-match: humans join team 0 (co-op); never dump a human onto the bot swarm.
     fn pick_allied_team(&self) -> u8 {
-        let mut c0 = 0u32;
-        let mut c1 = 0u32;
-        for player in self.players.values() {
-            match player.team {
-                0 => c0 += 1,
-                1 => c1 += 1,
-                _ => {}
-            }
-        }
-        if c0 < c1 {
-            0
-        } else if c1 < c0 {
-            1
-        } else {
-            rand::thread_rng().gen_range(0..=1)
-        }
+        0
     }
 
     pub(crate) fn spawn_commander(
@@ -822,6 +822,10 @@ impl MatchSim {
             last_hit_by: None,
         });
         self.spawn_starting_force(user_id, team, x, y);
+        // Command Center base power — enough for a barracks + supply before a plant.
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.resources.power = player.resources.power.saturating_add(40);
+        }
         self.reveal_vision_for(user_id);
     }
 
@@ -1025,9 +1029,7 @@ impl MatchSim {
                 kind: b.kind.into(),
                 name: b.name.into(),
                 faction: b.faction.into(),
-                cost_supplies: b.cost_supplies,
-                cost_fuel: b.cost_fuel,
-                cost_munitions: b.cost_munitions,
+                cost_gold: b.cost_gold,
                 build_ms: b.build_ms,
                 power: b.power,
             })
@@ -1043,9 +1045,7 @@ impl MatchSim {
                 name: u.name.into(),
                 faction: u.faction.into(),
                 from_building: u.from_building.into(),
-                cost_supplies: u.cost_supplies,
-                cost_fuel: u.cost_fuel,
-                cost_munitions: u.cost_munitions,
+                cost_gold: u.cost_gold,
                 train_ms: u.train_ms,
                 hp: u.hp,
                 damage: u.damage,
@@ -1124,9 +1124,7 @@ impl MatchSim {
                     infantry,
                     tanks,
                     buildings,
-                    supplies: p.resources.supplies,
-                    fuel: p.resources.fuel,
-                    munitions: p.resources.munitions,
+                    gold: p.resources.gold,
                     power: p.resources.power,
                     power_used: p.resources.power_used,
                     hq_x: hq_pos.map(|(x, _)| x),
@@ -1138,7 +1136,7 @@ impl MatchSim {
             b.alive
                 .cmp(&a.alive)
                 .then_with(|| (b.infantry + b.tanks).cmp(&(a.infantry + a.tanks)))
-                .then_with(|| b.supplies.cmp(&a.supplies))
+                .then_with(|| b.gold.cmp(&a.gold))
                 .then_with(|| a.name.cmp(&b.name))
         });
         rows
@@ -1189,13 +1187,19 @@ impl MatchSim {
         };
         player.debug_omniscient = !player.debug_omniscient;
         let on = player.debug_omniscient;
+        player.aoi_known.clear(); // force full resync of visibles
         if on {
             player.explored.reveal_all();
-            player.aoi_known.clear(); // force full resync of visibles
         } else {
-            player.aoi_known.clear();
+            // Restore real fog: wipe permanent shroud, then re-stamp living vision discs.
+            player.explored = aoi::ExploredMap::new(self.map_size);
         }
-        on
+        if on {
+            return true;
+        }
+        // Re-apply current vision so the player isn't blind after M-off.
+        let _ = self.reveal_vision_for(user_id);
+        false
     }
 
     pub fn place_building(
@@ -1262,6 +1266,34 @@ impl MatchSim {
             return Err("Tile occupied");
         }
 
+        // Don't plant on top of living ground units — that traps them inside the footprint.
+        let mut unit_blocked = false;
+        self.grid.for_each_nearby(
+            fx,
+            fy,
+            place_r + MAX_UNIT_RADIUS + collision_pad(),
+            |id| {
+                let Some(e) = self.entities.get(&id) else {
+                    return false;
+                };
+                if !e.unit || e.hp <= 0.0 || is_air_kind(&e.kind) {
+                    return false;
+                }
+                let ur = unit_radius(&e.kind);
+                let dx = e.x - fx;
+                let dy = e.y - fy;
+                let min_dist = place_r + ur + collision_pad();
+                if dx * dx + dy * dy < min_dist * min_dist {
+                    unit_blocked = true;
+                    return true;
+                }
+                false
+            },
+        );
+        if unit_blocked {
+            return Err("Units in the way");
+        }
+
         // Cannot plant structures inside another commander's base footprint.
         let mut in_enemy_land = false;
         self.grid.for_each_nearby(fx, fy, 14.0 + place_r, |id| {
@@ -1285,11 +1317,8 @@ impl MatchSim {
         }
 
         let player = self.players.get_mut(&user_id).ok_or("Not in match")?;
-        if player.resources.supplies < def.cost_supplies
-            || player.resources.fuel < def.cost_fuel
-            || player.resources.munitions < def.cost_munitions
-        {
-            return Err("Not enough resources");
+        if player.resources.gold < def.cost_gold {
+            return Err("Not enough gold");
         }
 
         let power_after = player.resources.power_used - def.power.min(0);
@@ -1297,9 +1326,7 @@ impl MatchSim {
             return Err("Not enough power");
         }
 
-        player.resources.supplies -= def.cost_supplies;
-        player.resources.fuel -= def.cost_fuel;
-        player.resources.munitions -= def.cost_munitions;
+        player.resources.gold -= def.cost_gold;
         // Consumers reserve power on place; producers add generation when the build finishes.
         if def.power < 0 {
             player.resources.power_used += -def.power;
@@ -1401,16 +1428,14 @@ impl MatchSim {
         }
 
         let player = self.players.get_mut(&user_id).unwrap();
-        if player.resources.supplies < def.cost_supplies
-            || player.resources.fuel < def.cost_fuel
-            || player.resources.munitions < def.cost_munitions
-        {
-            return Err("Not enough resources");
+        if !player.resources.has_power() {
+            return Err("No power — buildings offline");
+        }
+        if player.resources.gold < def.cost_gold {
+            return Err("Not enough gold");
         }
 
-        player.resources.supplies -= def.cost_supplies;
-        player.resources.fuel -= def.cost_fuel;
-        player.resources.munitions -= def.cost_munitions;
+        player.resources.gold -= def.cost_gold;
 
         let building = self.entities.get_mut(&building_id).unwrap();
         building.train_queue.push_back(TrainJob {
@@ -1539,9 +1564,7 @@ impl MatchSim {
         }
         #[derive(Default, Clone, Copy)]
         struct Gain {
-            sup: i32,
-            fuel: i32,
-            mun: i32,
+            gold: i32,
             pwr: i32,
         }
         let mut by_owner: HashMap<Uuid, Gain> = HashMap::new();
@@ -1552,33 +1575,25 @@ impl MatchSim {
             let g = by_owner.entry(e.owner).or_default();
             match e.kind.as_str() {
                 "hq" => {
-                    g.sup += 8;
-                    g.fuel += 3;
-                    g.mun += 3;
+                    g.gold += 14;
                 }
                 "supply" | "supply_stash" => {
-                    g.sup += 32;
-                    g.fuel += 10;
-                    g.mun += 8;
+                    g.gold += 50;
                 }
                 "black_market" => {
-                    g.sup += 40;
-                    g.fuel += 12;
-                    g.mun += 12;
+                    g.gold += 64;
                 }
-                "power_plant" | "nuclear_reactor" => {
+                "power_plant" | "nuclear_reactor" if is_power_producer(e.kind.as_str()) => {
                     g.pwr += 15;
                 }
                 "war_factory" | "arms_dealer" => {
-                    g.fuel += 8;
-                    g.mun += 6;
+                    g.gold += 14;
                 }
                 "barracks" => {
-                    g.mun += 4;
+                    g.gold += 4;
                 }
                 "internet_center" | "propaganda_center" | "strategy_center" | "palace" => {
-                    g.sup += 10;
-                    g.mun += 6;
+                    g.gold += 16;
                 }
                 _ => {}
             }
@@ -1590,9 +1605,11 @@ impl MatchSim {
             if !player.alive {
                 continue;
             }
-            player.resources.supplies = player.resources.supplies.saturating_add(g.sup);
-            player.resources.fuel = player.resources.fuel.saturating_add(g.fuel);
-            player.resources.munitions = player.resources.munitions.saturating_add(g.mun);
+            // Brownout: only generators still tick; gold income freezes.
+            let powered = player.resources.has_power();
+            if powered {
+                player.resources.gold = player.resources.gold.saturating_add(g.gold);
+            }
             player.resources.power = player.resources.power.saturating_add(g.pwr);
         }
     }
@@ -1671,7 +1688,14 @@ impl MatchSim {
                 self.on_building_finished(&entity);
             }
 
-            if entity.build_remaining_ms == 0 {
+            let powered = self
+                .players
+                .get(&entity.owner)
+                .map(|p| p.resources.has_power())
+                .unwrap_or(false);
+
+            // Brownout: factories / barracks freeze production. Power plants still finish.
+            if entity.build_remaining_ms == 0 && powered {
                 if let Some(job) = entity.train_queue.front_mut() {
                     job.remaining_ms = job.remaining_ms.saturating_sub(dt_ms);
                     entity.dirty = true;
@@ -1737,8 +1761,12 @@ impl MatchSim {
                 }
             }
 
-            // Patriot Battery (and any future armed buildings) engage while finished.
-            if entity.build_remaining_ms == 0 && entity.damage > 0.0 && entity.range > 0.0 {
+            // Armed buildings go dark without power.
+            if powered
+                && entity.build_remaining_ms == 0
+                && entity.damage > 0.0
+                && entity.range > 0.0
+            {
                 self.tick_armed_building(&mut entity, dt_ms);
             }
 
@@ -1759,6 +1787,28 @@ impl MatchSim {
 
             let self_r = unit_radius(&entity.kind);
             let airborne = is_air_kind(&entity.kind);
+            // If already overlapping a building (e.g. planted on top), shove clear first.
+            if !airborne {
+                if let Some((bx, by, br)) =
+                    self.building_overlap(entity.id, entity.x, entity.y, self_r)
+                {
+                    let (nx, ny) = self.clear_point_from_building(
+                        entity.id,
+                        entity.x,
+                        entity.y,
+                        self_r,
+                        bx,
+                        by,
+                        br,
+                    );
+                    if (nx - entity.x).abs() > 0.0001 || (ny - entity.y).abs() > 0.0001 {
+                        entity.x = nx;
+                        entity.y = ny;
+                        entity.stuck_frames = 0;
+                        entity.dirty = true;
+                    }
+                }
+            }
             // Move orders control pathing only — units may still shoot while marching.
             let obeying_move = entity.move_to.is_some();
             // Squads walk through friendlies toward the click; buildings / enemies still block.
@@ -2223,6 +2273,7 @@ impl MatchSim {
         }
 
         self.separate_units(dt_ms);
+        self.eject_units_from_buildings();
         self.crush_infantry_under_tanks();
         self.clamp_entities_to_map();
 
@@ -2394,6 +2445,8 @@ impl MatchSim {
         if let Some(player) = self.players.get_mut(&owner) {
             player.colonies = hqs.saturating_sub(1) as u32;
             player.focus = [fx, fy];
+            // Captured HQ brings its own base power online.
+            player.resources.power = player.resources.power.saturating_add(40);
         }
         self.reveal_vision_for(owner);
     }
@@ -3471,17 +3524,17 @@ impl MatchSim {
     ) -> (f32, f32) {
         let map = self.map_size as f32;
         let base = extra_solid
-            .map(|(_, _, er)| er + radius + collision_pad() + 0.08)
-            .unwrap_or(radius + 0.35);
-        for k in 0..160 {
-            let ang = k as f32 * 0.55;
-            let dist = base + (k as f32) * 0.09;
+            .map(|(_, _, er)| er + radius + collision_pad() + 0.12)
+            .unwrap_or(radius + 0.45);
+        for k in 0..240 {
+            let ang = k as f32 * 0.53;
+            let dist = base + (k as f32) * 0.1;
             let x = (bx + ang.cos() * dist).clamp(0.5, map - 0.5);
             let y = (by + ang.sin() * dist).clamp(0.5, map - 0.5);
             if let Some((ex, ey, er)) = extra_solid {
                 let dx = ex - x;
                 let dy = ey - y;
-                let min_d = radius + er + collision_pad();
+                let min_d = radius + er + collision_pad() + 0.04;
                 if dx * dx + dy * dy < min_d * min_d {
                     continue;
                 }
@@ -3490,10 +3543,150 @@ impl MatchSim {
                 return (x, y);
             }
         }
+        // Never return an unchecked fallback — walk outward until clear.
+        self.resolve_clear_spawn(bx, by, radius, self_id, extra_solid)
+    }
+
+    /// Guaranteed clear pad near (bx,by); expands until a free ring is found.
+    fn resolve_clear_spawn(
+        &self,
+        bx: f32,
+        by: f32,
+        radius: f32,
+        self_id: Uuid,
+        extra_solid: Option<(f32, f32, f32)>,
+    ) -> (f32, f32) {
+        let map = self.map_size as f32;
+        for ring in 0..48 {
+            let dist = 0.6 + ring as f32 * 0.35;
+            let spokes = 10 + ring * 2;
+            for s in 0..spokes {
+                let ang = (s as f32) * (std::f32::consts::TAU / spokes as f32);
+                let x = (bx + ang.cos() * dist).clamp(0.5, map - 0.5);
+                let y = (by + ang.sin() * dist).clamp(0.5, map - 0.5);
+                if let Some((ex, ey, er)) = extra_solid {
+                    let dx = ex - x;
+                    let dy = ey - y;
+                    let min_d = radius + er + collision_pad() + 0.04;
+                    if dx * dx + dy * dy < min_d * min_d {
+                        continue;
+                    }
+                }
+                if !self.collides_at(self_id, x, y, radius, None, true) {
+                    return (x, y);
+                }
+            }
+        }
         (
-            (bx + base + 0.2).clamp(0.5, map - 0.5),
-            (by + base + 0.2).clamp(0.5, map - 0.5),
+            (bx + 4.0).clamp(0.5, map - 0.5),
+            (by + 4.0).clamp(0.5, map - 0.5),
         )
+    }
+
+    /// Overlapping finished/under-construction building, if any.
+    fn building_overlap(
+        &self,
+        self_id: Uuid,
+        x: f32,
+        y: f32,
+        self_r: f32,
+    ) -> Option<(f32, f32, f32)> {
+        let mut best: Option<(f32, f32, f32, f32)> = None; // bx,by,br,penetration
+        self.grid.for_each_nearby(
+            x,
+            y,
+            self_r + MAX_ENTITY_RADIUS + collision_pad(),
+            |id| {
+                let Some(e) = self.entities.get(&id) else {
+                    return false;
+                };
+                if e.id == self_id || !e.building || e.hp <= 0.0 {
+                    return false;
+                }
+                let br = building_radius(&e.kind);
+                let dx = x - e.x;
+                let dy = y - e.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let min_d = self_r + br + collision_pad();
+                if dist < min_d {
+                    let pen = min_d - dist;
+                    if best.map(|(_, _, _, p)| pen > p).unwrap_or(true) {
+                        best = Some((e.x, e.y, br, pen));
+                    }
+                }
+                false
+            },
+        );
+        best.map(|(bx, by, br, _)| (bx, by, br))
+    }
+
+    fn clear_point_from_building(
+        &self,
+        self_id: Uuid,
+        x: f32,
+        y: f32,
+        self_r: f32,
+        bx: f32,
+        by: f32,
+        br: f32,
+    ) -> (f32, f32) {
+        let map = self.map_size as f32;
+        let need = br + self_r + collision_pad() + 0.1;
+        let dx = x - bx;
+        let dy = y - by;
+        let dist = (dx * dx + dy * dy).sqrt();
+        let (mut ox, mut oy) = if dist < 1e-3 {
+            (bx + need, by)
+        } else {
+            (bx + dx / dist * need, by + dy / dist * need)
+        };
+        ox = ox.clamp(0.5, map - 0.5);
+        oy = oy.clamp(0.5, map - 0.5);
+        if !self.collides_at(self_id, ox, oy, self_r, None, true) {
+            return (ox, oy);
+        }
+        // Fan around the building rim until free.
+        for k in 0..24 {
+            let ang = k as f32 * (std::f32::consts::TAU / 24.0);
+            let px = (bx + ang.cos() * need).clamp(0.5, map - 0.5);
+            let py = (by + ang.sin() * need).clamp(0.5, map - 0.5);
+            if !self.collides_at(self_id, px, py, self_r, None, true) {
+                return (px, py);
+            }
+        }
+        self.resolve_clear_spawn(bx, by, self_r, self_id, Some((bx, by, br)))
+    }
+
+    /// Units planted under a new building (or bad spawn) get shoved to the rim.
+    fn eject_units_from_buildings(&mut self) {
+        let trapped: Vec<(Uuid, f32)> = self
+            .entities
+            .values()
+            .filter(|e| e.unit && e.hp > 0.0 && !is_air_kind(&e.kind))
+            .filter(|e| {
+                self.building_overlap(e.id, e.x, e.y, unit_radius(&e.kind))
+                    .is_some()
+            })
+            .map(|e| (e.id, unit_radius(&e.kind)))
+            .collect();
+        for (id, self_r) in trapped {
+            let Some(entity) = self.entities.get(&id) else {
+                continue;
+            };
+            let x = entity.x;
+            let y = entity.y;
+            let Some((bx, by, br)) = self.building_overlap(id, x, y, self_r) else {
+                continue;
+            };
+            let (nx, ny) = self.clear_point_from_building(id, x, y, self_r, bx, by, br);
+            if let Some(entity) = self.entities.get_mut(&id) {
+                entity.x = nx;
+                entity.y = ny;
+                entity.stuck_frames = 0;
+                entity.dirty = true;
+            }
+            self.grid.upsert(id, nx, ny);
+        }
     }
 
     /// Pad beside an airfield — ignores ground buildings (unit is airborne on spawn).

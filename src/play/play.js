@@ -272,9 +272,7 @@ function renderScoreboard() {
         <td>${r.infantry ?? 0}</td>
         <td>${r.tanks ?? 0}</td>
         <td>${r.buildings ?? 0}</td>
-        <td>${r.supplies ?? 0}</td>
-        <td>${r.fuel ?? 0}</td>
-        <td>${r.munitions ?? 0}</td>
+        <td>${r.gold ?? 0}</td>
         <td>${r.power_used ?? 0}/${r.power ?? 0}</td>
       </tr>`;
     })
@@ -363,7 +361,7 @@ function enterMatch(snapshot) {
   if (snapshot.ffa) {
     toast(`${fac} · FFA — everyone is hostile`);
   } else {
-    toast(`${fac} · Team ${Number(snapshot.team) + 1} (shared vision)`);
+    toast(`${fac} · Co-op vs AI · Team ${Number(snapshot.team) + 1}`);
   }
   // Fullscreen only from click handlers (create/join/pointer) — browsers block gesture-less FS.
   void setupMatchScene(snapshot);
@@ -433,10 +431,10 @@ function panCameraTo(lookX, lookZ, quiet) {
 
 function updateResources(res) {
   if (!res) return;
-  $("#res-supplies").textContent = res.supplies;
-  $("#res-fuel").textContent = res.fuel;
-  $("#res-munitions").textContent = res.munitions;
-  $("#res-power").textContent = `${res.power_used}/${res.power}`;
+  $("#res-gold").textContent = res.gold;
+  const pwrEl = $("#res-power");
+  pwrEl.textContent = `${res.power_used}/${res.power}`;
+  pwrEl.classList.toggle("brownout", (res.power_used || 0) > (res.power || 0));
 }
 
 function updateArmyCounts() {
@@ -562,6 +560,11 @@ function applyDelta(msg) {
     globalVision = msg.global_vision;
     if (wasOpen !== globalVision) {
       lastVisionAt = 0;
+      if (!globalVision) {
+        // Leaving M-cheat: wipe permanent full-map shroud, then restamp real vision.
+        if (fogExploredData) fogExploredData.fill(0);
+        if (fogVisionData) fogVisionData.fill(0);
+      }
       refreshLiveVision();
       if (globalVision) toast("Dev map: full vision ON (M)");
       else toast("Dev map: fog restored (M)");
@@ -3571,20 +3574,33 @@ function canPlaceBuildingAt(kind, tileX, tileY) {
   const placeR = buildingRadius(kind);
   const myTeam = state.match?.team;
   for (const entity of state.entities.values()) {
-    if (!entity.building) continue;
+    if (entity.building) {
+      const dx = entity.x - fx;
+      const dy = entity.y - fy;
+      const otherR = buildingRadius(entity.kind);
+      const minDist = placeR + otherR + 0.04;
+      if (dx * dx + dy * dy < minDist * minDist) return false;
+      if (
+        myTeam != null &&
+        entity.team !== myTeam &&
+        (entity.hp ?? 1) > 0
+      ) {
+        const block = enemyBuildBlockRadius(entity.kind) + placeR;
+        if (dx * dx + dy * dy < block * block) return false;
+      }
+      continue;
+    }
+    if (!entity.unit || (entity.hp ?? 1) <= 0) continue;
+    if (isAirUnitKind(entity.kind)) continue;
     const dx = entity.x - fx;
     const dy = entity.y - fy;
-    const otherR = buildingRadius(entity.kind);
-    const minDist = placeR + otherR + 0.04;
+    const ur =
+      String(entity.kind || "").includes("tank") ||
+      String(entity.kind || "").includes("mlrs")
+        ? 0.12
+        : 0.04;
+    const minDist = placeR + ur + 0.04;
     if (dx * dx + dy * dy < minDist * minDist) return false;
-    if (
-      myTeam != null &&
-      entity.team !== myTeam &&
-      (entity.hp ?? 1) > 0
-    ) {
-      const block = enemyBuildBlockRadius(entity.kind) + placeR;
-      if (dx * dx + dy * dy < block * block) return false;
-    }
   }
   return true;
 }
@@ -3978,7 +3994,7 @@ function onPointerDown(event) {
     const x = Math.floor(point.x);
     const y = Math.floor(point.z);
     if (!canPlaceBuildingAt(state.selectedBuild, x, y)) {
-      toast("Buraya bina kurulamaz — yer dolu veya düşman bölgesi");
+      toast("Buraya bina kurulamaz — yer dolu, birim var veya düşman bölgesi");
       return;
     }
     send({
@@ -4936,10 +4952,14 @@ function createTankMesh(teamColor, opts = {}) {
   g.add(turret);
   g.userData.unitHeight = heavy ? 0.19 : 0.16;
   g.userData.isTank = true;
-  g.userData.hullTurnRate = heavy ? 0.85 : 1.05;
+  // Hull must track travel heading fast enough that catch-up slide
+  // never looks like a sideways stamp (see smoothUnitFacing).
+  g.userData.hullTurnRate = heavy ? 2.1 : 2.6;
   g.userData.turretTurnRate = heavy ? 1.05 : 1.25;
   g.userData.barrelRecoil = 0;
-  g.userData.tankRigVersion = 6;
+  // Keep in sync with remesh gate (`tankRigVersion < 7`); never overwrite
+  // down to an older version or tanks remesh every snapshot and slide flat.
+  g.userData.tankRigVersion = 7;
   // Half visual size vs prior rig; Abrams slightly larger silhouette.
   g.scale.setScalar(heavy ? 0.59 : 0.5);
   if (heavy) {
@@ -5096,7 +5116,7 @@ function createMlrsMesh(teamColor) {
   elev.add(dummyBarrel);
 
   g.userData.unitHeight = 0.28;
-  g.userData.hullTurnRate = 0.95;
+  g.userData.hullTurnRate = 2.2;
   g.userData.turretTurnRate = 0.85;
   g.userData.barrelRecoil = 0;
   g.scale.setScalar(0.5);
@@ -5696,6 +5716,46 @@ function shortestAngle(from, to) {
   return diff;
 }
 
+function clientMoveSpeed(kind) {
+  const k = String(kind || "");
+  if (isAirUnitKind(k)) {
+    if (k.includes("raptor") || k.includes("mig")) return 1.15;
+    if (k.includes("chinook")) return 0.7;
+    return 0.95;
+  }
+  // Match generals_roster speeds so slideToward doesn't ice-skate.
+  if (k.includes("humvee") || k.includes("rocket_buggy") || k.includes("buggy")) return 0.72;
+  if (k.includes("technical") || k.includes("radar_van")) return 0.62;
+  if (k.includes("battlemaster") || k.includes("scorpion") || k.includes("gatling")) return 0.55;
+  if (k.includes("quad") || k.includes("microwave")) return 0.5;
+  if (
+    k.includes("tank") ||
+    k.includes("paladin") ||
+    k.includes("marauder") ||
+    k.includes("overlord") ||
+    k.includes("abrams")
+  ) {
+    return k.includes("paladin") || k.includes("overlord") || k.includes("marauder") ? 0.52 : 0.58;
+  }
+  if (
+    k.includes("mlrs") ||
+    k.includes("tomahawk") ||
+    k.includes("inferno") ||
+    k.includes("scud")
+  ) {
+    return 0.42;
+  }
+  if (
+    k.includes("mortar") ||
+    k.includes("missile") ||
+    k.includes("rpg") ||
+    k.includes("hunter")
+  ) {
+    return 0.14;
+  }
+  return 0.2;
+}
+
 function applyUnitMotion(mesh, entity) {
   if (mesh.userData.knock) {
     mesh.userData.knock.originX = entity.x;
@@ -5704,19 +5764,7 @@ function applyUnitMotion(mesh, entity) {
   }
   const now = performance.now();
   const kind = String(entity.kind || mesh.userData.kind || "");
-  mesh.userData.moveSpeed = isAirUnitKind(kind)
-    ? kind.includes("raptor") || kind.includes("mig")
-      ? 1.15
-      : kind.includes("chinook")
-        ? 0.7
-        : 0.95
-    : kind.includes("tank")
-      ? 0.58
-      : kind.includes("mlrs")
-        ? 0.42
-        : kind.includes("mortar") || kind.includes("missile")
-          ? 0.14
-          : 0.2;
+  mesh.userData.moveSpeed = clientMoveSpeed(kind);
   const prevX = mesh.userData.lastX;
   const prevZ = mesh.userData.lastZ;
   const prevAt = mesh.userData.snapAt;
@@ -5817,8 +5865,12 @@ function updateTankDrive(mesh, dt) {
   }
 
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
-  if (speed > 0.04) {
-    mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+  if (step > 0.00035) {
+    // Face the direction we actually slid — not clamped net velocity.
+    mesh.userData.faceYaw = Math.atan2(
+      mesh.position.x - beforeX,
+      mesh.position.z - beforeZ,
+    );
     mesh.userData.moving = true;
     const spin = step * 28;
     if (spin > 0.0002) {
@@ -5826,6 +5878,9 @@ function updateTankDrive(mesh, dt) {
         if (obj.userData?.roadWheel) obj.rotation.x += spin;
       });
     }
+  } else if (speed > 0.04) {
+    mesh.userData.faceYaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+    mesh.userData.moving = true;
   }
 
   // Palet sesi sadece seçili tank hareket ederken — tüm harita gürültü yapmasın.
@@ -5891,14 +5946,18 @@ function smoothUnitFacing(mesh, dt) {
   if (!mesh?.userData?.isUnitRig) return;
 
   if (mesh.userData.isTank) {
-    const hullRate = mesh.userData.hullTurnRate || 2.0;
+    const hullRate = mesh.userData.hullTurnRate || 2.4;
     const turretRate = mesh.userData.turretTurnRate || 1.35;
     const turret = mesh.getObjectByName("muzzleRoot");
 
-    // Hull slowly follows travel direction.
+    // Hull follows travel direction; boost when skating sideways.
     if (mesh.userData.faceYaw != null) {
       const diff = shortestAngle(mesh.rotation.y, mesh.userData.faceYaw);
-      const maxStep = hullRate * dt;
+      const abs = Math.abs(diff);
+      let maxStep = hullRate * dt;
+      if (mesh.userData.moving && abs > 0.55) {
+        maxStep = Math.max(maxStep, abs * Math.min(1, dt * 8));
+      }
       mesh.rotation.y += Math.max(-maxStep, Math.min(maxStep, diff));
     }
 
