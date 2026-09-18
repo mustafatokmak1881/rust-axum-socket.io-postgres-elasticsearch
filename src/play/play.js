@@ -351,7 +351,9 @@ function enterMatch(snapshot) {
   state.entities.clear();
   clearWorldMeshes();
   aoiRadius = Number(snapshot.aoi_radius) || 28;
+  // Default fog — only M-key (server) may open the map.
   globalVision = snapshot.global_vision === true;
+  if (fogOfWar) fogOfWar.visible = !globalVision;
   for (const entity of snapshot.entities || []) {
     state.entities.set(entity.id, entity);
   }
@@ -559,13 +561,15 @@ function applyDelta(msg) {
   updateResources(msg.resources);
   if (typeof msg.global_vision === "boolean") {
     const wasOpen = globalVision;
-    globalVision = msg.global_vision;
+    globalVision = msg.global_vision === true;
+    if (fogOfWar) fogOfWar.visible = !globalVision;
     if (wasOpen !== globalVision) {
       lastVisionAt = 0;
       if (!globalVision) {
-        // Leaving M-cheat: wipe permanent full-map shroud, then restamp real vision.
+        // Leaving M-cheat: wipe shroud + drop out-of-vision ghosts (perf).
         if (fogExploredData) fogExploredData.fill(0);
         if (fogVisionData) fogVisionData.fill(0);
+        pruneFogGhosts();
       }
       refreshLiveVision();
       if (globalVision) toast("Dev map: full vision ON (M)");
@@ -3085,6 +3089,55 @@ function applyExploredNew(indices) {
   }
 }
 
+/** Drop enemy meshes that lingered after M-off / AOI (causes full-map lag). */
+function pruneFogGhosts() {
+  if (globalVision || !state.match) return;
+  const you = state.match.you;
+  const myTeam = Number(state.match.team);
+  const shareAllies = !state.match.ffa;
+  const sources = [];
+  for (const entity of state.entities.values()) {
+    const mine = entity.owner === you;
+    const ally = shareAllies && Number(entity.team) === myTeam;
+    if (!mine && !ally) continue;
+    const radius = visionRadiusFor(entity);
+    if (radius > 0) sources.push([entity.x, entity.y, radius]);
+  }
+  const drop = [];
+  for (const [id, entity] of state.entities) {
+    const mine = entity.owner === you;
+    const ally = shareAllies && Number(entity.team) === myTeam;
+    if (mine || ally) continue;
+    let seen = false;
+    for (const [sx, sy, r] of sources) {
+      const dx = entity.x - sx;
+      const dy = entity.y - sy;
+      if (dx * dx + dy * dy <= r * r) {
+        seen = true;
+        break;
+      }
+    }
+    if (!seen) drop.push(id);
+  }
+  for (const id of drop) {
+    state.entities.delete(id);
+    const mesh = state.meshes.get(id);
+    if (mesh) {
+      reapUnitMesh(mesh);
+      Sfx.stopBuild(id);
+      Sfx.stopEngine(id);
+    }
+  }
+  if (drop.length) {
+    const dead = new Set(drop);
+    state.selectedUnits = state.selectedUnits.filter((id) => !dead.has(id));
+    if (dead.has(state.selectedBuilding)) {
+      state.selectedBuilding = null;
+      refreshTrainablePanel();
+    }
+  }
+}
+
 function stampVisionCircle(data, size, cx, cy, radius) {
   const r = Math.ceil(radius);
   const ix = Math.floor(cx);
@@ -3124,6 +3177,7 @@ function refreshLiveVision() {
   const cells = mapSize * mapSize;
 
   if (globalVision) {
+    if (fogOfWar) fogOfWar.visible = false;
     fogVisionData.fill(255);
     fogExploredData.fill(255);
     for (let i = 0; i < cells; i++) {
@@ -3137,6 +3191,7 @@ function refreshLiveVision() {
     return;
   }
 
+  if (fogOfWar) fogOfWar.visible = true;
   fogVisionData.fill(0);
   const you = state.match?.you;
   const myTeam = state.match?.team;
@@ -3176,6 +3231,8 @@ function refreshLiveVision() {
     tex[o + 3] = 255;
   }
   fogDataTexture.needsUpdate = true;
+  // Occasional client-side cull if AOI ghosts linger (post M-toggle).
+  if (!globalVision && (now | 0) % 5 === 0) pruneFogGhosts();
 }
 
 function createFogOfWar(size) {
@@ -7666,6 +7723,7 @@ window.addEventListener("keydown", (event) => {
   // M — dev: personal full-map vision toggle (server-side; others stay fogged).
   if (event.key === "m" || event.key === "M") {
     if (!state.match || $("#match-screen")?.hidden) return;
+    if (event.repeat) return;
     event.preventDefault();
     send({ t: "toggle_debug_vision" });
   }

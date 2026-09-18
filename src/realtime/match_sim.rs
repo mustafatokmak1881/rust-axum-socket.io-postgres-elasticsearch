@@ -1187,17 +1187,15 @@ impl MatchSim {
         };
         player.debug_omniscient = !player.debug_omniscient;
         let on = player.debug_omniscient;
-        player.aoi_known.clear(); // force full resync of visibles
         if on {
+            // Force a full resync of every entity now that the map is open.
+            player.aoi_known.clear();
             player.explored.reveal_all();
-        } else {
-            // Restore real fog: wipe permanent shroud, then re-stamp living vision discs.
-            player.explored = aoi::ExploredMap::new(self.map_size);
-        }
-        if on {
             return true;
         }
-        // Re-apply current vision so the player isn't blind after M-off.
+        // Keep aoi_known so the next delta emits `removed` for units that fall
+        // back into the fog — clearing it left ghosts on the client (full map + lag).
+        player.explored = aoi::ExploredMap::new(self.map_size);
         let _ = self.reveal_vision_for(user_id);
         false
     }
