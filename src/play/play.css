@@ -57,6 +57,7 @@ html, body {
 }
 
 .resources b { color: #fff4ce; margin-left: 4px; }
+.resources b.brownout { color: #ff6b4a; }
 
 .user-chip {
   display: flex;
