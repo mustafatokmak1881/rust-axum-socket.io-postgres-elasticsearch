@@ -1167,12 +1167,47 @@ fn expand_base(
     team: u8,
     threatened: bool,
 ) {
-    let plants = count_kind(sim, bot_id, "power_plant");
+    let faction = sim
+        .players
+        .get(&bot_id)
+        .map(|p| p.faction.clone())
+        .unwrap_or_else(|| "usa".into());
+
+    let (power_kind, factory_kind, supply_kind, defense_kind, bunker_kind) = match faction.as_str() {
+        "china" => (
+            "nuclear_reactor",
+            "war_factory",
+            "supply",
+            "gatling_cannon",
+            "bunker",
+        ),
+        "gla" => (
+            "power_plant", // unused — GLA has no power buildings
+            "arms_dealer",
+            "supply_stash",
+            "stinger_site",
+            "tunnel_network",
+        ),
+        _ => (
+            "power_plant",
+            "war_factory",
+            "supply",
+            "turret",
+            "bunker",
+        ),
+    };
+
+    // GLA has no power plants — treat as already powered.
+    let plants = if faction == "gla" {
+        1
+    } else {
+        count_kind(sim, bot_id, power_kind)
+    };
     let barracks = count_kind(sim, bot_id, "barracks");
-    let supply = count_kind(sim, bot_id, "supply");
-    let factory = count_kind(sim, bot_id, "war_factory");
-    let turrets = count_kind(sim, bot_id, "turret");
-    let bunkers = count_kind(sim, bot_id, "bunker");
+    let supply = count_kind(sim, bot_id, supply_kind);
+    let factory = count_kind(sim, bot_id, factory_kind);
+    let turrets = count_kind(sim, bot_id, defense_kind);
+    let bunkers = count_kind(sim, bot_id, bunker_kind);
     let radars = count_kind(sim, bot_id, "radar");
     let now = sim.tick;
 
@@ -1183,12 +1218,12 @@ fn expand_base(
     }
 
     let snapshot = [
-        ("power_plant", plants),
+        (power_kind, plants),
         ("barracks", barracks),
-        ("supply", supply),
-        ("war_factory", factory),
-        ("turret", turrets),
-        ("bunker", bunkers),
+        (supply_kind, supply),
+        (factory_kind, factory),
+        (defense_kind, turrets),
+        (bunker_kind, bunkers),
         ("radar", radars),
     ];
     if let Some(mind) = sim.players.get_mut(&bot_id).and_then(|p| p.bot.as_mut()) {
@@ -1213,33 +1248,33 @@ fn expand_base(
     let army = count_units(sim, bot_id, |_| true);
     let need = if threatened {
         // Fight first. Only replace a missing production building in the rear.
-        if factory == 0 && !held("war_factory") {
-            Some(("war_factory", 3.8))
+        if factory == 0 && !held(factory_kind) {
+            Some((factory_kind, 3.8))
         } else if barracks == 0 && army < 6 && !held("barracks") {
             Some(("barracks", 3.4))
-        } else if plants == 0 && !held("power_plant") {
-            Some(("power_plant", 3.2))
+        } else if plants == 0 && faction != "gla" && !held(power_kind) {
+            Some((power_kind, 3.2))
         } else {
             None
         }
-    } else if plants == 0 && !held("power_plant") {
-        Some(("power_plant", 2.8))
-    } else if factory == 0 && !held("war_factory") {
-        Some(("war_factory", 3.6))
+    } else if plants == 0 && faction != "gla" && !held(power_kind) {
+        Some((power_kind, 2.8))
+    } else if factory == 0 && !held(factory_kind) {
+        Some((factory_kind, 3.6))
     } else if barracks == 0 && !held("barracks") {
         Some(("barracks", 3.2))
-    } else if supply == 0 && !held("supply") {
-        Some(("supply", 3.4))
-    } else if factory < 2 && now > 180 && !held("war_factory") {
-        Some(("war_factory", 4.2))
-    } else if plants < 2 && now > 220 && !held("power_plant") {
-        Some(("power_plant", 4.2))
+    } else if supply == 0 && !held(supply_kind) {
+        Some((supply_kind, 3.4))
+    } else if factory < 2 && now > 180 && !held(factory_kind) {
+        Some((factory_kind, 4.2))
+    } else if plants < 2 && faction != "gla" && now > 220 && !held(power_kind) {
+        Some((power_kind, 4.2))
     } else if radars < style.radars() && now > 280 && !held("radar") {
         Some(("radar", 5.5))
-    } else if bunkers < style.bunkers() && !held("bunker") {
-        Some(("bunker", 4.0))
-    } else if turrets < style.turrets() && !held("turret") {
-        Some(("turret", 5.2))
+    } else if bunkers < style.bunkers() && !held(bunker_kind) {
+        Some((bunker_kind, 4.0))
+    } else if turrets < style.turrets() && !held(defense_kind) {
+        Some((defense_kind, 5.2))
     } else {
         None
     };
@@ -1320,18 +1355,69 @@ fn try_place_away(
 }
 
 fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: bool) {
-    let rangers = count_units(sim, bot_id, |k| k == "ranger");
-    let mortars = count_units(sim, bot_id, |k| k.contains("mortar"));
-    let crusaders = count_units(sim, bot_id, |k| k == "tank");
-    let abrams = count_units(sim, bot_id, |k| k.contains("abrams"));
-    let mlrs = count_units(sim, bot_id, |k| k.contains("mlrs"));
+    let faction = sim
+        .players
+        .get(&bot_id)
+        .map(|p| p.faction.clone())
+        .unwrap_or_else(|| "usa".into());
+
+    let infantry = count_units(sim, bot_id, |k| {
+        matches!(
+            k,
+            "ranger" | "red_guard" | "rebel" | "missile_defender" | "tank_hunter" | "rpg_trooper"
+        )
+    });
+    let mbt = count_units(sim, bot_id, |k| {
+        matches!(
+            k,
+            "tank" | "battlemaster" | "scorpion_tank" | "paladin_tank" | "marauder_tank" | "overlord"
+        )
+    });
+    let support = count_units(sim, bot_id, |k| {
+        k.contains("mlrs")
+            || k.contains("tomahawk")
+            || k.contains("inferno")
+            || k.contains("scud")
+            || k.contains("gatling")
+            || k.contains("quad")
+            || k.contains("buggy")
+            || k.contains("humvee")
+            || k.contains("technical")
+    });
+
+    let (inf_bldg, veh_bldg, mbt_unit, heavy_unit, arty_unit, scout_unit) = match faction.as_str() {
+        "china" => (
+            "barracks",
+            "war_factory",
+            "battlemaster",
+            "overlord",
+            "inferno_cannon",
+            "red_guard",
+        ),
+        "gla" => (
+            "barracks",
+            "arms_dealer",
+            "scorpion_tank",
+            "marauder_tank",
+            "rocket_buggy",
+            "rebel",
+        ),
+        _ => (
+            "barracks",
+            "war_factory",
+            "tank",
+            "paladin_tank",
+            "tomahawk",
+            "ranger",
+        ),
+    };
 
     let barracks: Vec<Uuid> = sim
         .entities
         .values()
         .filter(|e| {
             e.owner == bot_id
-                && e.kind == "barracks"
+                && e.kind == inf_bldg
                 && e.build_remaining_ms == 0
                 && e.hp > 0.0
                 && e.train_queue.len() < 2
@@ -1343,7 +1429,7 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
         .values()
         .filter(|e| {
             e.owner == bot_id
-                && e.kind == "war_factory"
+                && e.kind == veh_bldg
                 && e.build_remaining_ms == 0
                 && e.hp > 0.0
                 && e.train_queue.is_empty()
@@ -1351,31 +1437,38 @@ fn train_army(sim: &mut MatchSim, bot_id: Uuid, style: BotStyle, threatened: boo
         .map(|e| e.id)
         .collect();
 
-    // Armor first — Abrams breakthrough, Crusader mass, then MLRS.
     for id in factories {
-        if abrams < style.abrams_cap() && (threatened || crusaders >= 2 || abrams + 1 <= crusaders) {
-            if sim.train_unit(bot_id, id, "abrams_tank").is_ok() {
+        let heavies = count_units(sim, bot_id, |k| k == heavy_unit);
+        if heavies < style.abrams_cap() && (threatened || mbt >= 2) {
+            if sim.train_unit(bot_id, id, heavy_unit).is_ok() {
                 continue;
             }
         }
-        if crusaders < style.tank_cap() {
-            if sim.train_unit(bot_id, id, "tank").is_ok() {
+        if mbt < style.tank_cap() {
+            if sim.train_unit(bot_id, id, mbt_unit).is_ok() {
                 continue;
             }
         }
-        if mlrs < style.mlrs_cap() && (crusaders + abrams) >= 3 {
-            let _ = sim.train_unit(bot_id, id, "mlrs");
+        if support < style.mlrs_cap() && mbt >= 3 {
+            let _ = sim.train_unit(bot_id, id, arty_unit);
         }
     }
     for id in barracks {
-        let want_mortar = mortars < style.mortar_cap()
-            && (threatened || (crusaders + abrams) > 0 || mortars < 1);
-        if want_mortar && sim.train_unit(bot_id, id, "mortar").is_ok() {
-            continue;
+        let rocket = count_units(sim, bot_id, |k| {
+            k.contains("defender") || k.contains("hunter") || k.contains("rpg")
+        });
+        if rocket < style.mortar_cap() && (threatened || mbt > 0) {
+            let rocket_unit = match faction.as_str() {
+                "china" => "tank_hunter",
+                "gla" => "rpg_trooper",
+                _ => "missile_defender",
+            };
+            if sim.train_unit(bot_id, id, rocket_unit).is_ok() {
+                continue;
+            }
         }
-        // Only top up a thin scout screen — never mass infantry.
-        if rangers < style.ranger_cap() && (crusaders + abrams) >= rangers {
-            let _ = sim.train_unit(bot_id, id, "ranger");
+        if infantry < style.ranger_cap() && mbt >= infantry {
+            let _ = sim.train_unit(bot_id, id, scout_unit);
         }
     }
 }

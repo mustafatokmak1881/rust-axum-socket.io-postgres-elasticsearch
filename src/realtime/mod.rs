@@ -1,5 +1,6 @@
 pub mod aoi;
 pub mod bots;
+pub mod generals_roster;
 pub mod grid;
 pub mod hub;
 pub mod match_sim;

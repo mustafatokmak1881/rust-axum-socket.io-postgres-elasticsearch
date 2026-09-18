@@ -1511,16 +1511,33 @@ const EDGE_SCROLL_PX = 160;
 const BUILDING_VISUAL = {
   hq: 2.15,
   war_factory: 2.1,
+  arms_dealer: 2.1,
   barracks: 1.35,
   power_plant: 1.7,
+  nuclear_reactor: 1.7,
   supply: 1.7,
+  supply_stash: 1.7,
+  airfield: 2.0,
+  strategy_center: 1.9,
+  propaganda_center: 1.9,
+  palace: 1.9,
+  internet_center: 1.9,
+  black_market: 1.9,
   turret: 0.55,
+  stinger_site: 0.55,
+  gatling_cannon: 0.55,
   bunker: 0.34,
+  tunnel_network: 0.34,
+  demo_trap: 0.34,
   radar: 0.85,
+  firebase: 0.85,
+  particle_cannon: 2.2,
+  nuclear_silo: 2.2,
+  scud_storm: 2.2,
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 5;
+const BUILDING_FIT_VERSION = 6;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
 const PATRIOT_RIG_VERSION = 3;
 
@@ -2016,14 +2033,46 @@ function createWarFactoryMesh(fallbackMat) {
 }
 
 function createBuildingMesh(kind, fallbackMat) {
-  if (kind === "turret") return createPatriotBatteryMesh(fallbackMat);
-  if (kind === "bunker") return createBunkerMesh(fallbackMat);
-  if (kind === "radar") return createRadarStationMesh(fallbackMat);
+  if (kind === "turret" || kind === "stinger_site") return createPatriotBatteryMesh(fallbackMat);
+  if (kind === "gatling_cannon") return createPatriotBatteryMesh(fallbackMat);
+  if (kind === "bunker" || kind === "tunnel_network") return createBunkerMesh(fallbackMat);
+  if (kind === "demo_trap") {
+    const m = createBunkerMesh(fallbackMat);
+    m.scale.setScalar(0.55);
+    return m;
+  }
+  if (kind === "radar" || kind === "firebase") return createRadarStationMesh(fallbackMat);
   if (kind === "hq") return createCommandCenterMesh(fallbackMat);
+  if (
+    kind === "strategy_center" ||
+    kind === "propaganda_center" ||
+    kind === "palace" ||
+    kind === "internet_center" ||
+    kind === "black_market"
+  ) {
+    return createCommandCenterMesh(fallbackMat);
+  }
   if (kind === "barracks") return createBarracksMesh(fallbackMat);
-  if (kind === "power_plant") return createPowerPlantMesh(fallbackMat);
-  if (kind === "supply") return createSupplyCenterMesh(fallbackMat);
-  if (kind === "war_factory") return createWarFactoryMesh(fallbackMat);
+  if (
+    kind === "power_plant" ||
+    kind === "nuclear_reactor" ||
+    kind === "particle_cannon" ||
+    kind === "nuclear_silo" ||
+    kind === "scud_storm"
+  ) {
+    const m = createPowerPlantMesh(fallbackMat);
+    if (kind === "particle_cannon" || kind === "nuclear_silo" || kind === "scud_storm") {
+      m.scale.setScalar(1.25);
+    }
+    return m;
+  }
+  if (kind === "supply" || kind === "supply_stash") return createSupplyCenterMesh(fallbackMat);
+  if (kind === "war_factory" || kind === "arms_dealer") return createWarFactoryMesh(fallbackMat);
+  if (kind === "airfield") {
+    const m = createWarFactoryMesh(fallbackMat);
+    m.scale.set(1.35, 1, 0.85);
+    return m;
+  }
 
   // Unknown kind — small procedural shed
   const p = milPalette(fallbackMat?.color?.getHex?.());
@@ -4140,20 +4189,49 @@ function updateHpBar(mesh, entity) {
 function unitDims(kind) {
   const k = String(kind || "");
   // Scale: HQ ~2.15 wu ≈ 22–28 m → infantry ~1.8 m ≈ 0.08 wu tall (≈1/3 prior).
-  if (k.includes("mlrs")) {
+  if (
+    k.includes("mlrs") ||
+    k.includes("tomahawk") ||
+    k.includes("inferno") ||
+    k.includes("scud")
+  ) {
     return { w: 0.2, h: 0.16, d: 0.32 };
   }
-  if (k.includes("abrams")) {
+  if (
+    k.includes("abrams") ||
+    k.includes("paladin") ||
+    k.includes("marauder") ||
+    k.includes("overlord")
+  ) {
     return { w: 0.21, h: 0.14, d: 0.33 };
   }
-  if (k.includes("tank") || k.includes("vehicle") || k.includes("truck")) {
+  if (
+    k.includes("tank") ||
+    k.includes("vehicle") ||
+    k.includes("truck") ||
+    k.includes("humvee") ||
+    k.includes("technical") ||
+    k.includes("buggy") ||
+    k.includes("radar_van") ||
+    k.includes("cannon") ||
+    k.includes("microwave")
+  ) {
     // Half prior tank size — closer to infantry / building proportions.
     return { w: 0.18, h: 0.12, d: 0.28 };
+  }
+  if (
+    k.includes("raptor") ||
+    k.includes("mig") ||
+    k.includes("comanche") ||
+    k.includes("helix") ||
+    k.includes("chinook")
+  ) {
+    return { w: 0.22, h: 0.08, d: 0.28 };
   }
   if (k.includes("mortar")) {
     return { w: 0.036, h: 0.08, d: 0.036 };
   }
-  if (k.includes("missile")) {
+  if (k.includes("missile") || k.includes("rpg") || k.includes("tank_hunter")) {
     return { w: 0.03, h: 0.08, d: 0.03 };
   }
   return { w: 0.033, h: 0.08, d: 0.033 };
@@ -4862,12 +4940,141 @@ function createMlrsMesh(teamColor) {
   return g;
 }
 
+function isAirUnitKind(kind) {
+  const k = String(kind || "");
+  return (
+    k.includes("raptor") ||
+    k.includes("mig") ||
+    k.includes("comanche") ||
+    k.includes("helix") ||
+    k.includes("chinook")
+  );
+}
+
+function isHeavyTankKind(kind) {
+  const k = String(kind || "");
+  return (
+    k.includes("abrams") ||
+    k.includes("paladin") ||
+    k.includes("marauder") ||
+    k.includes("overlord")
+  );
+}
+
+function createLightVehicleMesh(teamColor) {
+  const m = createTankMesh(teamColor, { heavy: false });
+  m.scale.setScalar(0.72);
+  m.userData.isLightVehicle = true;
+  return m;
+}
+
+function createAirMesh(teamColor) {
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
+  g.userData.isAir = true;
+  g.userData.tintParts = [];
+  g.userData.unitHeight = 0.35;
+  const accent = teamColor >>> 0;
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.1, 0.04, 0.28),
+    matStd(0x3a3c38, { metalness: 0.45, roughness: 0.4 }),
+  );
+  body.position.y = 0.02;
+  g.add(body);
+  g.userData.tintParts.push(body);
+  const wing = new THREE.Mesh(
+    new THREE.BoxGeometry(0.36, 0.012, 0.08),
+    matStd(accent, { metalness: 0.35, roughness: 0.5 }),
+  );
+  wing.position.set(0, 0.025, -0.02);
+  g.add(wing);
+  g.userData.tintParts.push(wing);
+  const tail = new THREE.Mesh(
+    new THREE.BoxGeometry(0.04, 0.06, 0.06),
+    matStd(0x2a2c28, { metalness: 0.4, roughness: 0.45 }),
+  );
+  tail.position.set(0, 0.05, -0.12);
+  g.add(tail);
+  return g;
+}
+
 function createUnitMesh(kind, teamColor) {
   const k = String(kind || "");
-  if (k.includes("mlrs")) return createMlrsMesh(teamColor);
-  if (k.includes("abrams")) return createTankMesh(teamColor, { heavy: true });
-  if (k.includes("tank")) return createTankMesh(teamColor);
-  if (k.includes("mortar") || k.includes("missile")) return createMortarMesh(teamColor);
+
+  // Air — temporary simple elevated mesh
+  if (isAirUnitKind(k)) return createAirMesh(teamColor);
+
+  // Artillery / rocket vehicles
+  if (
+    k.includes("mlrs") ||
+    k.includes("tomahawk") ||
+    k.includes("inferno") ||
+    k.includes("scud")
+  ) {
+    return createMlrsMesh(teamColor);
+  }
+
+  // Heavy / medium tanks
+  if (
+    k.includes("abrams") ||
+    k.includes("paladin") ||
+    k.includes("marauder") ||
+    k.includes("overlord")
+  ) {
+    return createTankMesh(teamColor, { heavy: true });
+  }
+  if (
+    k.includes("battlemaster") ||
+    k.includes("scorpion") ||
+    k.includes("gatling_tank") ||
+    k.includes("quad_cannon") ||
+    k.includes("microwave") ||
+    (k.includes("tank") && !k.includes("hunter"))
+  ) {
+    return createTankMesh(teamColor);
+  }
+
+  // Light vehicles
+  if (
+    k.includes("humvee") ||
+    k.includes("technical") ||
+    k.includes("rocket_buggy") ||
+    k.includes("radar_van") ||
+    k.includes("buggy")
+  ) {
+    return createLightVehicleMesh(teamColor);
+  }
+
+  // Rocket / AT infantry → mortar pose
+  if (
+    k.includes("mortar") ||
+    k.includes("missile_defender") ||
+    k.includes("tank_hunter") ||
+    k.includes("rpg")
+  ) {
+    return createMortarMesh(teamColor);
+  }
+
+  // Infantry / heroes / specialists
+  if (
+    k.includes("ranger") ||
+    k.includes("red_guard") ||
+    k.includes("rebel") ||
+    k.includes("pathfinder") ||
+    k.includes("terrorist") ||
+    k.includes("hacker") ||
+    k.includes("hijacker") ||
+    k.includes("colonel") ||
+    k.includes("lotus") ||
+    k.includes("jarmen") ||
+    k.includes("burton")
+  ) {
+    return createRangerMesh(teamColor);
+  }
+
+  // Fallback
+  if (k.includes("missile") || k.includes("mortar")) return createMortarMesh(teamColor);
+  if (k.includes("tank") || k.includes("cannon")) return createTankMesh(teamColor);
   return createRangerMesh(teamColor);
 }
 
@@ -4902,13 +5109,30 @@ function disposeMeshTree(mesh) {
 function buildingHasProperModel(kind) {
   return (
     kind === "turret" ||
+    kind === "stinger_site" ||
+    kind === "gatling_cannon" ||
     kind === "bunker" ||
+    kind === "tunnel_network" ||
+    kind === "demo_trap" ||
     kind === "radar" ||
+    kind === "firebase" ||
     kind === "hq" ||
     kind === "barracks" ||
     kind === "power_plant" ||
+    kind === "nuclear_reactor" ||
     kind === "supply" ||
-    kind === "war_factory"
+    kind === "supply_stash" ||
+    kind === "war_factory" ||
+    kind === "arms_dealer" ||
+    kind === "airfield" ||
+    kind === "strategy_center" ||
+    kind === "propaganda_center" ||
+    kind === "palace" ||
+    kind === "internet_center" ||
+    kind === "black_market" ||
+    kind === "particle_cannon" ||
+    kind === "nuclear_silo" ||
+    kind === "scud_storm"
   );
 }
 
@@ -4929,7 +5153,9 @@ function upsertMesh(entity) {
   // Swap / upgrade procedural Patriot batteries.
   if (
     mesh &&
-    entity.kind === "turret" &&
+    (entity.kind === "turret" ||
+      entity.kind === "stinger_site" ||
+      entity.kind === "gatling_cannon") &&
     (!mesh.userData.isPatriot || (mesh.userData.patriotRigVersion || 0) < PATRIOT_RIG_VERSION)
   ) {
     scene.remove(mesh);
@@ -4977,23 +5203,46 @@ function upsertMesh(entity) {
   // Upgrade old unit boxes / static infantry to walk-capable / tank turret rigs.
   if (mesh && entity.unit) {
     const kind = String(entity.kind || "");
-    const isMlrs = kind.includes("mlrs");
-    const isTank = kind.includes("tank") && !isMlrs;
-    const isMortar = kind.includes("mortar") || kind.includes("missile");
+    const isMlrs =
+      kind.includes("mlrs") ||
+      kind.includes("tomahawk") ||
+      kind.includes("inferno") ||
+      kind.includes("scud");
+    const isAir = isAirUnitKind(kind);
+    const isHeavy = isHeavyTankKind(kind);
+    const isTank =
+      !isMlrs &&
+      !isAir &&
+      (kind.includes("tank") ||
+        kind.includes("battlemaster") ||
+        kind.includes("scorpion") ||
+        kind.includes("quad_cannon") ||
+        kind.includes("microwave") ||
+        kind.includes("humvee") ||
+        kind.includes("technical") ||
+        kind.includes("buggy") ||
+        kind.includes("radar_van"));
+    const isMortar =
+      kind.includes("mortar") ||
+      kind.includes("missile_defender") ||
+      kind.includes("tank_hunter") ||
+      kind.includes("rpg");
     const needsWalkRig =
       !mesh.userData.isUnitRig ||
+      (isAir && !mesh.userData.isAir) ||
       (isMlrs &&
         (!mesh.userData.isMlrs || (mesh.userData.mlrsRigVersion || 0) < 1)) ||
       (isTank &&
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
           (mesh.userData.tankRigVersion || 0) < 6 ||
-          (kind.includes("abrams") && !mesh.userData.isAbrams) ||
-          (!kind.includes("abrams") && mesh.userData.isAbrams))) ||
+          (isHeavy && !mesh.userData.isAbrams) ||
+          (!isHeavy && mesh.userData.isAbrams))) ||
       (isMortar && !mesh.userData.isMortar) ||
       (!isTank &&
         !isMlrs &&
         !isMortar &&
+        !isAir &&
         (!mesh.userData.isInfantry || (mesh.userData.rigVersion || 0) < 4));
     if (needsWalkRig) {
       Sfx.stopEngine(entity.id);
@@ -5048,6 +5297,9 @@ function upsertMesh(entity) {
     }
   } else if (mesh.userData.isUnitRig) {
     applyUnitMotion(mesh, entity);
+    if (mesh.userData.isAir || isAirUnitKind(entity.kind)) {
+      mesh.position.y = 0.55;
+    }
     if (mesh.userData.lastTint !== colors[0]) {
       tintUnitMesh(mesh, colors);
       mesh.userData.lastTint = colors[0];

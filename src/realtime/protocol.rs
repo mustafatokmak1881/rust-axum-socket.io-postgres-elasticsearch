@@ -251,6 +251,8 @@ pub struct MatchSnapshot {
 pub struct BuildableInfo {
     pub kind: String,
     pub name: String,
+    #[serde(default)]
+    pub faction: String,
     pub cost_supplies: i32,
     pub cost_fuel: i32,
     pub cost_munitions: i32,
@@ -262,6 +264,8 @@ pub struct BuildableInfo {
 pub struct TrainableInfo {
     pub unit: String,
     pub name: String,
+    #[serde(default)]
+    pub faction: String,
     pub from_building: String,
     pub cost_supplies: i32,
     pub cost_fuel: i32,

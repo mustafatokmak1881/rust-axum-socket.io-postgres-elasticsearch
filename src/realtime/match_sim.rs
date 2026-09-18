@@ -7,26 +7,17 @@ use uuid::Uuid;
 
 use super::aoi;
 use super::bots::{self, BotMind};
+use super::generals_roster::{self, faction_ok};
 use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
     BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
 };
 
+pub use generals_roster::army_cap_for;
+
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 50;
-
-/// Soft population caps — keep lobbies tank-heavy and FPS-friendly.
-pub fn army_cap_for(unit: &str) -> usize {
-    match unit {
-        "ranger" => 10,
-        "mortar" => 3,
-        "tank" => 14,
-        "abrams_tank" => 8,
-        "mlrs" => 5,
-        _ => 12,
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct PlayerState {
@@ -182,6 +173,8 @@ pub struct TrainJob {
 pub struct BuildDef {
     pub kind: &'static str,
     pub name: &'static str,
+    /// `"usa"` | `"china"` | `"gla"` | `"any"`
+    pub faction: &'static str,
     pub cost_supplies: i32,
     pub cost_fuel: i32,
     pub cost_munitions: i32,
@@ -194,6 +187,7 @@ pub struct BuildDef {
 pub struct UnitDef {
     pub unit: &'static str,
     pub name: &'static str,
+    pub faction: &'static str,
     pub from_building: &'static str,
     pub cost_supplies: i32,
     pub cost_fuel: i32,
@@ -208,183 +202,24 @@ pub struct UnitDef {
 }
 
 pub fn buildables() -> &'static [BuildDef] {
-    &[
-        BuildDef {
-            kind: "power_plant",
-            name: "Cold Fusion Reactor",
-            cost_supplies: 800,
-            cost_fuel: 200,
-            cost_munitions: 0,
-            build_ms: 8_000,
-            power: 100,
-            hp: 1800.0,
-        },
-        BuildDef {
-            kind: "barracks",
-            name: "Barracks",
-            cost_supplies: 600,
-            cost_fuel: 0,
-            cost_munitions: 200,
-            build_ms: 10_000,
-            power: -20,
-            hp: 2200.0,
-        },
-        BuildDef {
-            kind: "war_factory",
-            name: "War Factory",
-            cost_supplies: 1200,
-            cost_fuel: 400,
-            cost_munitions: 400,
-            build_ms: 14_000,
-            power: -30,
-            hp: 2800.0,
-        },
-        BuildDef {
-            kind: "supply",
-            name: "Supply Center",
-            cost_supplies: 500,
-            cost_fuel: 0,
-            cost_munitions: 0,
-            build_ms: 7_000,
-            power: -10,
-            hp: 1500.0,
-        },
-        BuildDef {
-            kind: "turret",
-            name: "Patriot Battery",
-            cost_supplies: 900,
-            cost_fuel: 0,
-            cost_munitions: 750,
-            build_ms: 11_000,
-            power: -25,
-            // Hardened launcher + radar van — not soft like a hut.
-            hp: 2_600.0,
-        },
-        BuildDef {
-            kind: "bunker",
-            name: "Machine-Gun Bunker",
-            cost_supplies: 900,
-            cost_fuel: 80,
-            cost_munitions: 420,
-            build_ms: 14_000,
-            power: -25,
-            // Buried concrete — soaks tank HE far better than soft buildings.
-            hp: 5_500.0,
-        },
-        BuildDef {
-            kind: "radar",
-            name: "Radar Station",
-            cost_supplies: 1_100,
-            cost_fuel: 250,
-            cost_munitions: 350,
-            build_ms: 16_000,
-            power: -40,
-            // Soft support building — lights up a huge vision disc.
-            hp: 1_400.0,
-        },
-    ]
+    generals_roster::buildables()
 }
 
 pub fn trainables() -> &'static [UnitDef] {
-    // Scale: HQ visual ~2.15 wu ≈ 22–28 m → 1 wu ≈ 12–13 m.
-    // Power ladder (real-world roles, game-compressed ranges):
-    //   rifle < mortar HE < bunker MG (soft) < tank gun < MLRS saturation < Patriot guided.
-    &[
-        UnitDef {
-            unit: "ranger",
-            name: "Ranger",
-            from_building: "barracks",
-            cost_supplies: 120,
-            cost_fuel: 0,
-            cost_munitions: 40,
-            train_ms: 6_500,
-            // A few connecting rifle rounds drop a soldier.
-            hp: 280.0,
-            damage: 85.0,
-            speed: 0.20,
-            range: 4.5,
-            attack_ms: 800,
-        },
-        UnitDef {
-            unit: "mortar",
-            name: "Mortar",
-            from_building: "barracks",
-            cost_supplies: 480,
-            cost_fuel: 60,
-            cost_munitions: 280,
-            train_ms: 12_000,
-            // Crew-served tube — fragile, lobbed HE.
-            hp: 240.0,
-            damage: 380.0,
-            speed: 0.14,
-            // Standoff vs rifle; still short of MLRS / Patriot.
-            range: 11.0,
-            attack_ms: 5_200,
-        },
-        UnitDef {
-            unit: "tank",
-            name: "Crusader Tank",
-            from_building: "war_factory",
-            cost_supplies: 2_200,
-            cost_fuel: 900,
-            cost_munitions: 700,
-            train_ms: 36_000,
-            // MBT-class hull — benchmark armor.
-            hp: 7_200.0,
-            // APFSDS / HE: ~12 shells to kill peer armor (not 18+).
-            damage: 580.0,
-            speed: 0.58,
-            range: 8.5,
-            attack_ms: 4_800,
-        },
-        UnitDef {
-            // Missing niche: breakthrough / brawler MBT — trades speed for punch & plate.
-            unit: "abrams_tank",
-            name: "Abrams Assault Tank",
-            from_building: "war_factory",
-            cost_supplies: 3_200,
-            cost_fuel: 1_200,
-            cost_munitions: 1_100,
-            train_ms: 52_000,
-            hp: 11_500.0,
-            damage: 820.0,
-            speed: 0.46,
-            range: 9.2,
-            attack_ms: 5_400,
-        },
-        UnitDef {
-            // M270 MLRS — soft-skin launcher, long-range rocket ripple (not a tank).
-            unit: "mlrs",
-            name: "M270 MLRS",
-            from_building: "war_factory",
-            cost_supplies: 1_600,
-            cost_fuel: 650,
-            cost_munitions: 1_450,
-            train_ms: 42_000,
-            // Aluminum cab — shrugs fragments, dies to tank guns fast.
-            hp: 2_200.0,
-            // Unitary / DPICM rocket — devastating soft kill, chips armor.
-            damage: 420.0,
-            speed: 0.42,
-            range: 17.0,
-            attack_ms: 9_200,
-        },
-    ]
+    generals_roster::trainables()
 }
 
 fn attack_cooldown_for(kind: &str) -> u32 {
-    if kind == "turret" {
-        // MIM-104 class: salvo cadence — guided punch, not MG spray.
-        return 1_850;
+    match kind {
+        "turret" | "stinger_site" | "particle_cannon" => 1_850,
+        "bunker" | "tunnel_network" => 90,
+        "gatling_cannon" | "firebase" => 80,
+        _ => trainables()
+            .iter()
+            .find(|u| u.unit == kind)
+            .map(|u| u.attack_ms)
+            .unwrap_or(1_000),
     }
-    if kind == "bunker" {
-        return 90; // MG cyclic rate between rounds in a burst
-    }
-    trainables()
-        .iter()
-        .find(|u| u.unit == kind)
-        .map(|u| u.attack_ms)
-        .unwrap_or(1_000)
 }
 
 const RIFLE_MAG: u8 = 30;
@@ -403,7 +238,37 @@ const BUNKER_AIM_ALIGN: f32 = 0.12;
 
 #[inline]
 fn is_vehicle_kind(kind: &str) -> bool {
-    kind.contains("tank") || kind.contains("mlrs")
+    kind.contains("tank")
+        || kind.contains("mlrs")
+        || kind.contains("humvee")
+        || kind.contains("technical")
+        || kind.contains("buggy")
+        || kind.contains("crawler")
+        || kind.contains("cannon")
+        || kind.contains("overlord")
+        || kind.contains("tomahawk")
+        || kind.contains("microwave")
+        || kind.contains("inferno")
+        || kind.contains("scud")
+        || kind.contains("bomb_truck")
+        || kind.contains("radar_van")
+        || kind.contains("outpost")
+        || kind.contains("ecm")
+        || kind.contains("bus")
+        || kind.contains("raptor")
+        || kind.contains("mig")
+        || kind.contains("comanche")
+        || kind.contains("helix")
+        || kind.contains("chinook")
+}
+
+#[inline]
+fn is_air_kind(kind: &str) -> bool {
+    kind.contains("raptor")
+        || kind.contains("mig")
+        || kind.contains("comanche")
+        || kind.contains("helix")
+        || kind.contains("chinook")
 }
 
 #[inline]
@@ -412,11 +277,18 @@ fn is_soft_unit(kind: &str) -> bool {
 }
 
 fn is_rifle_infantry(kind: &str) -> bool {
-    is_soft_unit(kind)
-        && !kind.contains("missile")
-        && !kind.contains("mortar")
-        && kind != "turret"
-        && kind != "bunker"
+    matches!(
+        kind,
+        "ranger"
+            | "red_guard"
+            | "rebel"
+            | "pathfinder"
+            | "colonel_burton"
+            | "hacker"
+            | "hijacker"
+            | "terrorist"
+            | "black_lotus"
+    )
 }
 
 /// Match client `atan2(dx, dz)` — yaw 0 faces +Y / +Z.
@@ -673,12 +545,18 @@ fn move_arrive_radius(self_r: f32) -> f32 {
 fn building_visual_size(kind: &str) -> f32 {
     match kind {
         "hq" => 2.15,
-        "war_factory" => 2.1,
+        "war_factory" | "arms_dealer" => 2.1,
         "barracks" => 1.35,
-        "power_plant" | "supply" => 1.7,
-        "turret" => 0.55,
-        "bunker" => 0.34,
+        "power_plant" | "nuclear_reactor" | "supply" | "supply_stash" => 1.7,
+        "airfield" => 2.0,
+        "strategy_center" | "propaganda_center" | "palace" | "internet_center" | "black_market" => {
+            1.9
+        }
+        "turret" | "stinger_site" | "gatling_cannon" => 0.55,
+        "bunker" | "tunnel_network" | "demo_trap" => 0.34,
+        "firebase" => 0.85,
         "radar" => 0.85,
+        "particle_cannon" | "nuclear_silo" | "scud_storm" => 2.2,
         _ => 1.35,
     }
 }
@@ -691,16 +569,27 @@ pub fn building_radius(kind: &str) -> f32 {
 
 /// Matches client unit footprint on the ground plane.
 pub fn unit_radius(kind: &str) -> f32 {
-    if kind.contains("tank") {
+    if is_air_kind(kind) {
+        0.12
+    } else if kind.contains("overlord") {
+        0.16
+    } else if kind.contains("tank") || kind.contains("cannon") || kind.contains("crawler") {
         0.1
-    } else if kind.contains("mlrs") {
+    } else if kind.contains("mlrs")
+        || kind.contains("tomahawk")
+        || kind.contains("inferno")
+        || kind.contains("scud")
+    {
         0.11
-    } else if kind.contains("mortar") {
+    } else if kind.contains("humvee")
+        || kind.contains("technical")
+        || kind.contains("buggy")
+        || kind.contains("bus")
+    {
+        0.08
+    } else if kind.contains("mortar") || kind.contains("defender") || kind.contains("hunter") || kind.contains("rpg") {
         0.022
-    } else if kind.contains("missile") {
-        0.02
     } else {
-        // ranger ~1/3 previous size
         0.017
     }
 }
@@ -1013,12 +902,23 @@ impl MatchSim {
         self.players.values().filter(|p| !p.is_bot()).count()
     }
 
-    /// Light opening force — one Crusader so 50-player lobbies stay tank-first.
+    /// Light opening force — faction MBT so lobbies stay tank-first.
     fn spawn_starting_force(&mut self, user_id: Uuid, team: u8, hx: f32, hy: f32) {
+        let faction = self
+            .players
+            .get(&user_id)
+            .map(|p| p.faction.as_str())
+            .unwrap_or("usa");
+        let starter = match faction {
+            "china" => "battlemaster",
+            "gla" => "scorpion_tank",
+            _ => "tank",
+        };
         let tank = trainables()
             .iter()
-            .find(|u| u.unit == "tank")
-            .expect("tank def");
+            .find(|u| u.unit == starter && faction_ok(u.faction, faction))
+            .or_else(|| trainables().iter().find(|u| u.unit == "tank"))
+            .expect("starter tank def");
         let hq_r = building_radius("hq");
         let tr = unit_radius(tank.unit);
         let map = self.map_size as f32;
@@ -1093,12 +993,14 @@ impl MatchSim {
         self.entities.remove(&id)
     }
 
-    pub fn buildable_info() -> Vec<BuildableInfo> {
+    pub fn buildable_info_for(faction: &str) -> Vec<BuildableInfo> {
         buildables()
             .iter()
+            .filter(|b| faction_ok(b.faction, faction))
             .map(|b| BuildableInfo {
                 kind: b.kind.into(),
                 name: b.name.into(),
+                faction: b.faction.into(),
                 cost_supplies: b.cost_supplies,
                 cost_fuel: b.cost_fuel,
                 cost_munitions: b.cost_munitions,
@@ -1108,12 +1010,14 @@ impl MatchSim {
             .collect()
     }
 
-    pub fn trainable_info() -> Vec<TrainableInfo> {
+    pub fn trainable_info_for(faction: &str) -> Vec<TrainableInfo> {
         trainables()
             .iter()
+            .filter(|u| faction_ok(u.faction, faction))
             .map(|u| TrainableInfo {
                 unit: u.unit.into(),
                 name: u.name.into(),
+                faction: u.faction.into(),
                 from_building: u.from_building.into(),
                 cost_supplies: u.cost_supplies,
                 cost_fuel: u.cost_fuel,
@@ -1150,8 +1054,8 @@ impl MatchSim {
             explored: player.explored.to_bytes(),
             resources: player.resources.view(),
             entities,
-            buildable: Self::buildable_info(),
-            trainable: Self::trainable_info(),
+            buildable: Self::buildable_info_for(&player.faction),
+            trainable: Self::trainable_info_for(&player.faction),
             scoreboard: self.scoreboard_for(user_id),
         })
     }
@@ -1258,17 +1162,18 @@ impl MatchSim {
         if self.ended {
             return Err("Match already ended");
         }
+        let faction = {
+            let player = self.players.get(&user_id).ok_or("Not in match")?;
+            if !player.alive {
+                return Err("Eliminated");
+            }
+            player.faction.clone()
+        };
         let def = buildables()
             .iter()
-            .find(|b| b.kind == kind)
+            .find(|b| b.kind == kind && faction_ok(b.faction, &faction))
             .ok_or("Unknown building")?;
-        let (alive, my_team) = {
-            let player = self.players.get(&user_id).ok_or("Not in match")?;
-            (player.alive, player.team)
-        };
-        if !alive {
-            return Err("Eliminated");
-        }
+        let my_team = self.players.get(&user_id).map(|p| p.team).unwrap_or(0);
 
         // One construction at a time — bots and humans both.
         if self.entities.values().any(|e| {
@@ -1357,8 +1262,9 @@ impl MatchSim {
         let flag = player.flag.clone();
         let id = Uuid::new_v4();
         let (damage, range, mag) = match def.kind {
-            "turret" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
-            "bunker" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
+            "turret" | "stinger_site" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
+            "bunker" | "tunnel_network" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
+            "gatling_cannon" | "firebase" => (55.0, 9.0, 60u8),
             _ => (0.0, 0.0, 0u8),
         };
         self.put_entity(Entity {
@@ -1420,6 +1326,9 @@ impl MatchSim {
         let player = self.players.get(&user_id).ok_or("Not in match")?;
         if !player.alive {
             return Err("Eliminated");
+        }
+        if !faction_ok(def.faction, &player.faction) {
+            return Err("Wrong faction unit");
         }
 
         let building = self
@@ -1567,20 +1476,29 @@ impl MatchSim {
                     g.fuel += 3;
                     g.mun += 3;
                 }
-                "supply" => {
+                "supply" | "supply_stash" => {
                     g.sup += 32;
                     g.fuel += 10;
                     g.mun += 8;
                 }
-                "power_plant" => {
+                "black_market" => {
+                    g.sup += 40;
+                    g.fuel += 12;
+                    g.mun += 12;
+                }
+                "power_plant" | "nuclear_reactor" => {
                     g.pwr += 15;
                 }
-                "war_factory" => {
+                "war_factory" | "arms_dealer" => {
                     g.fuel += 8;
                     g.mun += 6;
                 }
                 "barracks" => {
                     g.mun += 4;
+                }
+                "internet_center" | "propaganda_center" | "strategy_center" | "palace" => {
+                    g.sup += 10;
+                    g.mun += 6;
                 }
                 _ => {}
             }
@@ -2603,13 +2521,19 @@ impl MatchSim {
         }
     }
 
-    /// Armed buildings (Patriot / bunker) engage while finished.
+    /// Armed buildings (Patriot / bunker / gatling / stinger) engage while finished.
     fn tick_armed_building(&mut self, entity: &mut Entity, dt_ms: u32) {
-        if entity.kind == "bunker" {
-            self.tick_bunker(entity, dt_ms);
-            return;
+        match entity.kind.as_str() {
+            "bunker" | "tunnel_network" | "gatling_cannon" | "firebase" => {
+                self.tick_bunker(entity, dt_ms);
+            }
+            "turret" | "stinger_site" => self.tick_patriot(entity, dt_ms),
+            _ => {
+                if entity.damage > 0.0 && entity.range > 0.0 {
+                    self.tick_patriot(entity, dt_ms);
+                }
+            }
         }
-        self.tick_patriot(entity, dt_ms);
     }
 
     /// Pillbox: idle MG sweep, slew onto contact, burst fire when aimed.
