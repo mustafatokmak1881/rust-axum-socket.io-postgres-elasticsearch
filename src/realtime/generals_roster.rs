@@ -300,7 +300,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 280.0,
             damage: 85.0,
             speed: 0.20,
-            range: 4.5,
+            range: 3.2,
             attack_ms: 800,
         },
         UnitDef {
@@ -313,7 +313,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 260.0,
             damage: 220.0,
             speed: 0.17,
-            range: 8.5,
+            range: 6.5,
             attack_ms: 2_800,
         },
         UnitDef {
@@ -326,7 +326,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 220.0,
             damage: 160.0,
             speed: 0.22,
-            range: 9.0,
+            range: 7.0,
             attack_ms: 2_200,
         },
         UnitDef {
@@ -339,7 +339,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 900.0,
             damage: 280.0,
             speed: 0.24,
-            range: 5.5,
+            range: 4.0,
             attack_ms: 900,
         },
         // ——— USA vehicles ———
@@ -353,7 +353,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_200.0,
             damage: 95.0,
             speed: 0.72,
-            range: 5.5,
+            range: 4.0,
             attack_ms: 450,
         },
         UnitDef {
@@ -366,7 +366,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 7_200.0,
             damage: 580.0,
             speed: 0.58,
-            range: 8.5,
+            range: 5.5,
             attack_ms: 4_800,
         },
         UnitDef {
@@ -379,7 +379,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 9_500.0,
             damage: 620.0,
             speed: 0.52,
-            range: 8.8,
+            range: 5.8,
             attack_ms: 5_000,
         },
         UnitDef {
@@ -392,7 +392,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_800.0,
             damage: 520.0,
             speed: 0.38,
-            range: 8.0,
+            range: 12.0,
             attack_ms: 8_500,
         },
         UnitDef {
@@ -405,7 +405,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_400.0,
             damage: 140.0,
             speed: 0.48,
-            range: 7.0,
+            range: 4.8,
             attack_ms: 1_200,
         },
         UnitDef {
@@ -418,7 +418,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_200.0,
             damage: 420.0,
             speed: 0.42,
-            range: 8.5,
+            range: 14.5,
             attack_ms: 9_200,
         },
         // ——— USA air ———
@@ -434,7 +434,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_600.0,
             damage: 420.0,
             speed: 11.0,
-            range: 9.0,
+            range: 6.8,
             attack_ms: 3_800,
         },
         UnitDef {
@@ -447,7 +447,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_400.0,
             damage: 280.0,
             speed: 3.15,
-            range: 7.5,
+            range: 5.5,
             attack_ms: 1_100,
         },
         UnitDef {
@@ -460,7 +460,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_000.0,
             damage: 40.0,
             speed: 2.8,
-            range: 3.0,
+            range: 2.5,
             attack_ms: 2_000,
         },
         // ——— China infantry ———
@@ -474,7 +474,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 300.0,
             damage: 75.0,
             speed: 0.19,
-            range: 4.2,
+            range: 3.0,
             attack_ms: 850,
         },
         UnitDef {
@@ -487,7 +487,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 250.0,
             damage: 260.0,
             speed: 0.16,
-            range: 8.0,
+            range: 6.2,
             attack_ms: 3_000,
         },
         UnitDef {
@@ -500,7 +500,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 180.0,
             damage: 20.0,
             speed: 0.15,
-            range: 2.0,
+            range: 1.8,
             attack_ms: 5_000,
         },
         UnitDef {
@@ -513,7 +513,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 700.0,
             damage: 50.0,
             speed: 0.23,
-            range: 6.0,
+            range: 4.5,
             attack_ms: 3_500,
         },
         // ——— China vehicles ———
@@ -527,7 +527,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_800.0,
             damage: 110.0,
             speed: 0.50,
-            range: 5.0,
+            range: 3.6,
             attack_ms: 600,
         },
         UnitDef {
@@ -540,7 +540,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 6_500.0,
             damage: 520.0,
             speed: 0.55,
-            range: 8.0,
+            range: 5.2,
             attack_ms: 4_600,
         },
         UnitDef {
@@ -553,7 +553,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 3_200.0,
             damage: 95.0,
             speed: 0.55,
-            range: 7.5,
+            range: 5.0,
             attack_ms: 120,
         },
         UnitDef {
@@ -566,7 +566,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_000.0,
             damage: 480.0,
             speed: 0.36,
-            range: 7.0,
+            range: 11.5,
             attack_ms: 6_500,
         },
         UnitDef {
@@ -579,7 +579,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 16_000.0,
             damage: 780.0,
             speed: 0.38,
-            range: 9.5,
+            range: 6.2,
             attack_ms: 5_800,
         },
         UnitDef {
@@ -592,7 +592,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_000.0,
             damage: 60.0,
             speed: 0.45,
-            range: 5.0,
+            range: 3.6,
             attack_ms: 1_000,
         },
         UnitDef {
@@ -605,7 +605,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_200.0,
             damage: 80.0,
             speed: 0.48,
-            range: 8.0,
+            range: 5.5,
             attack_ms: 2_000,
         },
         UnitDef {
@@ -618,7 +618,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_400.0,
             damage: 440.0,
             speed: 11.6,
-            range: 8.5,
+            range: 6.5,
             attack_ms: 3_600,
         },
         UnitDef {
@@ -631,7 +631,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_200.0,
             damage: 260.0,
             speed: 2.9,
-            range: 7.0,
+            range: 5.2,
             attack_ms: 1_200,
         },
         // ——— GLA infantry ———
@@ -645,7 +645,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 240.0,
             damage: 70.0,
             speed: 0.21,
-            range: 4.0,
+            range: 2.8,
             attack_ms: 750,
         },
         UnitDef {
@@ -658,7 +658,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 230.0,
             damage: 300.0,
             speed: 0.16,
-            range: 7.5,
+            range: 6.0,
             attack_ms: 3_200,
         },
         UnitDef {
@@ -697,7 +697,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 650.0,
             damage: 450.0,
             speed: 0.20,
-            range: 11.0,
+            range: 8.5,
             attack_ms: 4_500,
         },
         // ——— GLA vehicles ———
@@ -711,7 +711,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 900.0,
             damage: 85.0,
             speed: 0.80,
-            range: 5.0,
+            range: 3.6,
             attack_ms: 400,
         },
         UnitDef {
@@ -724,7 +724,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 4_200.0,
             damage: 420.0,
             speed: 0.62,
-            range: 7.5,
+            range: 5.0,
             attack_ms: 4_200,
         },
         UnitDef {
@@ -737,7 +737,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 7_800.0,
             damage: 640.0,
             speed: 0.48,
-            range: 8.2,
+            range: 5.5,
             attack_ms: 5_000,
         },
         UnitDef {
@@ -750,7 +750,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_100.0,
             damage: 280.0,
             speed: 0.88,
-            range: 10.0,
+            range: 7.5,
             attack_ms: 2_400,
         },
         UnitDef {
@@ -763,7 +763,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 2_000.0,
             damage: 90.0,
             speed: 0.55,
-            range: 8.0,
+            range: 5.5,
             attack_ms: 150,
         },
         UnitDef {
@@ -789,7 +789,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 1_600.0,
             damage: 600.0,
             speed: 0.34,
-            range: 7.5,
+            range: 13.0,
             attack_ms: 9_000,
         },
         UnitDef {
@@ -802,7 +802,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 900.0,
             damage: 30.0,
             speed: 0.60,
-            range: 4.0,
+            range: 3.0,
             attack_ms: 2_000,
         },
         UnitDef {
@@ -815,7 +815,7 @@ pub fn trainables() -> &'static [UnitDef] {
             hp: 3_500.0,
             damage: 100.0,
             speed: 0.52,
-            range: 5.5,
+            range: 4.0,
             attack_ms: 700,
         },
     ]

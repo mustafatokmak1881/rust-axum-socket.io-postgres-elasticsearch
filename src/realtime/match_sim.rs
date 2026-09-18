@@ -247,11 +247,11 @@ fn attack_cooldown_for(kind: &str) -> u32 {
 
 const RIFLE_MAG: u8 = 30;
 const RIFLE_RELOAD_MS: u32 = 5_000;
-/// Patriot engagement bubble — long-range guided intercept.
-const PATRIOT_RANGE: f32 = 17.0;
+/// Patriot engagement bubble — AA outranges tanks, not half the map.
+const PATRIOT_RANGE: f32 = 11.0;
 const PATRIOT_DAMAGE: f32 = 780.0;
-/// Pillbox MG nest — shorter than Patriot, shreds infantry.
-const BUNKER_RANGE: f32 = 8.0;
+/// Pillbox MG nest — short, shreds infantry; under tank main-gun reach.
+const BUNKER_RANGE: f32 = 5.2;
 const BUNKER_DAMAGE: f32 = 68.0;
 const BUNKER_MAG: u8 = 40;
 const BUNKER_RELOAD_MS: u32 = 2_200;
@@ -1162,7 +1162,7 @@ impl MatchSim {
         let (damage, range, mag) = match def.kind {
             "turret" | "stinger_site" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
             "bunker" | "tunnel_network" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
-            "gatling_cannon" | "firebase" => (55.0, 9.0, 60u8),
+            "gatling_cannon" | "firebase" => (55.0, 6.5, 60u8),
             _ => (0.0, 0.0, 0u8),
         };
         self.put_entity(Entity {
@@ -1593,7 +1593,7 @@ impl MatchSim {
         let (damage, range, mag) = match def.kind {
             "turret" | "stinger_site" => (PATRIOT_DAMAGE, PATRIOT_RANGE, 0u8),
             "bunker" | "tunnel_network" => (BUNKER_DAMAGE, BUNKER_RANGE, BUNKER_MAG),
-            "gatling_cannon" | "firebase" => (55.0, 9.0, 60u8),
+            "gatling_cannon" | "firebase" => (55.0, 6.5, 60u8),
             _ => (0.0, 0.0, 0u8),
         };
         self.put_entity(Entity {
