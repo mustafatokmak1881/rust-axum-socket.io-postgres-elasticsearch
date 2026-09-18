@@ -263,6 +263,13 @@ pub struct EntityView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PondView {
+    pub x: f32,
+    pub y: f32,
+    pub r: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchSnapshot {
     pub match_id: Uuid,
     pub map_size: u16,
@@ -287,6 +294,9 @@ pub struct MatchSnapshot {
     pub trainable: Vec<TrainableInfo>,
     #[serde(default)]
     pub scoreboard: Vec<ScoreboardRow>,
+    /// Impassable ponds (units + buildings).
+    #[serde(default)]
+    pub ponds: Vec<PondView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

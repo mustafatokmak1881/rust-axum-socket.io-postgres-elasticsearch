@@ -187,7 +187,7 @@ function renderOpenMatches(matches) {
       <button type="button" class="store-item" data-join="${escapeHtml(m.id)}">
         <strong>${m.players}/${m.max_players} live</strong>
         <small>${escapeHtml(m.id)}</small>
-        <span>Map ${m.map_size}${m.ffa ? " · FFA" : " · Allied"} · click to join</span>
+        <span>Map ${m.map_size}${m.ffa ? " · Alone" : " · Ally"} · click to join</span>
       </button>`,
     )
     .join("");
@@ -362,9 +362,9 @@ function enterMatch(snapshot) {
   $("#match-screen").hidden = false;
   const fac = String(snapshot.you_faction || state.faction || "usa").toUpperCase();
   if (snapshot.ffa) {
-    toast(`${fac} · FFA — everyone is hostile`);
+    toast(`${fac} · Alone — herkes düşman`);
   } else {
-    toast(`${fac} · Co-op vs AI · Team ${Number(snapshot.team) + 1}`);
+    toast(`${fac} · Ally — Team ${Number(snapshot.team) + 1} (yarı / yarı)`);
   }
   // Fullscreen only from click handlers (create/join/pointer) — browsers block gesture-less FS.
   void setupMatchScene(snapshot);
@@ -3241,14 +3241,16 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
   terrainBiomeSize = 96;
   terrainBiomeField = new Float32Array(terrainBiomeSize * terrainBiomeSize);
 
-  // Warm shared palette so biomes sit in one world, not clashing themes.
-  const desert = [194, 158, 98];
-  const desertDeep = [168, 128, 72];
-  const scrub = [110, 118, 62];
-  const scrubLight = [132, 128, 70];
-  const forest = [52, 78, 42];
-  const forestDeep = [38, 62, 34];
-  const dust = [150, 132, 88];
+  // Earthy soil palette — warm brown dirt with olive scrub / forest pockets.
+  const soilDeep = [92, 62, 38];
+  const soil = [118, 82, 48];
+  const soilLight = [148, 108, 68];
+  const scrub = [96, 92, 48];
+  const scrubLight = [118, 108, 58];
+  const forest = [48, 68, 36];
+  const forestDeep = [34, 52, 28];
+  const dust = [130, 98, 62];
+  const mud = [78, 54, 36];
 
   const scale = 2.4 + (terrainSeed % 7) * 0.12;
   const ox = (terrainSeed % 97) * 0.37;
@@ -3298,14 +3300,15 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
       let col;
       if (biome < 0.38) {
         const t = biome / 0.38;
-        col = lerpColor(desertDeep, desert, t * 0.65 + detail * 0.35);
-        // Dune streaks
-        const dune = Math.sin((x * 0.04 + y * 0.01) + ridge * 6) * 0.5 + 0.5;
-        col = lerpColor(col, dust, dune * 0.18 * (1 - t));
+        col = lerpColor(soilDeep, soil, t * 0.55 + detail * 0.45);
+        col = lerpColor(col, soilLight, detail * 0.25);
+        const dune = Math.sin(x * 0.04 + y * 0.01 + ridge * 6) * 0.5 + 0.5;
+        col = lerpColor(col, dust, dune * 0.14 * (1 - t));
+        col = lerpColor(col, mud, (1 - detail) * 0.12);
       } else if (biome < 0.62) {
         const t = (biome - 0.38) / 0.24;
-        col = lerpColor(desert, scrubLight, Math.min(1, t * 1.2));
-        col = lerpColor(col, scrub, 0.35 + detail * 0.4);
+        col = lerpColor(soil, scrubLight, Math.min(1, t * 1.15));
+        col = lerpColor(col, scrub, 0.3 + detail * 0.35);
       } else {
         const t = (biome - 0.62) / 0.38;
         col = lerpColor(scrub, forest, Math.min(1, t * 1.1));
@@ -3313,14 +3316,57 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
       }
 
       // Micro variation / soil grain
-      const grain = (detail - 0.5) * 22;
+      const grain = (detail - 0.5) * 18;
       const o = (y * size + x) * 4;
       px[o] = Math.max(0, Math.min(255, col[0] + grain));
-      px[o + 1] = Math.max(0, Math.min(255, col[1] + grain * 1.05));
-      px[o + 2] = Math.max(0, Math.min(255, col[2] + grain * 0.75));
+      px[o + 1] = Math.max(0, Math.min(255, col[1] + grain * 0.85));
+      px[o + 2] = Math.max(0, Math.min(255, col[2] + grain * 0.55));
       px[o + 3] = 255;
     }
   }
+
+  // Paint impassable ponds (world coords from snapshot).
+  const ponds = state.ponds || [];
+  for (const pond of ponds) {
+    const cx = (pond.x / mapSize) * size;
+    const cy = (pond.y / mapSize) * size;
+    const pr = (pond.r / mapSize) * size;
+    const r0 = Math.max(2, Math.floor(pr));
+    const x0 = Math.max(0, Math.floor(cx - r0 - 2));
+    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + 2));
+    const y0 = Math.max(0, Math.floor(cy - r0 - 2));
+    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + 2));
+    const deep = [28, 62, 78];
+    const mid = [42, 92, 108];
+    const rim = [72, 98, 78];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - cx;
+        const dy = y + 0.5 - cy;
+        const d = Math.hypot(dx, dy);
+        if (d > r0 + 1.5) continue;
+        const o = (y * size + x) * 4;
+        let col;
+        if (d > r0 * 0.92) {
+          const t = (d - r0 * 0.92) / (r0 * 0.2 + 1.5);
+          col = lerpColor(mid, rim, Math.min(1, t));
+          // Soft blend into soil under rim
+          const under = [px[o], px[o + 1], px[o + 2]];
+          col = lerpColor(col, under, Math.min(1, t * 0.65));
+        } else {
+          const t = d / (r0 * 0.92);
+          col = lerpColor(deep, mid, t * t);
+          // Specular shimmer
+          const shimmer = Math.sin(x * 0.08 + y * 0.05) * 8;
+          col = [col[0] + shimmer, col[1] + shimmer * 1.1, col[2] + shimmer * 1.2];
+        }
+        px[o] = Math.max(0, Math.min(255, col[0]));
+        px[o + 1] = Math.max(0, Math.min(255, col[1]));
+        px[o + 2] = Math.max(0, Math.min(255, col[2]));
+      }
+    }
+  }
+
   ctx.putImageData(img, 0, 0);
 
   // Soft photo texture wash — tinted so it doesn't fight biome colors.
@@ -8628,9 +8674,9 @@ $("#btn-create").addEventListener("click", () => {
   void enterGameFullscreen();
   send({
     t: "create_lobby",
-    max_players: Number($("#max-players").value) || 8,
+    max_players: Number($("#max-players").value) || 32,
     map_size: Number($("#map-size").value) || 128,
-    ffa: $("#ffa").checked,
+    ffa: ($("#match-mode")?.value || "ally") === "alone",
     faction: state.faction || "usa",
   });
   toast(`Starting ${String(state.faction || "usa").toUpperCase()} match…`);

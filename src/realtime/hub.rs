@@ -313,7 +313,7 @@ impl MatchHub {
             user.equipped_flag.clone(),
         )];
 
-        let sim = MatchSim::new(match_id, map_size, ffa, roster);
+        let sim = MatchSim::new(match_id, map_size, ffa, roster, max_players);
         let runtime = Arc::new(RwLock::new(MatchRuntime {
             sim,
             members: HashMap::from([(user_id, ())]),

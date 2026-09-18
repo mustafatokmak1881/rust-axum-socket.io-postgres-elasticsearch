@@ -9,12 +9,13 @@ use super::bots::{self, BotMind};
 use super::generals_roster::{self, faction_ok};
 use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
-    BuildableInfo, EntityView, MatchSnapshot, ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
+    BuildableInfo, EntityView, MatchSnapshot, PondView, ResourcesView, ScoreboardRow, ShotEvent,
+    TrainableInfo,
 };
 
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
-pub const MAX_PLAYERS: u8 = 16;
+pub const MAX_PLAYERS: u8 = 32;
 
 /// Total living+queued units with a single home HQ.
 pub const HOME_UNIT_BUDGET: usize = 36;
@@ -650,6 +651,31 @@ fn collision_pad() -> f32 {
     0.006
 }
 
+/// Deterministic ponds from match id — same seed the client uses for paint.
+fn generate_ponds(match_id: Uuid, map_size: u16) -> Vec<PondView> {
+    let mut seed = match_id.as_u128() as u64 ^ ((match_id.as_u128() >> 64) as u64);
+    if seed == 0 {
+        seed = 0x9e37_79b9_7f4a_7c15;
+    }
+    let map = map_size as f32;
+    let count = 7 + (seed % 5) as usize; // 7–11 ponds
+    let mut ponds = Vec::with_capacity(count);
+    let mut s = seed;
+    for i in 0..count {
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(i as u64 + 1);
+        let x = 10.0 + ((s % 10_000) as f32 / 10_000.0) * (map - 20.0).max(8.0);
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(17);
+        let y = 10.0 + ((s % 10_000) as f32 / 10_000.0) * (map - 20.0).max(8.0);
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(31);
+        let r = 2.8 + ((s % 50) as f32) * 0.07; // ~2.8–6.3
+        // Keep clear of map corners spawn bands a bit — still allow lakes mid-map.
+        ponds.push(PondView { x, y, r });
+    }
+    ponds
+}
+
 pub struct MatchSim {
     pub id: Uuid,
     pub map_size: u16,
@@ -657,6 +683,8 @@ pub struct MatchSim {
     pub tick: u64,
     pub players: HashMap<Uuid, PlayerState>,
     pub entities: HashMap<Uuid, Entity>,
+    /// Impassable water discs — blocks ground units and building placement.
+    pub ponds: Vec<PondView>,
     /// Spatial hash of `entities` — rebuilt/kept in sync for neighbor queries.
     pub(crate) grid: SpatialGrid,
     pub removed: Vec<Uuid>,
@@ -682,8 +710,10 @@ impl MatchSim {
         map_size: u16,
         ffa: bool,
         roster: Vec<(Uuid, String, String, u8, Option<String>)>,
+        target_players: u8,
     ) -> Self {
         let map_size = map_size.clamp(64, 256);
+        let ponds = generate_ponds(id, map_size);
         let mut sim = Self {
             id,
             map_size,
@@ -691,6 +721,7 @@ impl MatchSim {
             tick: 0,
             players: HashMap::new(),
             entities: HashMap::new(),
+            ponds,
             grid: SpatialGrid::new(),
             removed: Vec::new(),
             shots: Vec::new(),
@@ -714,58 +745,68 @@ impl MatchSim {
             );
         }
 
-        bots::seed_opening_bots(&mut sim);
+        let target = (target_players as usize).clamp(2, MAX_PLAYERS as usize);
+        bots::seed_opening_bots(&mut sim, target);
         if !sim.ffa {
             sim.rebalance_allied_teams();
         }
         sim
     }
 
-    /// Non-FFA skirmish: all humans co-op on team 0, all bots on team 1.
-    /// (Random 50/50 used to put ~half the AIs on your side → shared vision lit the whole map.)
+    /// Ally skirmish: split commanders ~50/50 by HQ position — west Team 0, east Team 1.
+    /// Alone (ffa): each commander is their own team (set at spawn).
     fn rebalance_allied_teams(&mut self) {
-        let humans: Vec<Uuid> = self
-            .players
-            .values()
-            .filter(|p| !p.is_bot())
-            .map(|p| p.user_id)
-            .collect();
-        let bots: Vec<Uuid> = self
-            .players
-            .values()
-            .filter(|p| p.is_bot())
-            .map(|p| p.user_id)
-            .collect();
-        if humans.is_empty() && bots.len() < 2 {
+        if self.ffa {
             return;
         }
-        for id in &humans {
-            if let Some(player) = self.players.get_mut(id) {
-                player.team = 0;
-            }
-            for entity in self.entities.values_mut() {
-                if entity.owner == *id {
-                    entity.team = 0;
-                    entity.dirty = true;
-                }
-            }
+        let mut marks: Vec<(Uuid, f32)> = Vec::new();
+        for p in self.players.values() {
+            let hx = self
+                .entities
+                .values()
+                .find(|e| e.owner == p.user_id && e.kind == "hq" && e.hp > 0.0)
+                .map(|e| e.x)
+                .unwrap_or(p.focus[0]);
+            marks.push((p.user_id, hx));
         }
-        for id in &bots {
+        if marks.len() < 2 {
+            return;
+        }
+        marks.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mid = marks.len().div_ceil(2);
+        for (i, (id, _)) in marks.iter().enumerate() {
+            let team = if i < mid { 0u8 } else { 1u8 };
             if let Some(player) = self.players.get_mut(id) {
-                player.team = 1;
+                player.team = team;
             }
             for entity in self.entities.values_mut() {
                 if entity.owner == *id {
-                    entity.team = 1;
+                    entity.team = team;
                     entity.dirty = true;
                 }
             }
         }
     }
 
-    /// Join mid-match: humans join team 0 (co-op); never dump a human onto the bot swarm.
-    fn pick_allied_team(&self) -> u8 {
-        0
+    /// Ally mid-join / bot seed: join the side with fewer commanders.
+    pub(crate) fn pick_allied_team(&self) -> u8 {
+        let mut t0 = 0usize;
+        let mut t1 = 0usize;
+        for p in self.players.values() {
+            if p.team == 0 {
+                t0 += 1;
+            } else if p.team == 1 {
+                t1 += 1;
+            } else {
+                // Odd leftover teams count toward the fuller side sense — treat as t1.
+                t1 += 1;
+            }
+        }
+        if t0 <= t1 {
+            0
+        } else {
+            1
+        }
     }
 
     pub(crate) fn spawn_commander(
@@ -778,7 +819,7 @@ impl MatchSim {
         connected: bool,
         bot: Option<BotMind>,
     ) {
-        let (x, y) = self.allocate_spawn_xy();
+        let (x, y) = self.allocate_spawn_xy(team);
         let slot = self.players.len();
         let colors = color_scheme_for_slot(slot);
 
@@ -840,8 +881,8 @@ impl MatchSim {
         self.reveal_vision_for(user_id);
     }
 
-    /// Place new HQs on a wide ring so cities sit ~3× farther apart than the old cluster.
-    fn allocate_spawn_xy(&self) -> (f32, f32) {
+    /// Place new HQs on a wide ring. Ally mode biases Team 0 west / Team 1 east.
+    fn allocate_spawn_xy(&self, team: u8) -> (f32, f32) {
         let map = self.map_size as f32;
         let hq_positions: Vec<(f32, f32)> = self
             .entities
@@ -850,8 +891,12 @@ impl MatchSim {
             .map(|e| (e.x, e.y))
             .collect();
 
-        let (bx, by) = if hq_positions.is_empty() {
-            // First player: cluster anchor slightly off map center.
+        let (bx, by) = if !self.ffa {
+            // Two fronts: west (team 0) vs east (team 1).
+            let x = if team == 0 { map * 0.22 } else { map * 0.78 };
+            let y = map * 0.50;
+            (x, y)
+        } else if hq_positions.is_empty() {
             (map * 0.42, map * 0.50)
         } else {
             let n = hq_positions.len() as f32;
@@ -860,25 +905,38 @@ impl MatchSim {
             (sx / n, sy / n)
         };
 
-        // Close enough that opening waves meet within ~1 min at infantry speed.
-        const MIN_SEP: f32 = 18.0;
         const GOLDEN: f32 = 2.399_963;
+        // Pack denser when the lobby is large so 32 HQs still fit.
+        let min_sep = if self.players.len() >= 20 {
+            11.0
+        } else if self.players.len() >= 12 {
+            14.0
+        } else {
+            18.0
+        };
 
-        for k in 0..160 {
-            let r = if hq_positions.is_empty() {
+        for k in 0..220 {
+            let r = if hq_positions.is_empty() && self.ffa {
                 0.0
+            } else if hq_positions.is_empty() {
+                (k as f32).sqrt() * 4.0
             } else {
-                MIN_SEP + (k as f32).sqrt() * 6.5
+                min_sep + (k as f32).sqrt() * 5.5
             };
             let angle = k as f32 * GOLDEN;
-            let x = (bx + angle.cos() * r).clamp(4.0, map - 5.0);
+            let mut x = (bx + angle.cos() * r).clamp(4.0, map - 5.0);
             let y = (by + angle.sin() * r).clamp(4.0, map - 5.0);
-            let ix = x.floor() as i32;
-            let iy = y.floor() as i32;
-
-            let fx = ix as f32 + 0.5;
-            let fy = iy as f32 + 0.5;
-            let sep = MIN_SEP * 0.85;
+            if !self.ffa {
+                // Keep allies on their half of the map.
+                if team == 0 {
+                    x = x.clamp(4.0, map * 0.45);
+                } else {
+                    x = x.clamp(map * 0.55, map - 5.0);
+                }
+            }
+            let fx = x.floor() as f32 + 0.5;
+            let fy = y.floor() as f32 + 0.5;
+            let sep = min_sep * 0.85;
             let mut blocked = false;
             self.grid.for_each_nearby(fx, fy, sep + MAX_ENTITY_RADIUS, |id| {
                 let Some(e) = self.entities.get(&id) else {
@@ -896,14 +954,23 @@ impl MatchSim {
                 false
             });
             if !blocked {
+                if self.water_blocks(fx, fy, building_radius("hq") + 0.5) {
+                    continue;
+                }
                 return (fx, fy);
             }
         }
 
-        (
-            bx.clamp(4.0, map - 5.0),
-            by.clamp(4.0, map - 5.0),
-        )
+        let fallback_x = if !self.ffa {
+            if team == 0 {
+                (map * 0.22).clamp(4.0, map - 5.0)
+            } else {
+                (map * 0.78).clamp(4.0, map - 5.0)
+            }
+        } else {
+            bx.clamp(4.0, map - 5.0)
+        };
+        (fallback_x, by.clamp(4.0, map - 5.0))
     }
 
     /// Mid-match join: spawn HQ on the same wide ring as the opening cities.
@@ -1227,6 +1294,7 @@ impl MatchSim {
             buildable: Self::buildable_info_for(&player.faction),
             trainable: Self::trainable_info_for(&player.faction),
             scoreboard: self.scoreboard_for(user_id),
+            ponds: self.ponds.clone(),
         })
     }
 
@@ -1459,6 +1527,10 @@ impl MatchSim {
         });
         if in_enemy_land {
             return Err("Enemy territory");
+        }
+
+        if self.water_blocks(fx, fy, place_r) {
+            return Err("Cannot build on water");
         }
 
         let buildings = self.count_buildings_for(user_id);
@@ -3627,6 +3699,18 @@ impl MatchSim {
         }
     }
 
+    fn water_blocks(&self, x: f32, y: f32, radius: f32) -> bool {
+        for p in &self.ponds {
+            let dx = p.x - x;
+            let dy = p.y - y;
+            let min = p.r + radius;
+            if dx * dx + dy * dy < min * min {
+                return true;
+            }
+        }
+        false
+    }
+
     fn collides_at(
         &self,
         self_id: Uuid,
@@ -3652,6 +3736,9 @@ impl MatchSim {
         overrun_team: Option<u8>,
         pass_allies: Option<u8>,
     ) -> bool {
+        if self.water_blocks(x, y, self_r) {
+            return true;
+        }
         let mut hit = false;
         self.grid.for_each_nearby(
             x,

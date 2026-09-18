@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a2614'/%3E%3Cpath d='M8 22 V10 h4 l4 8 4-8 h4 v12 h-3.2 V14.5 L16.5 22 h-1L11.2 14.5 V22z' fill='%237cfc00'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/play.css?v=armyCapHud">
+  <link rel="stylesheet" href="/assets/play.css?v=allyAloneMode">
   <script type="importmap">
   {
     "imports": {
@@ -37,7 +37,7 @@
     <section id="lobby-screen" class="screen">
       <div class="lobby-panel">
         <h1>Command Lobby</h1>
-        <p class="blurb">Match-based Generals · drop-in join · up to 50 commanders · fair cosmetics only</p>
+        <p class="blurb">Match-based Generals · drop-in join · up to 32 commanders · fair cosmetics only</p>
 
         <div class="faction-row" id="faction-row">
           <button type="button" data-faction="usa" class="faction on">USA</button>
@@ -47,12 +47,17 @@
 
         <div class="lobby-actions">
           <label>Slots
-            <input id="max-players" type="number" min="2" max="16" value="8">
+            <input id="max-players" type="number" min="2" max="32" value="32">
           </label>
           <label>Map
-            <input id="map-size" type="number" min="64" max="256" value="96">
+            <input id="map-size" type="number" min="64" max="256" value="128">
           </label>
-          <label class="check"><input id="ffa" type="checkbox"> FFA</label>
+          <label>Mode
+            <select id="match-mode">
+              <option value="ally" selected>Ally</option>
+              <option value="alone">Alone</option>
+            </select>
+          </label>
           <button type="button" id="btn-create" class="primary">Start Match</button>
         </div>
 
@@ -141,6 +146,6 @@
     </section>
   </div>
 
-  <script type="module" src="/assets/play.js?v=firebaseDistinct"></script>
+  <script type="module" src="/assets/play.js?v=slots32"></script>
 </body>
 </html>

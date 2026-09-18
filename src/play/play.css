@@ -127,7 +127,7 @@ html, body {
 label { font-size: 12px; color: #8a9a78; display: grid; gap: 4px; }
 label.check { display: flex; align-items: center; gap: 6px; }
 
-input {
+input, select {
   background: #0a100a;
   border: 1px solid var(--line);
   color: var(--hud);

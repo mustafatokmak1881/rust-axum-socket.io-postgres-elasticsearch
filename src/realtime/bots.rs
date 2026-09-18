@@ -8,7 +8,7 @@ use super::grid::MAX_ENTITY_RADIUS;
 use super::match_sim::{building_radius, MatchSim, MAX_PLAYERS};
 
 /// Seed bots up toward a full lobby (human already seated when MatchSim::new runs).
-pub const OPENING_BOT_TARGET: usize = 8;
+pub const OPENING_BOT_TARGET: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotStyle {
@@ -281,8 +281,8 @@ impl BotStyle {
     }
 }
 
-pub fn seed_opening_bots(sim: &mut MatchSim) {
-    let target = OPENING_BOT_TARGET.min(MAX_PLAYERS as usize);
+pub fn seed_opening_bots(sim: &mut MatchSim, target_players: usize) {
+    let target = target_players.clamp(2, OPENING_BOT_TARGET.min(MAX_PLAYERS as usize));
     let mut n = 0usize;
     while sim.players.len() < target {
         let profile = &PROFILES[n % PROFILES.len()];
@@ -291,7 +291,8 @@ pub fn seed_opening_bots(sim: &mut MatchSim) {
         let team = if sim.ffa {
             80 + sim.players.values().filter(|p| p.is_bot()).count() as u8
         } else {
-            1 // opposing coalition — never share FoW with the human host
+            // Balance toward 50/50 — final west/east split happens in rebalance_allied_teams.
+            sim.pick_allied_team()
         };
         let name = if batch == 0 {
             format!("{} · {}", profile.name, profile.country)
