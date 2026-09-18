@@ -4835,11 +4835,47 @@ function tankVariantFor(kind) {
     k.includes("radar_van") ||
     k.includes("crawler") ||
     k.includes("battle_bus") ||
-    k.includes("bomb_truck")
+    k.includes("bomb_truck") ||
+    k.includes("outpost")
   ) {
     return "wheeled";
   }
   return "crusader";
+}
+
+/** Ground vehicles that use hull faceYaw + tank drive (must match createUnitMesh). */
+function isVehicleDriveKind(kind) {
+  const k = String(kind || "");
+  if (!k || isAirUnitKind(k)) return false;
+  if (
+    k.includes("mlrs") ||
+    k.includes("tomahawk") ||
+    k.includes("inferno") ||
+    k.includes("scud")
+  ) {
+    return true; // MLRS also uses isTank drive path
+  }
+  if (k.includes("hunter")) return false;
+  return (
+    k.includes("tank") ||
+    k.includes("battlemaster") ||
+    k.includes("overlord") ||
+    k.includes("scorpion") ||
+    k.includes("marauder") ||
+    k.includes("paladin") ||
+    k.includes("quad_cannon") ||
+    k.includes("microwave") ||
+    k.includes("gatling") ||
+    k.includes("humvee") ||
+    k.includes("technical") ||
+    k.includes("buggy") ||
+    k.includes("radar_van") ||
+    k.includes("crawler") ||
+    k.includes("battle_bus") ||
+    k.includes("bomb_truck") ||
+    k.includes("outpost") ||
+    k.includes("ecm")
+  );
 }
 
 function createTankMesh(teamColor, opts = {}) {
@@ -4858,6 +4894,7 @@ function createTankMesh(teamColor, opts = {}) {
   g.userData.tankVariant = variant;
   g.userData.isAbrams = heavy;
   g.userData.factionStyle = style;
+  g.rotation.order = "YXZ";
 
   // USA steel-olive · China ochre · GLA desert scrap
   let hull = 0x4a5538;
@@ -5267,6 +5304,7 @@ function createWheeledVehicleMesh(teamColor, opts = {}) {
   g.userData.tankRigVersion = TANK_RIG_VERSION;
   g.userData.tankVariant = "wheeled";
   g.userData.factionStyle = style;
+  g.rotation.order = "YXZ";
 
   let body = 0x3a4530;
   let bodyDark = 0x2a3224;
@@ -5687,24 +5725,16 @@ function createUnitMesh(kind, teamColor) {
 
   // Heavy / medium / specialty tanks — distinct Generals silhouettes
   const tankVar = tankVariantFor(k);
-  if (tankVar !== "wheeled" && tankVar !== "crusader") {
-    return createTankMesh(teamColor, { style, variant: tankVar, heavy: isHeavyTankKind(k) });
-  }
-  if (k.includes("tank") && !k.includes("hunter")) {
-    return createTankMesh(teamColor, { style, variant: "crusader" });
+  if (isVehicleDriveKind(k) && tankVar !== "wheeled") {
+    return createTankMesh(teamColor, {
+      style,
+      variant: tankVar,
+      heavy: isHeavyTankKind(k),
+    });
   }
 
-  // Light vehicles
-  if (
-    k.includes("humvee") ||
-    k.includes("technical") ||
-    k.includes("rocket_buggy") ||
-    k.includes("radar_van") ||
-    k.includes("buggy") ||
-    k.includes("troop_crawler") ||
-    k.includes("battle_bus") ||
-    k.includes("bomb_truck")
-  ) {
+  // Light vehicles (Humvee / Technical / crawler / bus…)
+  if (tankVar === "wheeled") {
     return createLightVehicleMesh(teamColor, { style, kind: k });
   }
 
@@ -5875,23 +5905,13 @@ function upsertMesh(entity) {
       kind.includes("scud");
     const isAir = isAirUnitKind(kind);
     const isHeavy = isHeavyTankKind(kind);
-    const isTank =
-      !isMlrs &&
-      !isAir &&
-      (kind.includes("tank") ||
-        kind.includes("battlemaster") ||
-        kind.includes("scorpion") ||
-        kind.includes("quad_cannon") ||
-        kind.includes("microwave") ||
-        kind.includes("humvee") ||
-        kind.includes("technical") ||
-        kind.includes("buggy") ||
-        kind.includes("radar_van"));
+    const isTank = !isMlrs && !isAir && isVehicleDriveKind(kind);
     const isMortar =
       kind.includes("mortar") ||
       kind.includes("missile_defender") ||
       kind.includes("tank_hunter") ||
       kind.includes("rpg");
+    const wantVariant = isMlrs ? "mlrs" : isTank ? tankVariantFor(kind) : null;
     const needsWalkRig =
       !mesh.userData.isUnitRig ||
       (isAir &&
@@ -5904,7 +5924,7 @@ function upsertMesh(entity) {
         (!mesh.userData.isTank ||
           !mesh.getObjectByName("tankBarrel") ||
           (mesh.userData.tankRigVersion || 0) < TANK_RIG_VERSION ||
-          mesh.userData.tankVariant !== tankVariantFor(kind) ||
+          mesh.userData.tankVariant !== wantVariant ||
           (isHeavy && !mesh.userData.isAbrams) ||
           (!isHeavy && mesh.userData.isAbrams))) ||
       (isMortar && !mesh.userData.isMortar) ||
@@ -6323,15 +6343,20 @@ function smoothUnitFacing(mesh, dt) {
     const turretRate = mesh.userData.turretTurnRate || 1.35;
     const turret = mesh.getObjectByName("muzzleRoot");
 
-    // Hull follows travel direction; boost when skating sideways.
+    // Hull follows travel direction; snap hard when skating sideways.
     if (mesh.userData.faceYaw != null) {
       const diff = shortestAngle(mesh.rotation.y, mesh.userData.faceYaw);
       const abs = Math.abs(diff);
       let maxStep = hullRate * dt;
-      if (mesh.userData.moving && abs > 0.55) {
-        maxStep = Math.max(maxStep, abs * Math.min(1, dt * 8));
+      if (mesh.userData.moving && abs > 0.4) {
+        maxStep = Math.max(maxStep, abs * Math.min(1, dt * 10));
       }
-      mesh.rotation.y += Math.max(-maxStep, Math.min(maxStep, diff));
+      if (abs > 1.2) {
+        // >~70°: snap — remesh/variant tanks were stuck sliding sideways.
+        mesh.rotation.y = mesh.userData.faceYaw;
+      } else {
+        mesh.rotation.y += Math.max(-maxStep, Math.min(maxStep, diff));
+      }
     }
 
     // Turret independently tracks aim (or hull heading if no aim yet).
@@ -7912,12 +7937,18 @@ function animate() {
       if (mesh.userData.isRadar) {
         const dish = mesh.getObjectByName("radarDish");
         if (dish) dish.rotation.y += (mesh.userData.scanRate || 0.85) * dt;
-      } else if (mesh.userData.isPatriot || mesh.userData.isBunker) smoothPatriotFacing(mesh, dt);
-      else smoothUnitFacing(mesh, dt);
-      updateTankDrive(mesh, dt);
-      updateInfantryDrive(mesh, dt);
-      updateAirDrive(mesh, dt);
-      updateInfantryWalk(mesh, dt, now);
+      } else if (mesh.userData.isPatriot || mesh.userData.isBunker) {
+        smoothPatriotFacing(mesh, dt);
+      } else if (mesh.userData.isTank) {
+        // Drive first so faceYaw matches this frame's slide.
+        updateTankDrive(mesh, dt);
+        smoothUnitFacing(mesh, dt);
+      } else {
+        smoothUnitFacing(mesh, dt);
+        updateInfantryDrive(mesh, dt);
+        updateAirDrive(mesh, dt);
+        updateInfantryWalk(mesh, dt, now);
+      }
     }
   }
   for (const mesh of reap) reapUnitMesh(mesh);
