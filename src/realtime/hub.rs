@@ -550,12 +550,11 @@ impl MatchHub {
                                 && died.is_empty()
                                 && explored_new.is_empty()
                                 && shots.is_empty()
-                                && resources.is_none()
                                 && scoreboard.is_none()
                                 && !global_vision
                             {
-                                // Rare keepalive so the socket / UI don't look wedged.
-                                if tick % 20 != 0 {
+                                // Still push a light tick so resources/UI stay alive ~2 Hz.
+                                if tick % 10 != 0 {
                                     continue;
                                 }
                             }
