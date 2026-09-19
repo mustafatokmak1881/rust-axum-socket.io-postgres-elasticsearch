@@ -493,54 +493,106 @@ function setScoreboardOpen(open) {
 function syncAllyChatPanel() {
   const panel = $("#ally-chat");
   if (!panel) return;
-  const ally = Boolean(state.match && !state.match.ffa);
-  panel.hidden = !ally;
+  const inMatch = Boolean(state.match);
+  panel.hidden = !inMatch;
   const teamEl = $("#ally-chat-team");
+  const titleEl = $("#ally-chat-title");
+  const input = $("#ally-chat-input");
+  const alone = Boolean(state.match?.ffa);
+  if (titleEl) titleEl.textContent = alone ? "Chat" : "Ally Chat";
   if (teamEl) {
-    teamEl.textContent = ally
-      ? `Team ${Number(state.match.team) + 1}`
-      : "";
+    teamEl.textContent = alone
+      ? "herkes · @isim = PM"
+      : `Team ${Number(state.match.team) + 1}`;
   }
-  if (!ally) {
+  if (input) {
+    input.placeholder = alone
+      ? "Herkese yaz · @Ali özel mesaj"
+      : "Enter · takım sohbeti…";
+  }
+  if (!inMatch) {
     const log = $("#ally-chat-log");
     if (log) log.innerHTML = "";
+    chatUnreadWhispers = 0;
+    updateChatBadge();
   }
+}
+
+let chatUnreadWhispers = 0;
+
+function updateChatBadge() {
+  const badge = $("#ally-chat-badge");
+  if (!badge) return;
+  if (chatUnreadWhispers > 0) {
+    badge.hidden = false;
+    badge.textContent = chatUnreadWhispers > 9 ? "9+" : String(chatUnreadWhispers);
+  } else {
+    badge.hidden = true;
+    badge.textContent = "0";
+  }
+}
+
+function markChatWhispersRead() {
+  if (chatUnreadWhispers === 0) return;
+  chatUnreadWhispers = 0;
+  updateChatBadge();
+  $("#ally-chat-log")
+    ?.querySelectorAll(".line.whisper.unread")
+    .forEach((el) => el.classList.remove("unread"));
 }
 
 function appendAllyChat(msg) {
   const log = $("#ally-chat-log");
   const panel = $("#ally-chat");
   if (!log || !panel || panel.hidden) return;
-  const me = String(msg.from) === String(state.match?.you || state.user?.id || "");
+  const meId = String(state.match?.you || state.user?.id || "");
+  const me = String(msg.from) === meId;
+  const whisper = !!msg.whisper;
+  const toMe = whisper && String(msg.to || "") === meId;
+  const inputFocused = document.activeElement?.id === "ally-chat-input";
   const line = document.createElement("p");
-  line.className = `line${me ? " me" : ""}`;
+  line.className = `line${me ? " me" : ""}${whisper ? " whisper" : ""}`;
   const who = document.createElement("span");
   who.className = "who";
-  who.textContent = msg.name || "Komutan";
+  if (whisper) {
+    const toLabel = msg.to_name || "?";
+    who.textContent = me ? `PM → ${toLabel}` : `PM · ${msg.name || "?"}`;
+  } else {
+    who.textContent = msg.name || "Komutan";
+  }
   const body = document.createElement("span");
   body.textContent = msg.text || "";
   line.append(who, body);
   log.appendChild(line);
   while (log.children.length > 80) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
+
+  // Unread badge only for incoming private messages until chat is focused.
+  if (toMe && !me && !inputFocused) {
+    line.classList.add("unread");
+    chatUnreadWhispers = Math.min(99, chatUnreadWhispers + 1);
+    updateChatBadge();
+  }
 }
 
 function sendAllyChat() {
-  if (!state.match || state.match.ffa) return;
+  if (!state.match) return;
   const input = $("#ally-chat-input");
   if (!input) return;
   const text = String(input.value || "").trim();
   if (!text) return;
   send({ t: "ally_chat", text });
   input.value = "";
+  markChatWhispersRead();
 }
 
 function focusAllyChat() {
-  if (!state.match || state.match.ffa) return;
+  if (!state.match) return;
   const panel = $("#ally-chat");
   const input = $("#ally-chat-input");
   if (!panel || panel.hidden || !input) return;
   input.focus();
+  markChatWhispersRead();
 }
 
 function clearWorldMeshes() {
@@ -10956,7 +11008,7 @@ window.addEventListener("keydown", (event) => {
   }
 
   if (event.key === "Enter") {
-    if (!state.match || state.match.ffa || $("#match-screen")?.hidden) return;
+    if (!state.match || $("#match-screen")?.hidden) return;
     event.preventDefault();
     focusAllyChat();
     return;
@@ -11100,6 +11152,14 @@ $("#viewport")?.addEventListener("contextmenu", (e) => e.preventDefault());
 $("#ally-chat-form")?.addEventListener("submit", (event) => {
   event.preventDefault();
   sendAllyChat();
+});
+
+$("#ally-chat")?.addEventListener("pointerdown", () => {
+  markChatWhispersRead();
+});
+
+$("#ally-chat-input")?.addEventListener("focus", () => {
+  markChatWhispersRead();
 });
 
 connect();

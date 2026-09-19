@@ -663,7 +663,7 @@ impl MatchHub {
         }
     }
 
-    /// Match chat: Ally → team broadcast; Alone → `@name message` whisper.
+    /// Match chat: Ally → team; Alone → all, or `@name` whisper.
     async fn broadcast_ally_chat(&self, user_id: Uuid, raw: String) -> Result<(), String> {
         let cleaned = sanitize_ally_chat(&raw).ok_or("Empty chat")?;
         let match_id = *self
@@ -692,29 +692,55 @@ impl MatchHub {
                 .unwrap_or(0);
 
             if rt.sim.ffa {
-                let (target_query, body) = parse_whisper_target(&cleaned)
-                    .ok_or("Alone: @isim mesaj — örn. @Ali saldırıya hazır")?;
-                if body.is_empty() {
-                    return Err("Alone: @isim sonrası mesaj yaz".into());
+                if let Some((target_query, body)) = parse_whisper_target(&cleaned) {
+                    if body.is_empty() {
+                        return Err("PM: @isim sonrası mesaj yaz".into());
+                    }
+                    let target = resolve_chat_target(&rt.sim, user_id, &target_query)?;
+                    let to_name = target.label();
+                    let to_id = target.user_id;
+                    let connected = target.connected;
+                    let msg = ServerMsg::AllyChat {
+                        from: user_id,
+                        name,
+                        team,
+                        text: body,
+                        ts,
+                        whisper: true,
+                        to: Some(to_id),
+                        to_name: Some(to_name),
+                    };
+                    let mut recipients = vec![user_id];
+                    if to_id != user_id && connected {
+                        recipients.push(to_id);
+                    }
+                    (recipients, msg)
+                } else {
+                    // General Alone chat — everyone in the match.
+                    let msg = ServerMsg::AllyChat {
+                        from: user_id,
+                        name,
+                        team,
+                        text: cleaned,
+                        ts,
+                        whisper: false,
+                        to: None,
+                        to_name: None,
+                    };
+                    let recipients: Vec<Uuid> = rt
+                        .members
+                        .keys()
+                        .copied()
+                        .filter(|uid| {
+                            rt.sim
+                                .players
+                                .get(uid)
+                                .map(|p| p.connected)
+                                .unwrap_or(false)
+                        })
+                        .collect();
+                    (recipients, msg)
                 }
-                let target = resolve_chat_target(&rt.sim, user_id, &target_query)?;
-                let to_name = target.label();
-                let to_id = target.user_id;
-                let msg = ServerMsg::AllyChat {
-                    from: user_id,
-                    name,
-                    team,
-                    text: body,
-                    ts,
-                    whisper: true,
-                    to: Some(to_id),
-                    to_name: Some(to_name),
-                };
-                let mut recipients = vec![user_id];
-                if to_id != user_id && target.connected {
-                    recipients.push(to_id);
-                }
-                (recipients, msg)
             } else {
                 let msg = ServerMsg::AllyChat {
                     from: user_id,
