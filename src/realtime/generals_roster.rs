@@ -85,7 +85,7 @@ pub fn trainables() -> &'static [UnitDef] {
             attack_ms: 800,
         },
         UnitDef {
-            // Armed infiltrator — large intel vision + building sabotage.
+            // Unarmed infiltrator — stealth scout + building sabotage (no gunfight).
             unit: "spy",
             name: "Spy",
             faction: "usa",
@@ -93,13 +93,13 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_gold: 520,
             train_ms: 9_000,
             hp: 240.0,
-            damage: 70.0,
+            damage: 0.0,
             speed: 0.24,
-            range: 4.0,
-            attack_ms: 720,
+            range: 0.0,
+            attack_ms: 0,
         },
         UnitDef {
-            // Cyber specialist — disable buildings, drain power, steal gold.
+            // Unarmed cyber specialist — stealth + hack (no gunfight).
             unit: "hacker",
             name: "Hacker",
             faction: "usa",
@@ -107,13 +107,13 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_gold: 680,
             train_ms: 11_000,
             hp: 180.0,
-            damage: 28.0,
+            damage: 0.0,
             speed: 0.18,
-            range: 2.8,
-            attack_ms: 1_100,
+            range: 0.0,
+            attack_ms: 0,
         },
         UnitDef {
-            // Insurgent — convert nearby enemy infantry (revolt).
+            // Unarmed insurgent — stealth + revolt (no gunfight).
             unit: "terrorist",
             name: "Terrorist",
             faction: "usa",
@@ -121,10 +121,10 @@ pub fn trainables() -> &'static [UnitDef] {
             cost_gold: 600,
             train_ms: 10_000,
             hp: 220.0,
-            damage: 60.0,
+            damage: 0.0,
             speed: 0.21,
-            range: 3.8,
-            attack_ms: 850,
+            range: 0.0,
+            attack_ms: 0,
         },
         UnitDef {
             // M1A1 Abrams — real refs: GDLS / USMC factfile / AFV Database

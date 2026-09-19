@@ -2244,7 +2244,7 @@ const STRATEGY_RIG_VERSION = 2;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
 const TANK_RIG_VERSION = 17;
 /** Infantry mesh revision. */
-const INFANTRY_RIG_VERSION = 11;
+const INFANTRY_RIG_VERSION = 12;
 /** MLRS mesh revision. */
 const MLRS_RIG_VERSION = 5;
 
@@ -6920,28 +6920,22 @@ const ENTITY_INFO = {
   spy: {
     name: "Spy",
     role: "Özel",
-    range: 4,
-    damage: 70,
     speed: 0.24,
-    tags: ["Görünmez", "Sabotaj", "Geniş görüş"],
+    tags: ["Görünmez", "Silahsız", "Sabotaj", "Geniş görüş", "AoE isabet = ölüm"],
     stealth: true,
   },
   hacker: {
     name: "Hacker",
     role: "Özel",
-    range: 2.8,
-    damage: 28,
     speed: 0.18,
-    tags: ["Görünmez", "Bina hack", "Güç / altın"],
+    tags: ["Görünmez", "Silahsız", "Bina hack", "AoE isabet = ölüm"],
     stealth: true,
   },
   terrorist: {
     name: "Terrorist",
     role: "Özel",
-    range: 3.8,
-    damage: 60,
     speed: 0.21,
-    tags: ["Görünmez", "İsyan", "Piyade çevir"],
+    tags: ["Görünmez", "Silahsız", "İsyan", "AoE isabet = ölüm"],
     stealth: true,
   },
   tank: {
@@ -8083,17 +8077,7 @@ function createSpecialistMesh(kind, teamColor, opts = {}) {
     // overcoat flaps — parented to torso (moves with bob)
     addMesh(torso, new THREE.CapsuleGeometry(0.018, 0.05, 4, 10), soft(0x141820), -0.028, 0.13, -0.01);
     addMesh(torso, new THREE.CapsuleGeometry(0.018, 0.05, 4, 10), soft(0x141820), 0.028, 0.13, -0.01);
-    // suppressed pistol on right hand path
-    const pistol = new THREE.Group();
-    pistol.name = "muzzleRoot";
-    pistol.position.set(0.04, 0.11, 0.045);
-    addMesh(pistol, new THREE.CapsuleGeometry(0.007, 0.028, 4, 8), soft(0x2a2e32, { metalness: 0.75, roughness: 0.32 }), 0, 0, 0, Math.PI / 2);
-    addMesh(pistol, new THREE.CylinderGeometry(0.005, 0.006, 0.022, 8), soft(0x1a1c1e, { metalness: 0.55 }), 0, 0, 0.028, Math.PI / 2);
-    const tip = new THREE.Object3D();
-    tip.name = "muzzle";
-    tip.position.set(0, 0, 0.042);
-    pistol.add(tip);
-    torso.add(pistol);
+    // Unarmed — no pistol (stealth ops only).
   } else if (kind === "hacker") {
     // Hood — soft half-sphere behind head
     const hood = new THREE.Mesh(
@@ -8142,20 +8126,10 @@ function createSpecialistMesh(kind, teamColor, opts = {}) {
     for (const sx of [-0.022, 0, 0.022]) {
       addMesh(torso, new THREE.CapsuleGeometry(0.008, 0.012, 4, 8), soft(0x2a2418), sx, 0.132, 0.034);
     }
-    // rugged rifle
-    const rifle = new THREE.Group();
-    rifle.name = "muzzleRoot";
-    rifle.position.set(0.032, 0.12, 0.02);
-    addMesh(rifle, new THREE.CapsuleGeometry(0.008, 0.07, 4, 8), soft(0x3a3a38, { metalness: 0.65, roughness: 0.4 }), 0, 0, 0.04, Math.PI / 2);
-    addMesh(rifle, new THREE.BoxGeometry(0.012, 0.028, 0.016), soft(0x2c2c2a), 0, -0.012, 0.02);
-    const tip = new THREE.Object3D();
-    tip.name = "muzzle";
-    tip.position.set(0, 0, 0.09);
-    rifle.add(tip);
-    torso.add(rifle);
+    // Unarmed — no rifle (stealth ops only).
   }
 
-  // Default muzzle if missing (hacker)
+  // Invisible aim node (abilities don't need a gun mesh).
   if (!torso.getObjectByName("muzzleRoot")) {
     const tipRoot = new THREE.Group();
     tipRoot.name = "muzzleRoot";

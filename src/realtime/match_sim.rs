@@ -428,7 +428,8 @@ fn is_rifle_infantry(kind: &str) -> bool {
     )
 }
 
-/// Spy / hacker / terrorist — invisible to all enemy units (no FOW reveal, no auto-target).
+/// Spy / hacker / terrorist — fully stealthed vs enemies (no FOW, no auto-target).
+/// Unarmed: no gun combat. Still die to splash / crush if caught in the blast.
 #[inline]
 fn is_stealth_specialist(kind: &str) -> bool {
     matches!(kind, "spy" | "hacker" | "terrorist")
@@ -2216,6 +2217,14 @@ impl MatchSim {
         let mut sortie_err: Option<&'static str> = None;
         let mut armed_any = false;
         for id in ids {
+            // Unarmed stealth ops — move only; no attack orders.
+            if self
+                .entities
+                .get(id)
+                .is_some_and(|e| e.owner == user_id && is_stealth_specialist(&e.kind))
+            {
+                continue;
+            }
             let is_jet = self
                 .entities
                 .get(id)
@@ -2683,6 +2692,18 @@ impl MatchSim {
 
             // Acquire / refresh targets in weapon range (including while moving).
             // F-16: only engage while bombs are loaded (paid sortie) — no free auto-hunting.
+            // Stealth specialists are unarmed scouts — never lock a fire target.
+            if is_stealth_specialist(&entity.kind) {
+                if entity.damage != 0.0 || entity.range != 0.0 {
+                    entity.damage = 0.0;
+                    entity.range = 0.0;
+                    entity.dirty = true;
+                }
+                if entity.target.is_some() {
+                    entity.target = None;
+                    entity.dirty = true;
+                }
+            } else {
             let f16_can_hunt = !is_f16_kind(&entity.kind) || entity.mag_ammo > 0;
             if f16_can_hunt && entity.damage > 0.0 && entity.range > 0.0 && self.tick % 2 == 0 {
                 if obeying_move {
@@ -2704,6 +2725,7 @@ impl MatchSim {
                 // Hangared / RTB — drop stale attack locks.
                 entity.target = None;
                 entity.dirty = true;
+            }
             }
 
             let mut goal = entity.move_to;
@@ -5152,7 +5174,6 @@ impl MatchSim {
                     || other.hp <= 0.0
                     || other.team == team
                     || is_vehicle_kind(&other.kind)
-                    || is_stealth_specialist(&other.kind)
                 {
                     return false;
                 }
