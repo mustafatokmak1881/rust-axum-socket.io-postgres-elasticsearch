@@ -21,21 +21,21 @@ pub const MIN_MAP_SIZE: u16 = 96;
 pub const MAX_MAP_SIZE: u16 = 2048;
 
 /// Auto map edge from commander count — large gaps between bases.
-/// ~96 wu cell spacing on a √n grid → 2≈170, 8≈310, 32≈580, 64≈800.
+/// ~112 wu cell spacing on a √n grid → longer marches, slower snowballs.
 pub fn map_size_for_players(max_players: u8) -> u16 {
     let n = max_players.clamp(2, MAX_PLAYERS) as f32;
-    let spacing = 96.0;
-    let size = (spacing * n.sqrt() + 40.0).round() as i32;
+    let spacing = 112.0;
+    let size = (spacing * n.sqrt() + 48.0).round() as i32;
     let size = ((size + 1) / 2) * 2; // even
     (size as u16).clamp(MIN_MAP_SIZE, MAX_MAP_SIZE)
 }
 
-/// Total living+queued units with a single home HQ.
-pub const HOME_UNIT_BUDGET: usize = 18;
+/// Total living+queued units with a single home HQ — room to grow over a long match.
+pub const HOME_UNIT_BUDGET: usize = 36;
 /// Extra units per captured colony HQ (= half of home → x + x/2 + x/2 …).
 pub const COLONY_UNIT_BUDGET: usize = HOME_UNIT_BUDGET / 2;
-/// Non-HQ structures allowed at the home base (econ ring + 3 Patriots + room to expand).
-pub const HOME_BUILDING_BUDGET: usize = 9;
+/// Non-HQ structures at home (econ + 5 Patriots + expansion headroom).
+pub const HOME_BUILDING_BUDGET: usize = 14;
 /// Extra structures unlocked per captured colony HQ (= half of home).
 pub const COLONY_BUILDING_BUDGET: usize = HOME_BUILDING_BUDGET / 2;
 /// Wipe / claim radius around a fallen HQ (city footprint).
@@ -192,7 +192,7 @@ pub struct Resources {
 impl Resources {
     pub fn starter() -> Self {
         Self {
-            gold: 10_000,
+            gold: 4_000,
             // HQ grants base power on spawn — start dark until then.
             power: 0,
             power_used: 0,
@@ -711,8 +711,7 @@ fn formation_slot(index: usize, count: usize, radius: f32) -> (f32, f32) {
     (ang.cos() * r, ang.sin() * r)
 }
 
-/// Dense opening-army pack — kept for potential future spawn layouts.
-#[allow(dead_code)]
+/// Dense opening-army pack (golden-angle spiral).
 fn tight_pack_slot(index: usize, radius: f32) -> (f32, f32) {
     if index == 0 {
         return (0.0, 0.0);
@@ -1085,8 +1084,8 @@ impl MatchSim {
             team,
             x,
             y,
-            hp: 7500.0,
-            max_hp: 7500.0,
+            hp: 12_000.0,
+            max_hp: 12_000.0,
             building: true,
             unit: false,
             flag,
@@ -1237,8 +1236,8 @@ impl MatchSim {
         let faction = "usa".to_string();
         if let Some(player) = self.players.get_mut(&user_id) {
             player.faction = faction.clone();
-            // HQ base + margin so 3 Patriots (−90) don't brown out the starter plant.
-            player.resources.power = player.resources.power.saturating_add(100);
+            // HQ base + margin so 5 Patriots (−150) don't brown out the starter plant.
+            player.resources.power = player.resources.power.saturating_add(160);
         }
 
         // Ring of finished starter structures around the Command Center.
@@ -1253,38 +1252,33 @@ impl MatchSim {
             self.spawn_finished_building(user_id, team, &faction, kind, hx + ox, hy + oy);
         }
 
-        // Three Patriots on the perimeter — early raids should hurt.
-        let patriot_slots: [(f32, f32); 3] = [
-            (3.9, -3.3),
-            (-3.9, -3.3),
-            (0.0, 4.8),
+        // Five Patriots on the perimeter — early all-ins should stall, not snowball.
+        let patriot_slots: [(f32, f32); 5] = [
+            (4.2, -3.4),
+            (-4.2, -3.4),
+            (4.6, 2.8),
+            (-4.6, 2.8),
+            (0.0, 5.0),
         ];
         for (ox, oy) in patriot_slots {
             self.spawn_finished_building(user_id, team, &faction, "turret", hx + ox, hy + oy);
         }
 
-        let tank = trainables().iter().find(|u| u.unit == "tank");
-        let infantry = trainables().iter().find(|u| u.unit == "ranger");
+        let Some(tank) = trainables().iter().find(|u| u.unit == "tank") else {
+            return;
+        };
 
+        // Small opening armor only — big armies are earned over a long match.
+        const TANK_COUNT: usize = 3;
         let hq_r = building_radius("hq");
-        let unit_offsets: &[(f32, f32)] = &[
-            (4.0, 0.0),
-            (4.2, 1.1),
-            (3.6, -1.0),
-            (5.0, 0.5),
-            (4.6, -0.8),
-        ];
-        for (i, &(ox, oy)) in unit_offsets.iter().enumerate() {
-            let def = if i == 0 {
-                tank
-            } else {
-                infantry.or(tank)
-            };
-            let Some(def) = def else { continue };
-            let tr = unit_radius(def.unit);
-            let map = self.map_size as f32;
-            let pack_x = (hx + ox).clamp(0.5, map - 0.5);
-            let pack_y = (hy + oy).clamp(0.5, map - 0.5);
+        let tr = unit_radius(tank.unit);
+        let pack_cx = hx + 4.2;
+        let pack_cy = hy - 0.2;
+        let map = self.map_size as f32;
+        for i in 0..TANK_COUNT {
+            let (ox, oy) = tight_pack_slot(i, tr);
+            let pack_x = (pack_cx + ox).clamp(0.5, map - 0.5);
+            let pack_y = (pack_cy + oy).clamp(0.5, map - 0.5);
             let (sx, sy) = if self.collides_at(Uuid::nil(), pack_x, pack_y, tr, None, true)
                 || self.point_hits_solid(pack_x, pack_y, tr, hx, hy, hq_r)
             {
@@ -1298,7 +1292,7 @@ impl MatchSim {
             } else {
                 (pack_x, pack_y)
             };
-            self.insert_unit(user_id, team, def, sx, sy);
+            self.insert_unit(user_id, team, tank, sx, sy);
         }
     }
 
@@ -2340,13 +2334,13 @@ impl MatchSim {
             let g = by_owner.entry(e.owner).or_default();
             match e.kind.as_str() {
                 "hq" => {
-                    g.gold += 14;
+                    g.gold += 10;
                 }
                 "supply" | "supply_stash" => {
-                    g.gold += 50;
+                    g.gold += 36;
                 }
                 "black_market" => {
-                    g.gold += 64;
+                    g.gold += 48;
                 }
                 "power_plant" | "nuclear_reactor" if is_power_producer(e.kind.as_str()) => {
                     g.pwr += 15;
@@ -3614,8 +3608,8 @@ impl MatchSim {
             team,
             x: fx,
             y: fy,
-            hp: 7500.0,
-            max_hp: 7500.0,
+            hp: 12_000.0,
+            max_hp: 12_000.0,
             building: true,
             unit: false,
             flag,
