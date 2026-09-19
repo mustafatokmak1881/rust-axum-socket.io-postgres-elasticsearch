@@ -34,6 +34,15 @@ const factionColors = {
   default: 0x556644,
 };
 
+/** Display name for faction ids (usa roster = Türkiye until multi-nation lands). */
+function factionDisplayName(faction) {
+  const f = String(faction || "").toLowerCase();
+  if (f === "usa") return "Türkiye";
+  if (f === "china") return "Çin";
+  if (f === "gla") return "GLA";
+  return f ? f.toUpperCase() : "Türkiye";
+}
+
 function toast(message, ms = 2800) {
   const el = $("#toast");
   el.textContent = message;
@@ -459,7 +468,7 @@ function renderScoreboard() {
       ]
         .filter(Boolean)
         .join(" ");
-      const faction = String(r.faction || "").toUpperCase();
+      const faction = factionDisplayName(r.faction);
       const tag = r.bot
         ? "BOT"
         : r.you
@@ -524,7 +533,7 @@ function centerCameraOnOwner(ownerId) {
   panCameraTo(hq.x, hq.y);
   const row = (state.scoreboard || []).find((r) => String(r.id) === owner);
   const label = row
-    ? `${String(row.faction || "").toUpperCase()} · ${row.name || "HQ"}`
+    ? `${factionDisplayName(row.faction)} · ${row.name || "Üs"}`
     : "Komuta Merkezi";
   toast(
     hqs.length > 1
@@ -555,7 +564,7 @@ function syncAllyChatPanel() {
   const titleEl = $("#ally-chat-title");
   const input = $("#ally-chat-input");
   const alone = Boolean(state.match?.ffa);
-  if (titleEl) titleEl.textContent = alone ? "Chat" : "Ally Chat";
+  if (titleEl) titleEl.textContent = alone ? "Sohbet" : "Müttefik Sohbet";
   if (teamEl) {
     teamEl.textContent = alone
       ? "herkes · @isim = PM"
@@ -737,9 +746,9 @@ function enterMatch(snapshot) {
   $("#match-screen").hidden = false;
   const fac = String(snapshot.you_faction || state.faction || "usa").toUpperCase();
   if (snapshot.ffa) {
-    toast(`${fac} · Alone — herkes düşman`);
+    toast(`${fac} · Tek başına — herkes düşman`);
   } else {
-    toast(`${fac} · Ally — Team ${Number(snapshot.team) + 1} (yarı / yarı)`);
+    toast(`${fac} · Müttefik — Takım ${Number(snapshot.team) + 1} (yarı / yarı)`);
   }
   syncAllyChatPanel();
   // Fullscreen only from click handlers (create/join/pointer) — browsers block gesture-less FS.
@@ -918,13 +927,13 @@ function renderBuildList(items) {
 }
 
 const BUILDING_LABELS = {
-  barracks: "Barracks",
-  war_factory: "War Factory",
-  arms_dealer: "Arms Dealer",
-  airfield: "Airfield",
-  palace: "Palace",
-  supply: "Supply Center",
-  supply_stash: "Supply Stash",
+  barracks: "Kışla",
+  war_factory: "Savaş Fabrikası",
+  arms_dealer: "Silah Taciri",
+  airfield: "Havaalanı",
+  palace: "Saray",
+  supply: "İkmal Merkezi",
+  supply_stash: "İkmal Deposu",
 };
 
 function renderUnitList(items) {
@@ -943,10 +952,10 @@ function refreshTrainablePanel() {
     : items;
   const hint = fromKind
     ? BUILDING_LABELS[fromKind] || fromKind
-    : "select a production building";
+    : "üretim binası seç";
   $("#unit-list").innerHTML =
     `<div class="unit-hint" style="opacity:.7;font-size:12px;margin:0 0 6px">${escapeHtml(
-      String(state.faction || "usa").toUpperCase(),
+      factionDisplayName(state.faction || "usa"),
     )} · ${escapeHtml(hint)}</div>` +
     (filtered.length
       ? filtered
@@ -966,8 +975,8 @@ function refreshTrainablePanel() {
           .join("")
       : `<small style="opacity:.65">${
           fromKind
-            ? "No units from this building"
-            : "Click barracks / factory / airfield to train"
+            ? "Bu binadan birim yok"
+            : "Eğitim için kışla / fabrika / havaalanı seç"
         }</small>`);
 }
 
