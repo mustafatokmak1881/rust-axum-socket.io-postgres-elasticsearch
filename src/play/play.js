@@ -12708,7 +12708,7 @@ function animate() {
 
 /** Auto edge from commander count — mirrors server `map_size_for_players` (roomy). */
 function mapSizeForCommanders(n) {
-  const c = Math.max(2, Math.min(64, Number(n) || 2));
+  const c = Math.max(2, Math.min(100, Number(n) || 2));
   let size = Math.round(96 * Math.sqrt(c) + 40);
   size = Math.round(size / 2) * 2;
   return Math.max(96, Math.min(2048, size));

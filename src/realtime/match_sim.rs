@@ -14,7 +14,7 @@ use super::protocol::{
 
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
-pub const MAX_PLAYERS: u8 = 64;
+pub const MAX_PLAYERS: u8 = 100;
 /// Smallest playable edge (2 commanders).
 pub const MIN_MAP_SIZE: u16 = 96;
 /// Cap for auto-scaled arenas.
