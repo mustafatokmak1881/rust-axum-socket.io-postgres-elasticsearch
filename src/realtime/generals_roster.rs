@@ -59,10 +59,11 @@ pub fn buildables() -> &'static [BuildDef] {
             kind: "airfield",
             name: "Airfield",
             faction: "usa",
-            cost_gold: 5_500,
-            build_ms: 22_000,
-            power: -50,
-            hp: 3_200.0,
+            // Large runway complex — 3× prior cost; hangar holds 4 jets max.
+            cost_gold: 16_500,
+            build_ms: 28_000,
+            power: -80,
+            hp: 4_800.0,
         },
     ]
 }
@@ -189,7 +190,7 @@ pub fn army_cap_for(unit: &str) -> usize {
         "terrorist" => 3,
         "tank" => 10,
         "mlrs" => 3,
-        "f16" => 2,
+        "f16" => 4,
         _ => 6,
     }
 }

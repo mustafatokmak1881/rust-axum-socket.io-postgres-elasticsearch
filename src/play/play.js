@@ -955,7 +955,7 @@ function refreshTrainablePanel() {
       <button type="button" class="unit-item" data-unit="${escapeHtml(item.unit)}" data-from="${escapeHtml(item.from_building)}">
         <strong>${escapeHtml(item.name)}</strong>
         <small>${item.cost_gold ?? 0}g · ${Math.round((item.train_ms || 0) / 1000)}s${
-          item.unit === "f16" ? " · kalkış 6500g" : ""
+          item.unit === "f16" ? " · kalkış 19500g" : ""
         }</small>
       </button>`,
           )
@@ -2231,7 +2231,7 @@ const BUILDING_VISUAL = {
   nuclear_reactor: 1.7,
   supply: 1.7,
   supply_stash: 1.7,
-  airfield: 2.35,
+  airfield: 3.7,
   strategy_center: 1.9,
   propaganda_center: 1.9,
   palace: 1.9,
@@ -2251,7 +2251,7 @@ const BUILDING_VISUAL = {
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 12;
+const BUILDING_FIT_VERSION = 13;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
 const PATRIOT_RIG_VERSION = 6;
 /** China Gattling Cannon mesh revision. */
@@ -2377,12 +2377,14 @@ function finishProcBuilding(root, kind, unitHeight, ownerColors) {
     kind === "hq"
       ? 1.05
       : kind === "war_factory" || kind === "airfield"
-        ? 0.72
+        ? kind === "airfield"
+          ? 0.85
+          : 0.72
         : kind === "turret" || kind === "bunker"
           ? 0.42
           : 0.58;
   const badgeZ =
-    kind === "hq" ? 0.95 : kind === "airfield" ? 0.55 : kind === "war_factory" ? 0.75 : 0.62;
+    kind === "hq" ? 0.95 : kind === "airfield" ? 0.85 : kind === "war_factory" ? 0.75 : 0.62;
   attachOwnerTricolor(root, cols, { y: badgeY, z: badgeZ });
   return applyDirectionalShadows(root);
 }
@@ -2921,7 +2923,7 @@ function createWarFactoryMesh(fallbackMat, ownerColors) {
   return finishProcBuilding(root, "war_factory", 1.35, cols);
 }
 
-/** USA Airfield — runway strip, hangar, control cabin. */
+/** USA Airfield — large runway strip (4-jet hangar), control cabin. */
 function createAirfieldMesh(fallbackMat, ownerColors) {
   const cols = ownerColorsFromMat(fallbackMat, ownerColors);
   const p = milPalette(cols);
@@ -2932,31 +2934,31 @@ function createAirfieldMesh(fallbackMat, ownerColors) {
   const hangar = p.olive;
   const hangarRoof = p.oliveDark || 0x3a4030;
 
-  // Apron / runway
-  bldgPart(root, new THREE.BoxGeometry(2.4, 0.04, 1.05), asphalt, 0, 0.02, 0, 0, 0, 0, {
+  // Apron / runway — sized for 4 parked jets
+  bldgPart(root, new THREE.BoxGeometry(3.8, 0.045, 1.75), asphalt, 0, 0.022, 0, 0, 0, 0, {
     roughness: 0.95,
     metalness: 0.05,
     cast: false,
   });
-  bldgPart(root, new THREE.BoxGeometry(2.2, 0.015, 0.06), mark, 0, 0.045, 0, 0, 0, 0, {
+  bldgPart(root, new THREE.BoxGeometry(3.5, 0.015, 0.07), mark, 0, 0.048, 0, 0, 0, 0, {
     roughness: 0.7,
     metalness: 0.1,
     cast: false,
   });
-  for (const z of [-0.38, 0.38]) {
-    bldgPart(root, new THREE.BoxGeometry(2.15, 0.012, 0.035), mark, 0, 0.04, z, 0, 0, 0, {
+  for (const z of [-0.62, 0.62]) {
+    bldgPart(root, new THREE.BoxGeometry(3.4, 0.012, 0.04), mark, 0, 0.042, z, 0, 0, 0, {
       roughness: 0.75,
       cast: false,
     });
   }
-  // Taxi chevrons
-  for (let i = -2; i <= 2; i++) {
+  // Taxi chevrons + pad marks (4 stalls)
+  for (let i = -3; i <= 3; i++) {
     bldgPart(
       root,
-      new THREE.BoxGeometry(0.14, 0.012, 0.04),
+      new THREE.BoxGeometry(0.16, 0.012, 0.045),
       mark,
-      i * 0.38,
-      0.042,
+      i * 0.48,
+      0.044,
       0,
       0,
       0,
@@ -2964,37 +2966,56 @@ function createAirfieldMesh(fallbackMat, ownerColors) {
       { roughness: 0.7, cast: false },
     );
   }
+  for (const [ox, oz] of [
+    [-0.72, -0.38],
+    [0.72, -0.38],
+    [-0.72, 0.38],
+    [0.72, 0.38],
+  ]) {
+    bldgPart(root, new THREE.BoxGeometry(0.55, 0.01, 0.28), asphaltDark, ox, 0.038, oz, 0, 0, 0, {
+      roughness: 0.9,
+      cast: false,
+    });
+  }
 
-  // Hangar
-  bldgPart(root, new THREE.BoxGeometry(0.85, 0.42, 0.7), hangar, -0.7, 0.24, -0.55, 0, 0, 0, {
+  // Twin hangars (capacity cue)
+  bldgPart(root, new THREE.BoxGeometry(1.35, 0.52, 0.95), hangar, -1.05, 0.28, -0.85, 0, 0, 0, {
     metalness: 0.35,
     roughness: 0.55,
   });
-  bldgPart(root, new THREE.BoxGeometry(0.92, 0.05, 0.76), hangarRoof, -0.7, 0.48, -0.55, 0, 0, 0, {
+  bldgPart(root, new THREE.BoxGeometry(1.45, 0.06, 1.02), hangarRoof, -1.05, 0.58, -0.85, 0, 0, 0, {
     metalness: 0.55,
     roughness: 0.4,
   });
-  bldgPart(root, new THREE.BoxGeometry(0.55, 0.38, 0.04), asphaltDark, -0.7, 0.22, -0.2, 0, 0, 0, {
+  bldgPart(root, new THREE.BoxGeometry(0.9, 0.46, 0.05), asphaltDark, -1.05, 0.26, -0.38, 0, 0, 0, {
     metalness: 0.2,
     roughness: 0.7,
   });
+  bldgPart(root, new THREE.BoxGeometry(1.2, 0.48, 0.85), hangar, 1.0, 0.26, -0.82, 0, 0, 0, {
+    metalness: 0.35,
+    roughness: 0.55,
+  });
+  bldgPart(root, new THREE.BoxGeometry(1.28, 0.055, 0.92), hangarRoof, 1.0, 0.54, -0.82, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
 
-  // Control cabin
-  bldgPart(root, new THREE.BoxGeometry(0.35, 0.28, 0.32), p.concrete, 0.85, 0.18, -0.5);
-  bldgPart(root, new THREE.BoxGeometry(0.28, 0.14, 0.28), 0x1a2830, 0.85, 0.38, -0.5, 0, 0, 0, {
+  // Control tower
+  bldgPart(root, new THREE.BoxGeometry(0.42, 0.36, 0.4), p.concrete, 0.1, 0.22, -0.95);
+  bldgPart(root, new THREE.BoxGeometry(0.34, 0.18, 0.34), 0x1a2830, 0.1, 0.48, -0.95, 0, 0, 0, {
     metalness: 0.4,
     roughness: 0.25,
   });
-  bldgPart(root, new THREE.CylinderGeometry(0.03, 0.03, 0.35, 6), p.metalBright, 0.85, 0.55, -0.5);
+  bldgPart(root, new THREE.CylinderGeometry(0.035, 0.035, 0.45, 6), p.metalBright, 0.1, 0.7, -0.95);
 
   // Fuel / munitions bunkers
-  bldgPart(root, new THREE.CylinderGeometry(0.12, 0.14, 0.22, 10), p.metal, 0.55, 0.14, 0.35, 0, 0, 0, {
+  bldgPart(root, new THREE.CylinderGeometry(0.14, 0.16, 0.26, 10), p.metal, 1.45, 0.16, 0.55, 0, 0, 0, {
     metalness: 0.7,
     roughness: 0.35,
   });
-  bldgPart(root, new THREE.BoxGeometry(0.28, 0.16, 0.22), p.warning, 0.95, 0.12, 0.35);
+  bldgPart(root, new THREE.BoxGeometry(0.34, 0.18, 0.26), p.warning, 1.85, 0.14, 0.55);
 
-  return finishProcBuilding(root, "airfield", 1.55, cols);
+  return finishProcBuilding(root, "airfield", 1.85, cols);
 }
 
 function createBuildingMesh(kind, fallbackMat, ownerColors) {
@@ -6359,7 +6380,7 @@ function showSelectedBuildingDetail(ent) {
   if (econ && !state.selectedBuild) {
     const q = Number(ent.train_queue) || 0;
     const isAir = String(ent.kind) === "airfield";
-    const hangar = isAir ? hangaredF16Count(ent.owner) : 0;
+    const hangar = isAir ? hangaredF16Count(ent.owner, ent) : 0;
     let train = "";
     if (ent.train_progress != null && ent.train_progress < 1) {
       train = ` · ${isAir ? "AIR" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
@@ -6368,14 +6389,14 @@ function showSelectedBuildingDetail(ent) {
     } else if (q > 0) {
       train = ` · Kuyruk ×${q}`;
     }
-    if (isAir && hangar > 0) {
-      train += ` · Hangar ${hangar}`;
+    if (isAir) {
+      train += ` · Hangar ${hangar}/4`;
     }
     $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}${train}${extra}`;
   } else if (!state.selectedBuild) {
     const q = Number(ent.train_queue) || 0;
     const isAir = String(ent.kind) === "airfield";
-    const hangar = isAir ? hangaredF16Count(ent.owner) : 0;
+    const hangar = isAir ? hangaredF16Count(ent.owner, ent) : 0;
     let train = "";
     if (ent.train_progress != null && ent.train_progress < 1) {
       train = ` · ${isAir ? "AIR" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
@@ -6384,8 +6405,8 @@ function showSelectedBuildingDetail(ent) {
     } else if (q > 0) {
       train = ` · Kuyruk ×${q}`;
     }
-    if (isAir && hangar > 0) {
-      train += ` · Hangar ${hangar}`;
+    if (isAir) {
+      train += ` · Hangar ${hangar}/4`;
     }
     $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b>${train}${extra}`;
   }
@@ -6970,7 +6991,7 @@ const ENTITY_INFO = {
   airfield: {
     name: "Airfield",
     role: "Üretim",
-    tags: ["Hava", "F-16 hangar"],
+    tags: ["Hava", "4 F-16 hangar"],
   },
   turret: {
     name: "Patriot Battery",
@@ -7065,7 +7086,7 @@ const ENTITY_INFO = {
     range: 16.5,
     damage: 8800,
     speed: 10.8,
-    tags: ["Hangar", "1 bomba / sorti", "Kalkış 6500g"],
+    tags: ["Hangar", "1 bomba / sorti", "Kalkış 19500g"],
   },
 };
 
@@ -7177,8 +7198,8 @@ function buildEntityTipLines(entity) {
     rows.push({ k: "Kuyruk", v: `×${queue} emir` });
   }
   if (String(entity.kind || "") === "airfield") {
-    const hangar = hangaredF16Count(entity.owner);
-    if (hangar > 0) rows.push({ k: "Hangar", v: `${hangar} F-16` });
+    const hangar = hangaredF16Count(entity.owner, entity);
+    rows.push({ k: "Hangar", v: `${hangar}/4 F-16` });
   }
 
   return { name, rows, tags, relation: relationForEntity(entity), owner: entity.owner_name };
@@ -7296,7 +7317,7 @@ function onPointerDown(event) {
       }).length;
       toast(
         jets
-          ? `F-16 sorti · hedef ${enemy.kind} · kalkış 6500g/jet`
+          ? `F-16 sorti · hedef ${enemy.kind} · kalkış 19500g/jet`
           : `Attacking ${enemy.kind} (${state.selectedUnits.length})`,
       );
     } else {
@@ -7307,7 +7328,7 @@ function onPointerDown(event) {
           return e && String(e.kind || "").includes("f16") && !e.airborne;
         });
       if (onlyHangaredF16) {
-        toast("F-16 hangarda — saldırı emri ver (kalkış 6500g)");
+        toast("F-16 hangarda — saldırı emri ver (kalkış 19500g)");
         return;
       }
       send({ t: "move_units", ids: state.selectedUnits, x: point.x, y: point.z });
@@ -7473,7 +7494,7 @@ function attachOwnerMarkings(mesh, entity) {
 function labelHeightFor(entity) {
   if (entity.building) {
     if (entity.kind === "hq") return 2.15;
-    if (entity.kind === "airfield") return 1.85;
+    if (entity.kind === "airfield") return 2.15;
     if (entity.kind === "bunker") return 0.48;
     if (entity.kind === "radar") return 1.1;
     if (entity.kind === "turret") return 0.92;
@@ -7487,8 +7508,11 @@ function labelHeightFor(entity) {
   return h + (tank ? 0.14 : 0.08);
 }
 
-function hangaredF16Count(owner) {
+function hangaredF16Count(owner, nearEntity) {
   const oid = String(owner || "");
+  const ax = nearEntity ? Number(nearEntity.x) : null;
+  const ay = nearEntity ? Number(nearEntity.y) : null;
+  const r2 = 2.2 * 2.2; // ~airfield apron half-extent
   let n = 0;
   for (const e of state.entities.values()) {
     if (String(e.owner) !== oid) continue;
@@ -7496,6 +7520,11 @@ function hangaredF16Count(owner) {
     if (!(k === "f16" || k.includes("f16"))) continue;
     if (e.airborne) continue;
     if ((e.hp ?? 1) <= 0) continue;
+    if (ax != null && ay != null) {
+      const dx = Number(e.x) - ax;
+      const dy = Number(e.y) - ay;
+      if (dx * dx + dy * dy > r2) continue;
+    }
     n += 1;
   }
   return n;

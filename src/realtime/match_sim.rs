@@ -357,10 +357,12 @@ const BUNKER_SCAN_RATE: f32 = 0.75;
 const BUNKER_AIM_ALIGN: f32 = 0.12;
 
 /// F-16 strike: gold per takeoff (not per bomb). Rare, decisive sorties.
-const F16_SORTIE_GOLD: i32 = 6_500;
+const F16_SORTIE_GOLD: i32 = 19_500;
 /// One bomb per sortie — drop and RTB immediately.
 const F16_BOMBS: u8 = 1;
 const F16_REARM_MS: u32 = 80_000;
+/// Jets hangared / assigned / queued per airfield.
+const AIRFIELD_HANGAR_CAP: usize = 4;
 
 #[inline]
 fn is_f16_kind(kind: &str) -> bool {
@@ -742,7 +744,7 @@ fn building_visual_size(kind: &str) -> f32 {
         "war_factory" | "arms_dealer" => 2.1,
         "barracks" => 1.35,
         "power_plant" | "nuclear_reactor" | "supply" | "supply_stash" => 1.7,
-        "airfield" => 2.35,
+        "airfield" => 3.7,
         "strategy_center" | "propaganda_center" | "palace" | "internet_center" | "black_market" => {
             1.9
         }
@@ -2235,6 +2237,13 @@ impl MatchSim {
             return Err("Wrong building type");
         }
 
+        // Airfield hangar: max 4 F-16s (parked + airborne home + queued) per strip.
+        if is_f16_kind(def.unit) && building.kind == "airfield" {
+            if self.airfield_f16_load(building_id, user_id) >= AIRFIELD_HANGAR_CAP {
+                return Err("Hangar dolu — hava alanında en fazla 4 F-16");
+            }
+        }
+
         // Only HQ-scaled army budget (shown on HUD as units/units_cap).
         let budget = self.unit_budget_for(user_id);
         let total = self.count_all_units_with_queue(user_id);
@@ -2538,7 +2547,7 @@ impl MatchSim {
         }
         let player = self.players.get_mut(&user_id).ok_or("Not in match")?;
         if player.resources.gold < F16_SORTIE_GOLD {
-            return Err("F-16 kalkışı için 6500 gold gerekli");
+            return Err("F-16 kalkışı için 19500 gold gerekli");
         }
         player.resources.gold -= F16_SORTIE_GOLD;
         if let Some(e) = self.entities.get_mut(&unit_id) {
@@ -2550,8 +2559,8 @@ impl MatchSim {
         Ok(())
     }
 
-    fn nearest_owned_airfield_pad(&self, owner: Uuid, from_x: f32, from_y: f32) -> Option<(f32, f32)> {
-        let mut best: Option<(f32, f32, f32)> = None;
+    fn nearest_owned_airfield_id(&self, owner: Uuid, from_x: f32, from_y: f32) -> Option<Uuid> {
+        let mut best: Option<(Uuid, f32)> = None;
         for e in self.entities.values() {
             if e.owner != owner || e.hp <= 0.0 || e.kind != "airfield" || e.build_remaining_ms > 0 {
                 continue;
@@ -2559,12 +2568,116 @@ impl MatchSim {
             let dx = e.x - from_x;
             let dy = e.y - from_y;
             let d2 = dx * dx + dy * dy;
-            if best.map_or(true, |(_, _, d)| d2 < d) {
-                best = Some((e.x + 2.4, e.y, d2));
+            if best.map_or(true, |(_, d)| d2 < d) {
+                best = Some((e.id, d2));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+
+    /// Parked + airborne jets that call this strip home + F-16 jobs in its queue.
+    fn airfield_f16_load(&self, airfield_id: Uuid, owner: Uuid) -> usize {
+        let Some(af) = self.entities.get(&airfield_id) else {
+            return 0;
+        };
+        if af.kind != "airfield" || af.owner != owner || af.hp <= 0.0 {
+            return 0;
+        }
+        let queued = af
+            .train_queue
+            .iter()
+            .filter(|j| is_f16_kind(&j.unit))
+            .count();
+        let assigned = self
+            .entities
+            .values()
+            .filter(|e| {
+                e.owner == owner
+                    && e.unit
+                    && e.hp > 0.0
+                    && is_f16_kind(&e.kind)
+                    && self.nearest_owned_airfield_id(owner, e.x, e.y) == Some(airfield_id)
+            })
+            .count();
+        assigned + queued
+    }
+
+    /// Four apron slots inside the airfield footprint (2×2).
+    fn airfield_pad_slots(ax: f32, ay: f32) -> [(f32, f32); 4] {
+        const OX: f32 = 0.72;
+        const OY: f32 = 0.38;
+        [
+            (ax - OX, ay - OY),
+            (ax + OX, ay - OY),
+            (ax - OX, ay + OY),
+            (ax + OX, ay + OY),
+        ]
+    }
+
+    fn free_airfield_pad(
+        &self,
+        airfield_id: Uuid,
+        ax: f32,
+        ay: f32,
+        exclude: Option<Uuid>,
+    ) -> (f32, f32) {
+        let map = self.map_size as f32;
+        let slots = Self::airfield_pad_slots(ax, ay);
+        for (sx, sy) in slots {
+            let x = sx.clamp(0.5, map - 0.5);
+            let y = sy.clamp(0.5, map - 0.5);
+            let occupied = self.entities.values().any(|e| {
+                if Some(e.id) == exclude || !e.unit || e.hp <= 0.0 || !is_f16_kind(&e.kind) {
+                    return false;
+                }
+                // Only count hangared jets (not out on a sortie).
+                let airborne = e.mag_ammo > 0 || e.move_to.is_some() || e.target.is_some();
+                if airborne {
+                    return false;
+                }
+                let dx = e.x - x;
+                let dy = e.y - y;
+                dx * dx + dy * dy < 0.22 * 0.22
+            });
+            if !occupied {
+                return (x, y);
+            }
+        }
+        // Fallback: slight offset from center so jets don't stack perfectly.
+        let n = self
+            .entities
+            .values()
+            .filter(|e| {
+                e.unit
+                    && e.hp > 0.0
+                    && is_f16_kind(&e.kind)
+                    && Some(e.id) != exclude
+                    && self.nearest_owned_airfield_id(e.owner, e.x, e.y) == Some(airfield_id)
+            })
+            .count();
+        let ang = n as f32 * 1.1;
+        (
+            (ax + ang.cos() * 0.55).clamp(0.5, map - 0.5),
+            (ay + ang.sin() * 0.35).clamp(0.5, map - 0.5),
+        )
+    }
+
+    fn nearest_owned_airfield_pad(&self, owner: Uuid, from_x: f32, from_y: f32) -> Option<(f32, f32)> {
+        let mut best: Option<(Uuid, f32, f32, f32)> = None;
+        for e in self.entities.values() {
+            if e.owner != owner || e.hp <= 0.0 || e.kind != "airfield" || e.build_remaining_ms > 0 {
+                continue;
+            }
+            let dx = e.x - from_x;
+            let dy = e.y - from_y;
+            let d2 = dx * dx + dy * dy;
+            if best.map_or(true, |(_, _, _, d)| d2 < d) {
+                best = Some((e.id, e.x, e.y, d2));
             }
         }
         let map = self.map_size as f32;
-        if let Some((x, y, _)) = best {
+        if let Some((id, ax, ay, _)) = best {
+            let (x, y) = self.free_airfield_pad(id, ax, ay, None);
             return Some((x.clamp(0.5, map - 0.5), y.clamp(0.5, map - 0.5)));
         }
         self.players.get(&owner).and_then(|p| {
@@ -2826,12 +2939,11 @@ impl MatchSim {
                         } else if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
                             let uid = Uuid::new_v4();
                             let (sx, sy) = if is_f16_kind(def.unit) {
-                                // Park on the airfield apron — hangared until a sortie.
-                                let map = self.map_size as f32;
-                                (
-                                    (entity.x + 0.15).clamp(0.5, map - 0.5),
-                                    entity.y.clamp(0.5, map - 0.5),
-                                )
+                                // Park on a free apron slot — hangared until a sortie.
+                                let af_id = entity.id;
+                                let ax = entity.x;
+                                let ay = entity.y;
+                                self.free_airfield_pad(af_id, ax, ay, Some(uid))
                             } else if is_air_kind(def.unit) {
                                 self.find_air_spawn_near(
                                     entity.x,
