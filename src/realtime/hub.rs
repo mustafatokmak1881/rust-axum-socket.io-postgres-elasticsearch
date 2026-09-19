@@ -226,8 +226,8 @@ impl MatchHub {
             }
             ClientMsg::Attack { ids, target_id } => {
                 self.with_match_mut(user_id, |sim| {
-                    sim.attack(user_id, &ids, target_id);
-                    Ok(())
+                    sim.attack(user_id, &ids, target_id)
+                        .map_err(|e| e.to_string())
                 })
                 .await?;
             }

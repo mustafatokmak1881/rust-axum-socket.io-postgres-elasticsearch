@@ -55,6 +55,15 @@ pub fn buildables() -> &'static [BuildDef] {
             power: -30,
             hp: 2_600.0,
         },
+        BuildDef {
+            kind: "airfield",
+            name: "Airfield",
+            faction: "usa",
+            cost_gold: 5_500,
+            build_ms: 22_000,
+            power: -50,
+            hp: 3_200.0,
+        },
     ]
 }
 
@@ -151,6 +160,22 @@ pub fn trainables() -> &'static [UnitDef] {
             range: 22.0,
             attack_ms: 9_200,
         },
+        UnitDef {
+            // F-16C — hangared at Airfield. Each attack order burns a sortie fee
+            // (see F16_SORTIE_GOLD); jet RTBs after bombs and rearms slowly.
+            // Mk84-class blast sized to erase a tight tank column (~10 MBT seat).
+            unit: "f16",
+            name: "F-16 Fighting Falcon",
+            faction: "usa",
+            from_building: "airfield",
+            cost_gold: 3_400,
+            train_ms: 48_000,
+            hp: 1_600.0,
+            damage: 8_800.0,
+            speed: 10.8,
+            range: 16.5,
+            attack_ms: 2_600,
+        },
     ]
 }
 
@@ -164,6 +189,7 @@ pub fn army_cap_for(unit: &str) -> usize {
         "terrorist" => 3,
         "tank" => 10,
         "mlrs" => 3,
+        "f16" => 2,
         _ => 6,
     }
 }

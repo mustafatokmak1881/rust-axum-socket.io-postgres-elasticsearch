@@ -951,14 +951,16 @@ function refreshTrainablePanel() {
             (item) => `
       <button type="button" class="unit-item" data-unit="${escapeHtml(item.unit)}" data-from="${escapeHtml(item.from_building)}">
         <strong>${escapeHtml(item.name)}</strong>
-        <small>${item.cost_gold ?? 0}g · ${Math.round((item.train_ms || 0) / 1000)}s</small>
+        <small>${item.cost_gold ?? 0}g · ${Math.round((item.train_ms || 0) / 1000)}s${
+          item.unit === "f16" ? " · kalkış 6500g" : ""
+        }</small>
       </button>`,
           )
           .join("")
       : `<small style="opacity:.65">${
           fromKind
             ? "No units from this building"
-            : "Click barracks / factory / arms dealer to train"
+            : "Click barracks / factory / airfield to train"
         }</small>`);
 }
 
@@ -2211,7 +2213,7 @@ const BUILDING_VISUAL = {
   nuclear_reactor: 1.7,
   supply: 1.7,
   supply_stash: 1.7,
-  airfield: 2.0,
+  airfield: 2.35,
   strategy_center: 1.9,
   propaganda_center: 1.9,
   palace: 1.9,
@@ -2231,7 +2233,7 @@ const BUILDING_VISUAL = {
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 9;
+const BUILDING_FIT_VERSION = 10;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
 const PATRIOT_RIG_VERSION = 5;
 /** China Gattling Cannon mesh revision. */
@@ -2780,6 +2782,81 @@ function createWarFactoryMesh(fallbackMat) {
   return finishProcBuilding(root, "war_factory", 1.35);
 }
 
+/** USA Airfield — runway strip, hangar, control cabin. */
+function createAirfieldMesh(fallbackMat) {
+  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const root = new THREE.Group();
+  const asphalt = 0x3a3c40;
+  const asphaltDark = 0x2a2c30;
+  const mark = 0xe8e0c8;
+  const hangar = p.olive;
+  const hangarRoof = p.oliveDark || 0x3a4030;
+
+  // Apron / runway
+  bldgPart(root, new THREE.BoxGeometry(2.4, 0.04, 1.05), asphalt, 0, 0.02, 0, 0, 0, 0, {
+    roughness: 0.95,
+    metalness: 0.05,
+    cast: false,
+  });
+  bldgPart(root, new THREE.BoxGeometry(2.2, 0.015, 0.06), mark, 0, 0.045, 0, 0, 0, 0, {
+    roughness: 0.7,
+    metalness: 0.1,
+    cast: false,
+  });
+  for (const z of [-0.38, 0.38]) {
+    bldgPart(root, new THREE.BoxGeometry(2.15, 0.012, 0.035), mark, 0, 0.04, z, 0, 0, 0, {
+      roughness: 0.75,
+      cast: false,
+    });
+  }
+  // Taxi chevrons
+  for (let i = -2; i <= 2; i++) {
+    bldgPart(
+      root,
+      new THREE.BoxGeometry(0.14, 0.012, 0.04),
+      mark,
+      i * 0.38,
+      0.042,
+      0,
+      0,
+      0,
+      0,
+      { roughness: 0.7, cast: false },
+    );
+  }
+
+  // Hangar
+  bldgPart(root, new THREE.BoxGeometry(0.85, 0.42, 0.7), hangar, -0.7, 0.24, -0.55, 0, 0, 0, {
+    metalness: 0.35,
+    roughness: 0.55,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.92, 0.05, 0.76), hangarRoof, -0.7, 0.48, -0.55, 0, 0, 0, {
+    metalness: 0.55,
+    roughness: 0.4,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.55, 0.38, 0.04), asphaltDark, -0.7, 0.22, -0.2, 0, 0, 0, {
+    metalness: 0.2,
+    roughness: 0.7,
+  });
+
+  // Control cabin
+  bldgPart(root, new THREE.BoxGeometry(0.35, 0.28, 0.32), p.concrete, 0.85, 0.18, -0.5);
+  bldgPart(root, new THREE.BoxGeometry(0.28, 0.14, 0.28), 0x1a2830, 0.85, 0.38, -0.5, 0, 0, 0, {
+    metalness: 0.4,
+    roughness: 0.25,
+  });
+  bldgPart(root, new THREE.CylinderGeometry(0.03, 0.03, 0.35, 6), p.metalBright, 0.85, 0.55, -0.5);
+
+  // Fuel / munitions bunkers
+  bldgPart(root, new THREE.CylinderGeometry(0.12, 0.14, 0.22, 10), p.metal, 0.55, 0.14, 0.35, 0, 0, 0, {
+    metalness: 0.7,
+    roughness: 0.35,
+  });
+  bldgPart(root, new THREE.BoxGeometry(0.28, 0.16, 0.22), p.warning, 0.95, 0.12, 0.35);
+
+  return finishProcBuilding(root, "airfield", 1.55);
+}
+
 function createBuildingMesh(kind, fallbackMat) {
   if (kind === "turret" || kind === "stinger_site") return createPatriotBatteryMesh(fallbackMat);
   if (kind === "gatling_cannon") return createGattlingCannonMesh(fallbackMat);
@@ -2816,11 +2893,7 @@ function createBuildingMesh(kind, fallbackMat) {
   }
   if (kind === "supply" || kind === "supply_stash") return createSupplyCenterMesh(fallbackMat);
   if (kind === "war_factory" || kind === "arms_dealer") return createWarFactoryMesh(fallbackMat);
-  if (kind === "airfield") {
-    const m = createWarFactoryMesh(fallbackMat);
-    m.scale.set(1.35, 1, 0.85);
-    return m;
-  }
+  if (kind === "airfield") return createAirfieldMesh(fallbackMat);
 
   // Unknown kind — small procedural shed
   const p = milPalette(fallbackMat?.color?.getHex?.());
@@ -6360,7 +6433,15 @@ function onPointerDown(event) {
     const enemy = enemyUnderPointer(event, point);
     if (enemy) {
       send({ t: "attack", ids: state.selectedUnits, target_id: enemy.id });
-      toast(`Attacking ${enemy.kind} (${state.selectedUnits.length})`);
+      const jets = state.selectedUnits.filter((id) => {
+        const e = state.entities.get(id);
+        return e && String(e.kind || "").includes("f16");
+      }).length;
+      toast(
+        jets
+          ? `F-16 sorti · hedef ${enemy.kind} · kalkış 6500g/jet`
+          : `Attacking ${enemy.kind} (${state.selectedUnits.length})`,
+      );
     } else {
       send({ t: "move_units", ids: state.selectedUnits, x: point.x, y: point.z });
       toast(`Moving ${state.selectedUnits.length}`);
@@ -6760,6 +6841,7 @@ function unitDims(kind) {
   if (
     k.includes("raptor") ||
     k.includes("mig") ||
+    k.includes("f16") ||
     k.includes("comanche") ||
     k.includes("helix") ||
     k.includes("chinook")
@@ -8239,13 +8321,14 @@ function createMlrsMesh(teamColor) {
   return g;
 }
 
-const AIR_RIG_VERSION = 3;
+const AIR_RIG_VERSION = 4;
 
 function isAirUnitKind(kind) {
   const k = String(kind || "");
   return (
     k.includes("raptor") ||
     k.includes("mig") ||
+    k.includes("f16") ||
     k.includes("comanche") ||
     k.includes("helix") ||
     k.includes("chinook")
@@ -8254,7 +8337,7 @@ function isAirUnitKind(kind) {
 
 function isJetKind(kind) {
   const k = String(kind || "");
-  return k.includes("raptor") || k.includes("mig");
+  return k.includes("raptor") || k.includes("mig") || k.includes("f16");
 }
 
 function isHeavyTankKind(kind) {
@@ -9050,6 +9133,7 @@ function clientMoveSpeed(kind) {
   // Tank 0.58 ≈ 50 km/h; air scaled from real cruise km/h.
   if (isAirUnitKind(k)) {
     if (k.includes("mig")) return 11.6; // ~1000 km/h
+    if (k.includes("f16")) return 11.2; // ~960 km/h
     if (k.includes("raptor")) return 11.0; // ~950 km/h
     if (k.includes("comanche")) return 3.15; // ~270 km/h
     if (k.includes("helix")) return 2.9; // ~250 km/h
@@ -9678,7 +9762,8 @@ function spawnShotFx(shot) {
   const isAirBomb =
     !!fromMesh?.userData?.isJet ||
     kind.includes("raptor") ||
-    kind.includes("mig");
+    kind.includes("mig") ||
+    kind.includes("f16");
   const isAirRocket =
     !isAirBomb &&
     (!!fromMesh?.userData?.isHeli ||

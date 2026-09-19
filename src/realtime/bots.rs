@@ -754,7 +754,7 @@ fn order_attack(sim: &mut MatchSim, bot_id: Uuid, u: &OwnedUnit, target: Uuid) {
     if u.target == Some(target) {
         return;
     }
-    sim.attack(bot_id, &[u.id], target);
+    let _ = sim.attack(bot_id, &[u.id], target);
 }
 
 fn order_move(sim: &mut MatchSim, bot_id: Uuid, u: &OwnedUnit, x: f32, y: f32, slack: f32) {

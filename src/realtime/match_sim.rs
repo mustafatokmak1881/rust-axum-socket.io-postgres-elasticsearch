@@ -350,6 +350,16 @@ const BUNKER_SLEW_RATE: f32 = 1.85;
 const BUNKER_SCAN_RATE: f32 = 0.75;
 const BUNKER_AIM_ALIGN: f32 = 0.12;
 
+/// F-16 strike: gold per takeoff (not per bomb). Rare, decisive sorties.
+const F16_SORTIE_GOLD: i32 = 6_500;
+const F16_BOMBS: u8 = 2;
+const F16_REARM_MS: u32 = 80_000;
+
+#[inline]
+fn is_f16_kind(kind: &str) -> bool {
+    kind == "f16" || kind.contains("f16")
+}
+
 #[inline]
 fn is_vehicle_kind(kind: &str) -> bool {
     kind.contains("tank")
@@ -371,6 +381,7 @@ fn is_vehicle_kind(kind: &str) -> bool {
         || kind.contains("bus")
         || kind.contains("raptor")
         || kind.contains("mig")
+        || kind.contains("f16")
         || kind.contains("comanche")
         || kind.contains("helix")
         || kind.contains("chinook")
@@ -380,6 +391,7 @@ fn is_vehicle_kind(kind: &str) -> bool {
 fn is_air_kind(kind: &str) -> bool {
     kind.contains("raptor")
         || kind.contains("mig")
+        || kind.contains("f16")
         || kind.contains("comanche")
         || kind.contains("helix")
         || kind.contains("chinook")
@@ -389,6 +401,7 @@ fn is_air_kind(kind: &str) -> bool {
 fn is_air_bomb_kind(kind: &str) -> bool {
     kind.contains("raptor")
         || kind.contains("mig")
+        || kind.contains("f16")
         || kind.contains("comanche")
         || kind.contains("helix")
 }
@@ -469,6 +482,8 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
     } else if infantry && attacker_kind.contains("mlrs") {
         // Rocket HE / DPICM — lethal in the seat.
         10_000.0
+    } else if infantry && is_f16_kind(attacker_kind) {
+        10_000.0
     } else if infantry && attacker_kind.contains("mortar") {
         (base * 0.95).max(250.0)
     } else if infantry && (attacker_kind == "bunker" || attacker_kind == "tunnel_network") {
@@ -502,6 +517,13 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
             (base * 0.75).max(200.0)
         } else {
             (base * 0.42).max(140.0)
+        }
+    } else if armored && is_f16_kind(attacker_kind) {
+        // Mk84 / JDAM — catastrophic to AFVs under the seat; soft launchers erased.
+        if soft_vehicle {
+            (base * 1.35).max(base)
+        } else {
+            (base * 1.05).max(base)
         }
     } else if armored && attacker_kind.contains("mortar") {
         (base * 0.22).max(55.0)
@@ -538,6 +560,8 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         (base * 1.05).max(base)
     } else if target.building && attacker_kind.contains("mlrs") {
         (base * 1.1).max(base)
+    } else if target.building && is_f16_kind(attacker_kind) {
+        (base * 0.95).max(base * 0.85)
     } else {
         base
     }
@@ -705,7 +729,7 @@ fn building_visual_size(kind: &str) -> f32 {
         "war_factory" | "arms_dealer" => 2.1,
         "barracks" => 1.35,
         "power_plant" | "nuclear_reactor" | "supply" | "supply_stash" => 1.7,
-        "airfield" => 2.0,
+        "airfield" => 2.35,
         "strategy_center" | "propaganda_center" | "palace" | "internet_center" | "black_market" => {
             1.9
         }
@@ -1552,6 +1576,7 @@ impl MatchSim {
                     a.tanks += 1;
                 } else if k.contains("raptor")
                     || k.contains("mig")
+                    || k.contains("f16")
                     || k.contains("comanche")
                     || k.contains("helix")
                     || k.contains("chinook")
@@ -2162,9 +2187,9 @@ impl MatchSim {
         }
     }
 
-    pub fn attack(&mut self, user_id: Uuid, ids: &[Uuid], target_id: Uuid) {
+    pub fn attack(&mut self, user_id: Uuid, ids: &[Uuid], target_id: Uuid) -> Result<(), &'static str> {
         let Some(target) = self.entities.get(&target_id) else {
-            return;
+            return Ok(());
         };
         if target.team
             == self
@@ -2173,9 +2198,24 @@ impl MatchSim {
                 .map(|p| p.team)
                 .unwrap_or(255)
         {
-            return;
+            return Ok(());
         }
+        let mut sortie_err: Option<&'static str> = None;
+        let mut armed_any = false;
         for id in ids {
+            let is_jet = self
+                .entities
+                .get(id)
+                .is_some_and(|e| e.owner == user_id && e.unit && is_f16_kind(&e.kind));
+            if is_jet {
+                match self.begin_f16_sortie(user_id, *id) {
+                    Ok(()) => armed_any = true,
+                    Err(e) => {
+                        sortie_err = Some(e);
+                        continue;
+                    }
+                }
+            }
             if let Some(entity) = self.entities.get_mut(id) {
                 if entity.owner == user_id && entity.unit {
                     entity.target = Some(target_id);
@@ -2184,9 +2224,72 @@ impl MatchSim {
                     entity.detour = None;
                     entity.detour_ttl = 0;
                     entity.dirty = true;
+                    if is_f16_kind(&entity.kind) {
+                        armed_any = true;
+                    }
                 }
             }
         }
+        if let Some(err) = sortie_err {
+            if !armed_any {
+                return Err(err);
+            }
+            // Mixed selection: tanks still attack; surface the jet refusal.
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    /// Pay for an F-16 takeoff and load bombs. Already-armed jets skip the fee.
+    fn begin_f16_sortie(&mut self, user_id: Uuid, unit_id: Uuid) -> Result<(), &'static str> {
+        let Some(e) = self.entities.get(&unit_id) else {
+            return Err("Jet not found");
+        };
+        if !is_f16_kind(&e.kind) || e.owner != user_id {
+            return Ok(());
+        }
+        if e.mag_ammo > 0 {
+            return Ok(());
+        }
+        if e.ability_cooldown_ms > 0 {
+            return Err("F-16 mühimmat yeniliyor — sonraki kalkış hazır değil");
+        }
+        let player = self.players.get_mut(&user_id).ok_or("Not in match")?;
+        if player.resources.gold < F16_SORTIE_GOLD {
+            return Err("F-16 kalkışı için 6500 gold gerekli");
+        }
+        player.resources.gold -= F16_SORTIE_GOLD;
+        if let Some(e) = self.entities.get_mut(&unit_id) {
+            e.mag_ammo = F16_BOMBS;
+            e.dirty = true;
+        }
+        Ok(())
+    }
+
+    fn nearest_owned_airfield_pad(&self, owner: Uuid, from_x: f32, from_y: f32) -> Option<(f32, f32)> {
+        let mut best: Option<(f32, f32, f32)> = None;
+        for e in self.entities.values() {
+            if e.owner != owner || e.hp <= 0.0 || e.kind != "airfield" || e.build_remaining_ms > 0 {
+                continue;
+            }
+            let dx = e.x - from_x;
+            let dy = e.y - from_y;
+            let d2 = dx * dx + dy * dy;
+            if best.map_or(true, |(_, _, d)| d2 < d) {
+                best = Some((e.x + 2.4, e.y, d2));
+            }
+        }
+        let map = self.map_size as f32;
+        if let Some((x, y, _)) = best {
+            return Some((x.clamp(0.5, map - 0.5), y.clamp(0.5, map - 0.5)));
+        }
+        self.players.get(&owner).and_then(|p| {
+            p.home_hq.and_then(|hq| {
+                self.entities.get(&hq).map(|e| {
+                    ((e.x + 2.0).clamp(0.5, map - 0.5), e.y.clamp(0.5, map - 0.5))
+                })
+            })
+        })
     }
 
     pub fn set_focus(&mut self, user_id: Uuid, x: f32, y: f32) {
@@ -2463,6 +2566,9 @@ impl MatchSim {
 
             let self_r = unit_radius(&entity.kind);
             let airborne = is_air_kind(&entity.kind);
+            if is_f16_kind(&entity.kind) {
+                entity.ability_cooldown_ms = entity.ability_cooldown_ms.saturating_sub(dt_ms);
+            }
             // If already overlapping a building (e.g. planted on top), shove clear first.
             if !airborne {
                 if let Some((bx, by, br)) =
@@ -2491,7 +2597,9 @@ impl MatchSim {
             let pass_allies = obeying_move.then_some(entity.team);
 
             // Acquire / refresh targets in weapon range (including while moving).
-            if entity.damage > 0.0 && entity.range > 0.0 && self.tick % 2 == 0 {
+            // F-16: only engage while bombs are loaded (paid sortie) — no free auto-hunting.
+            let f16_can_hunt = !is_f16_kind(&entity.kind) || entity.mag_ammo > 0;
+            if f16_can_hunt && entity.damage > 0.0 && entity.range > 0.0 && self.tick % 2 == 0 {
                 if obeying_move {
                     // On the march: always pick nearest in-range threat (don't stick to someone behind).
                     entity.target =
@@ -2507,6 +2615,10 @@ impl MatchSim {
                         entity.dirty = true;
                     }
                 }
+            } else if is_f16_kind(&entity.kind) && entity.mag_ammo == 0 && entity.target.is_some() {
+                // Hangared / RTB — drop stale attack locks.
+                entity.target = None;
+                entity.dirty = true;
             }
 
             let mut goal = entity.move_to;
@@ -2806,7 +2918,12 @@ impl MatchSim {
                     }
                     if cover.blocked {
                         // No shot through walls / hulls. Keep chasing, don't burn cooldown.
-                    } else if dist <= entity.range && entity.attack_cooldown_ms == 0 && aimed {
+                    } else if dist <= entity.range
+                        && entity.attack_cooldown_ms == 0
+                        && aimed
+                        && !(is_f16_kind(&entity.kind) && entity.mag_ammo == 0)
+                    {
+                        let mut f16_spent = false;
                         if is_rifle_infantry(&entity.kind) {
                             if entity.mag_ammo == 0 {
                                 entity.mag_ammo = RIFLE_MAG;
@@ -2830,6 +2947,10 @@ impl MatchSim {
                             } else {
                                 entity.attack_cooldown_ms = MLRS_RIPPLE_MS;
                             }
+                        } else if is_f16_kind(&entity.kind) {
+                            entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
+                            entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
+                            f16_spent = entity.mag_ammo == 0;
                         } else {
                             entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
                         }
@@ -2845,10 +2966,21 @@ impl MatchSim {
                         let attacker_owner = entity.owner;
                         let hit_p = shot_hit_chance(&kind, target, dist, entity.range, cover.exposure);
                         let mut rng = rand::thread_rng();
-                        let hit = rng.gen_range(0.0..1.0) < hit_p;
+                        let hit = if is_f16_kind(&kind) {
+                            rng.gen_range(0.0..1.0) < hit_p.max(0.88)
+                        } else {
+                            rng.gen_range(0.0..1.0) < hit_p
+                        };
                         // MLRS: every rocket lands in a tight beaten zone (even "hits" scatter a bit).
                         let (ix, iy) = if kind.contains("mlrs") {
                             let j = if hit { 0.32 } else { 0.58 };
+                            let jx = (tx + rng.gen_range(-j..j))
+                                .clamp(0.5, self.map_size as f32 - 0.5);
+                            let jy = (ty + rng.gen_range(-j..j))
+                                .clamp(0.5, self.map_size as f32 - 0.5);
+                            (jx, jy)
+                        } else if is_f16_kind(&kind) {
+                            let j = if hit { 0.22 } else { 0.85 };
                             let jx = (tx + rng.gen_range(-j..j))
                                 .clamp(0.5, self.map_size as f32 - 0.5);
                             let jy = (ty + rng.gen_range(-j..j))
@@ -2895,12 +3027,24 @@ impl MatchSim {
                         });
                         if hit && kind.contains("mlrs") {
                             self.apply_mlrs_blast(team, attacker_owner, fx, fy, ix, iy, tid);
+                        } else if hit && is_f16_kind(&kind) {
+                            self.apply_f16_bomb_blast(team, attacker_owner, fx, fy, ix, iy, tid);
                         } else if hit && is_air_bomb_kind(&kind) {
                             self.apply_air_bomb_blast(team, attacker_owner, fx, fy, ix, iy, tid);
                         } else if hit && kind.contains("tank") && !kind.contains("mg") {
                             self.apply_shell_blast(team, attacker_owner, fx, fy, tx, ty, tid);
                         } else if hit && kind.contains("mortar") {
                             self.apply_mortar_blast(team, attacker_owner, fx, fy, tx, ty, tid);
+                        }
+                        if f16_spent {
+                            entity.target = None;
+                            entity.ability_cooldown_ms = F16_REARM_MS;
+                            if let Some(pad) =
+                                self.nearest_owned_airfield_pad(attacker_owner, fx, fy)
+                            {
+                                entity.move_to = Some(pad);
+                            }
+                            entity.dirty = true;
                         }
                     }
                 } else {
@@ -3480,6 +3624,81 @@ impl MatchSim {
                 v.dirty = true;
                 if v.unit && is_soft_unit(&v.kind) {
                     v.prone_until_tick = v.prone_until_tick.max(self.tick + 36);
+                }
+            }
+        }
+    }
+
+    /// F-16 Mk84-class strike — large beaten zone sized to erase a tank column.
+    fn apply_f16_bomb_blast(
+        &mut self,
+        team: u8,
+        attacker: Uuid,
+        from_x: f32,
+        from_y: f32,
+        x: f32,
+        y: f32,
+        primary: Uuid,
+    ) {
+        const RADIUS: f32 = 3.15;
+        let mut victims: Vec<(Uuid, f32, bool)> = Vec::new();
+        self.grid.for_each_nearby(x, y, RADIUS + MAX_ENTITY_RADIUS, |id| {
+            let Some(e) = self.entities.get(&id) else {
+                return false;
+            };
+            if e.hp <= 0.0 || !(e.unit || e.building) {
+                return false;
+            }
+            if e.team == team && e.id != primary {
+                return false;
+            }
+            let dx = e.x - x;
+            let dy = e.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > RADIUS {
+                return false;
+            }
+            victims.push((e.id, dist, e.unit && is_soft_unit(&e.kind)));
+            false
+        });
+
+        let inx = x - from_x;
+        let iny = y - from_y;
+        let in_len = (inx * inx + iny * iny).sqrt().max(0.001);
+        let iux = inx / in_len;
+        let iuy = iny / in_len;
+
+        for (id, dist, is_infantry) in victims {
+            if id == primary {
+                continue;
+            }
+            let Some(victim) = self.entities.get(&id) else {
+                continue;
+            };
+            // Airburst HE — armor in the open gets no cover credit.
+            if victim.building && self.blast_blocked(primary, x, y, iux, iuy, victim) {
+                continue;
+            }
+            let falloff = 1.0 - (dist / RADIUS).clamp(0.0, 1.0);
+            let t = falloff * falloff;
+            let dmg = if victim.building {
+                420.0 + 1_650.0 * t
+            } else if is_infantry {
+                10_000.0
+            } else if is_air_kind(&victim.kind) {
+                180.0 * falloff
+            } else if victim.kind.contains("mlrs") {
+                5_200.0 + 4_800.0 * t
+            } else {
+                // MBT seat: near-center kills; fringe still mission-kills / cripples.
+                3_800.0 + 5_400.0 * t
+            };
+            if let Some(v) = self.entities.get_mut(&id) {
+                v.hp -= dmg;
+                v.last_hit_by = Some(attacker);
+                v.dirty = true;
+                if v.unit && is_soft_unit(&v.kind) {
+                    v.prone_until_tick = v.prone_until_tick.max(self.tick + 48);
                 }
             }
         }
