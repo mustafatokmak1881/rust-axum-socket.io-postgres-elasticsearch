@@ -408,6 +408,7 @@ impl MatchHub {
             }
 
             let faction = normalize_faction(&faction);
+            let mut expand_notices: Vec<(Uuid, ServerMsg)> = Vec::new();
             if rt.sim.bot_count() > 0 {
                 // Prefer stealing a bot slot — keeps commander count fixed.
                 rt.sim
@@ -419,8 +420,9 @@ impl MatchHub {
                     )
                     .map_err(|e| e.to_string())?;
             } else {
-                // All slots already human: carve a new base farthest from living HQs.
-                rt.sim
+                // All slots already human: grow map if needed, then new base.
+                let grew = rt
+                    .sim
                     .add_player(
                         user_id,
                         user.display_name.clone(),
@@ -432,8 +434,35 @@ impl MatchHub {
                 if humans > rt.max_players {
                     rt.max_players = humans;
                 }
+                if grew {
+                    let map_size = rt.sim.map_size;
+                    let ponds = rt.sim.ponds.clone();
+                    let mountains = rt.sim.mountains.clone();
+                    for uid in rt.members.keys().copied() {
+                        let explored = rt
+                            .sim
+                            .players
+                            .get(&uid)
+                            .map(|p| p.explored.to_bytes())
+                            .unwrap_or_default();
+                        expand_notices.push((
+                            uid,
+                            ServerMsg::MapExpand {
+                                map_size,
+                                explored,
+                                ponds: ponds.clone(),
+                                mountains: mountains.clone(),
+                            },
+                        ));
+                    }
+                }
             }
             rt.members.insert(user_id, ());
+            expand_notices
+        };
+
+        for (uid, msg) in expand_notices {
+            self.send(uid, msg);
         }
 
         self.inner.user_match.insert(user_id, match_id);
