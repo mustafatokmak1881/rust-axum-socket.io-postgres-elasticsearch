@@ -3971,16 +3971,23 @@ function applyGroundPose(mesh, dt, opts = {}) {
   const x = mesh.position.x;
   const z = mesh.position.z;
   const h = sampleTerrainHeight(x, z);
+  const yOff = mesh.userData.proneYOffset || 0;
   const blend = Math.min(1, (dt || 0.016) * (opts.snap ? 20 : 9));
-  mesh.position.y += (h - mesh.position.y) * blend;
+  mesh.position.y += (h + yOff - mesh.position.y) * blend;
+
+  const prone = mesh.userData.pronePitch || 0;
+  mesh.rotation.order = "YXZ";
 
   if (!opts.tilt) {
-    mesh.rotation.x *= 1 - blend * 0.5;
-    mesh.rotation.z *= 1 - blend * 0.5;
+    const gp = mesh.userData.groundPitch || 0;
+    const gr = mesh.userData.groundRoll || 0;
+    mesh.userData.groundPitch = gp * (1 - blend * 0.5);
+    mesh.userData.groundRoll = gr * (1 - blend * 0.5);
+    mesh.rotation.x = mesh.userData.groundPitch + prone;
+    mesh.rotation.z = mesh.userData.groundRoll;
     return;
   }
 
-  mesh.rotation.order = "YXZ";
   const yaw = mesh.rotation.y || 0;
   const sample = opts.sample || (mesh.userData.isTank ? 0.55 : 0.28);
   const sx = Math.sin(yaw);
@@ -4000,8 +4007,12 @@ function applyGroundPose(mesh, dt, opts = {}) {
   wantPitch = Math.max(-maxTilt, Math.min(maxTilt, wantPitch));
   wantRoll = Math.max(-maxTilt, Math.min(maxTilt, wantRoll));
   const tBlend = Math.min(1, (dt || 0.016) * 7);
-  mesh.rotation.x += (wantPitch - mesh.rotation.x) * tBlend;
-  mesh.rotation.z += (wantRoll - mesh.rotation.z) * tBlend;
+  const gp = mesh.userData.groundPitch || 0;
+  const gr = mesh.userData.groundRoll || 0;
+  mesh.userData.groundPitch = gp + (wantPitch - gp) * tBlend;
+  mesh.userData.groundRoll = gr + (wantRoll - gr) * tBlend;
+  mesh.rotation.x = mesh.userData.groundPitch + prone;
+  mesh.rotation.z = mesh.userData.groundRoll;
 }
 
 function lerpColor(a, b, t) {
@@ -4759,11 +4770,135 @@ function loadExploredFromSnapshot(snapshot) {
 
 /**
  * Real track → world units.
- * HQ ~2.15 wu ≈ 25 m; Abrams length ~0.33 wu ≈ 9.8 m → ~0.034–0.086 m→wu.
- * Use 0.052 so gauge/sleepers read next to tanks without looking toy-sized.
- * UIC: gauge 1.435 m, sleeper spacing 0.60 m, sleeper ~2.60×0.28×0.22 m, ballast ~3.8 m wide.
+ * HQ ~2.15 wu ≈ 25 m; Abrams ~0.33 wu ≈ 9.8 m → ~0.034–0.086 m→wu.
+ * 0.058 keeps UIC proportions readable next to tanks at RTS camera.
+ * UIC: gauge 1.435 m, sleeper 0.60 m c/c, sleeper ~2.60×0.28×0.22 m,
+ * rail 60E2 ~172 mm tall, ballast bed ~3.6–4.0 m, shoulder ≥0.5 m.
  */
-const RAIL_M2W = 0.052;
+const RAIL_M2W = 0.058;
+
+function makeRailBallastTexture() {
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 128;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#5e584c";
+  ctx.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 2200; i++) {
+    const x = Math.random() * 128;
+    const y = Math.random() * 128;
+    const s = 0.8 + Math.random() * 2.2;
+    const v = 70 + Math.floor(Math.random() * 55);
+    ctx.fillStyle = `rgb(${v},${v - 6},${v - 14})`;
+    ctx.fillRect(x, y, s, s * (0.6 + Math.random() * 0.8));
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2.4, 1.1);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function makeRailSleeperTexture() {
+  const c = document.createElement("canvas");
+  c.width = 64;
+  c.height = 32;
+  const ctx = c.getContext("2d");
+  const g = ctx.createLinearGradient(0, 0, 64, 0);
+  g.addColorStop(0, "#4a3e30");
+  g.addColorStop(0.35, "#6a5a44");
+  g.addColorStop(0.55, "#524434");
+  g.addColorStop(1, "#3e3428");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 32);
+  for (let i = 0; i < 18; i++) {
+    ctx.strokeStyle = `rgba(30,22,14,${0.12 + Math.random() * 0.2})`;
+    ctx.beginPath();
+    ctx.moveTo(0, 2 + i * 1.7);
+    ctx.lineTo(64, 4 + i * 1.6 + Math.random() * 2);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** Trapezoid ballast bed cross-section (UIC shoulder slope ~1:1.5). */
+function makeBallastBedGeometry(topW, botW, h, len) {
+  const shape = new THREE.Shape();
+  shape.moveTo(-botW * 0.5, 0);
+  shape.lineTo(-topW * 0.5, h);
+  shape.lineTo(topW * 0.5, h);
+  shape.lineTo(botW * 0.5, 0);
+  shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: len,
+    bevelEnabled: true,
+    bevelThickness: h * 0.08,
+    bevelSize: h * 0.06,
+    bevelSegments: 2,
+    curveSegments: 1,
+  });
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, 0, -len * 0.5);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** 60E2-ish rail: foot + web + head (merged, unit length along Z). */
+function makeRailProfileGeometry(M, len = 1) {
+  const headW = 0.072 * M;
+  const headH = 0.04 * M;
+  const webW = 0.02 * M;
+  const webH = 0.1 * M;
+  const footW = 0.15 * M;
+  const footH = 0.022 * M;
+  const totalH = footH + webH + headH;
+  const geos = [
+    new THREE.BoxGeometry(footW, footH, len),
+    new THREE.BoxGeometry(webW, webH, len),
+    new THREE.BoxGeometry(headW, headH, len),
+  ];
+  geos[0].translate(0, footH * 0.5, 0);
+  geos[1].translate(0, footH + webH * 0.5, 0);
+  geos[2].translate(0, footH + webH + headH * 0.5, 0);
+  const merged = mergeRailGeometries(geos);
+  merged.userData.totalH = totalH;
+  return merged;
+}
+
+function mergeRailGeometries(geos) {
+  // Lightweight merge without BufferGeometryUtils dependency.
+  const positions = [];
+  const normals = [];
+  const indices = [];
+  let indexOffset = 0;
+  for (const g of geos) {
+    g.computeVertexNormals();
+    const pos = g.attributes.position;
+    const nor = g.attributes.normal;
+    for (let i = 0; i < pos.count; i++) {
+      positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+      normals.push(nor.getX(i), nor.getY(i), nor.getZ(i));
+    }
+    const idx = g.index;
+    if (idx) {
+      for (let i = 0; i < idx.count; i++) indices.push(idx.getX(i) + indexOffset);
+    } else {
+      for (let i = 0; i < pos.count; i++) indices.push(i + indexOffset);
+    }
+    indexOffset += pos.count;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  out.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  out.setIndex(indices);
+  out.computeBoundingSphere();
+  return out;
+}
 
 /** Soft multi-lobe tree — no low-poly cones / flatShading. */
 function makeProTree(mats, rnd) {
@@ -4875,9 +5010,9 @@ function planRailRoute(size, nearBlocked, seed, axis) {
 function layRailAlongPath(group, pts, mats, geos, mapSpan) {
   const M = RAIL_M2W;
   const GAUGE = 1.435 * M;
-  // Real 0.60 m; slightly thin on huge maps so init stays snappy (still dense from RTS cam).
   const SLEEPER_SP = 0.6 * M * (mapSpan > 350 ? 1.5 : 1);
   const halfGauge = GAUGE * 0.5;
+  const railSeatY = geos.ballastH * 0.92 + geos.sleeperH * 0.55;
 
   const runs = [];
   let cur = [];
@@ -4942,22 +5077,22 @@ function layRailAlongPath(group, pts, mats, geos, mapSpan) {
 
     for (let i = 0; i <= sleeperCount; i++) {
       const p = sampleAt((i / sleeperCount) * dist);
-      dummy.position.set(p.x, p.y + geos.sleeperH * 0.55, p.z);
+      dummy.position.set(p.x, p.y + geos.ballastH * 0.85 + geos.sleeperH * 0.35, p.z);
+      dummy.rotation.order = "YXZ";
       dummy.rotation.set(0, p.yaw, 0);
       dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
       sleeperMatrices.push(dummy.matrix.clone());
 
       if (i % 2 === 0) {
-        dummy.position.set(p.x, p.y + geos.ballastH * 0.35, p.z);
-        dummy.scale.set(1, 1, (SLEEPER_SP * 2.05) / geos.ballastLen);
+        dummy.position.set(p.x, p.y + 0.002, p.z);
+        dummy.scale.set(1, 1, (SLEEPER_SP * 2.08) / geos.ballastLen);
         dummy.updateMatrix();
         ballastMatrices.push(dummy.matrix.clone());
       }
     }
 
-    // Rail instances: longer segments (every ~8 sleepers) for fewer draws, still continuous.
-    const railStride = 8;
+    const railStride = 6;
     for (let i = 0; i < sleeperCount; i += railStride) {
       const i1 = Math.min(sleeperCount, i + railStride);
       const p0 = sampleAt((i / sleeperCount) * dist);
@@ -4968,19 +5103,15 @@ function layRailAlongPath(group, pts, mats, geos, mapSpan) {
       if (segLen < 0.02) continue;
       const midX = (p0.x + p1.x) * 0.5;
       const midZ = (p0.z + p1.z) * 0.5;
-      const y0 = p0.y + geos.sleeperH + geos.railH * 0.55;
-      const y1 = p1.y + geos.sleeperH + geos.railH * 0.55;
+      const y0 = p0.y + railSeatY;
+      const y1 = p1.y + railSeatY;
       const yaw = Math.atan2(dx, dz);
       const pitch = Math.atan2(y1 - y0, segLen);
 
       for (const side of [-1, 1]) {
-        const ox = p0.nx * halfGauge * side;
-        const oz = p0.nz * halfGauge * side;
-        const ox1 = p1.nx * halfGauge * side;
-        const oz1 = p1.nz * halfGauge * side;
-        const mx = midX + (ox + ox1) * 0.5;
-        const mz = midZ + (oz + oz1) * 0.5;
-        dummy.position.set(mx, (y0 + y1) * 0.5, mz);
+        const ox = ((p0.nx + p1.nx) * 0.5) * halfGauge * side;
+        const oz = ((p0.nz + p1.nz) * 0.5) * halfGauge * side;
+        dummy.position.set(midX + ox, (y0 + y1) * 0.5, midZ + oz);
         dummy.rotation.order = "YXZ";
         dummy.rotation.set(-pitch, yaw, 0);
         dummy.scale.set(1, 1, segLen / geos.railLen);
@@ -4989,15 +5120,6 @@ function layRailAlongPath(group, pts, mats, geos, mapSpan) {
       }
     }
 
-    if (sleeperMatrices.length) {
-      const sleepers = new THREE.InstancedMesh(geos.sleeper, mats.sleeper, sleeperMatrices.length);
-      sleepers.castShadow = true;
-      sleepers.receiveShadow = true;
-      sleepers.frustumCulled = true;
-      sleeperMatrices.forEach((m, i) => sleepers.setMatrixAt(i, m));
-      sleepers.instanceMatrix.needsUpdate = true;
-      group.add(sleepers);
-    }
     if (ballastMatrices.length) {
       const ballast = new THREE.InstancedMesh(geos.ballast, mats.ballast, ballastMatrices.length);
       ballast.castShadow = false;
@@ -5005,6 +5127,14 @@ function layRailAlongPath(group, pts, mats, geos, mapSpan) {
       ballastMatrices.forEach((m, i) => ballast.setMatrixAt(i, m));
       ballast.instanceMatrix.needsUpdate = true;
       group.add(ballast);
+    }
+    if (sleeperMatrices.length) {
+      const sleepers = new THREE.InstancedMesh(geos.sleeper, mats.sleeper, sleeperMatrices.length);
+      sleepers.castShadow = true;
+      sleepers.receiveShadow = true;
+      sleeperMatrices.forEach((m, i) => sleepers.setMatrixAt(i, m));
+      sleepers.instanceMatrix.needsUpdate = true;
+      group.add(sleepers);
     }
     if (railMatrices.length) {
       const rails = new THREE.InstancedMesh(geos.rail, mats.rail, railMatrices.length);
@@ -5019,59 +5149,61 @@ function layRailAlongPath(group, pts, mats, geos, mapSpan) {
 
 function buildMapRailways(group, size, nearBlocked) {
   const M = RAIL_M2W;
+  const ballastTex = makeRailBallastTexture();
+  const sleeperTex = makeRailSleeperTexture();
   const mats = {
     ballast: new THREE.MeshStandardMaterial({
-      color: 0x6a6458,
-      roughness: 0.97,
+      map: ballastTex,
+      color: 0x9a9488,
+      roughness: 0.96,
       metalness: 0.02,
       flatShading: false,
     }),
     sleeper: new THREE.MeshStandardMaterial({
-      color: 0x5a5040,
-      roughness: 0.92,
-      metalness: 0.04,
+      map: sleeperTex,
+      color: 0xc8b090,
+      roughness: 0.88,
+      metalness: 0.03,
       flatShading: false,
     }),
     rail: new THREE.MeshStandardMaterial({
-      color: 0x4a5058,
-      roughness: 0.35,
-      metalness: 0.78,
+      color: 0x3a4048,
+      roughness: 0.28,
+      metalness: 0.86,
+      envMapIntensity: 1.1,
       flatShading: false,
     }),
   };
   const sleeperL = 2.6 * M;
-  const sleeperW = 0.28 * M;
-  const sleeperH = 0.2 * M;
-  const ballastW = 3.8 * M;
-  const ballastH = 0.3 * M;
-  const ballastLen = 0.6 * M * 2;
-  const railW = 0.075 * M; // readable head (real ~70mm)
-  const railH = 0.16 * M; // slight visual boost vs 172mm
-  const railLen = 1;
+  const sleeperW = 0.26 * M;
+  const sleeperH = 0.18 * M;
+  const ballastTop = 2.9 * M;
+  const ballastBot = 4.0 * M;
+  const ballastH = 0.34 * M;
+  const ballastLen = 0.6 * M * 2.1;
+  const railGeo = makeRailProfileGeometry(M, 1);
+  const railH = railGeo.userData.totalH || 0.16 * M;
   const geos = {
     sleeper: new THREE.BoxGeometry(sleeperL, sleeperH, sleeperW),
-    ballast: new THREE.BoxGeometry(ballastW, ballastH, ballastLen),
-    rail: new THREE.BoxGeometry(railW, railH, railLen),
+    ballast: makeBallastBedGeometry(ballastTop, ballastBot, ballastH, ballastLen),
+    rail: railGeo,
     sleeperH,
     ballastH,
     ballastLen,
     railH,
-    railLen,
+    railLen: 1,
   };
-  // Soft bevel feel — slightly flatten ballast top visually via scale already.
 
   const seed = (terrainSeed || size * 17) | 0;
   const routes = [
     planRailRoute(size, nearBlocked, seed + 3, "x"),
     planRailRoute(size, nearBlocked, seed + 91, "z"),
   ];
-  // Extra long diagonal on larger maps
   if (size >= 120) {
     routes.push(planRailRoute(size, nearBlocked, seed + 211, "diag"));
   }
-  // Parallel second track on the primary EW line (track centers ~4.2 m UIC-ish)
   const twin = planRailRoute(size, nearBlocked, seed + 3, "x").map((p) => {
-    const z = p.z + 4.2 * M;
+    const z = p.z + 4.25 * M;
     return { x: p.x, z, ok: railPathClear(p.x, z, nearBlocked, size) };
   });
   routes.push(twin);
@@ -9004,17 +9136,15 @@ function updateInfantryWalk(mesh, dt, now) {
   if (!leftLeg || !rightLeg) return;
 
   // Drop / stand — lerp so it doesn't pop.
+  // Store offsets only; applyGroundPose owns world Y (heightfield).
   const want = mesh.userData.wantProne ? 1 : 0;
   let blend = mesh.userData.proneBlend || 0;
   const dropRate = want > blend ? 7 : 5;
   blend += (want - blend) * Math.min(1, dt * dropRate);
   if (Math.abs(blend - want) < 0.01) blend = want;
   mesh.userData.proneBlend = blend;
-  mesh.rotation.order = "YXZ";
-  mesh.rotation.x = blend * 1.28;
-  if (!mesh.userData.knock) {
-    mesh.position.y = blend * 0.022;
-  }
+  mesh.userData.proneYOffset = blend * 0.022;
+  mesh.userData.pronePitch = blend * 1.28;
 
   // Keep the cycle alive across 10 Hz snapshots and brief packet jitter.
   const lastDist = mesh.userData.lastMoveDist || 0;
