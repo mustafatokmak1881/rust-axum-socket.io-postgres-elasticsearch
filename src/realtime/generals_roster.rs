@@ -60,7 +60,8 @@ pub fn buildables() -> &'static [BuildDef] {
             kind: "airfield",
             name: "Havaalanı",
             faction: "usa",
-            // Large runway complex — 3× prior cost; hangar holds 4 jets max.
+            // Late unlock: needs 3 command centers (see AIRFIELD_MIN_BASES).
+            // Large runway — hangar holds 4 jets max; Kaan sorties are decisive.
             cost_gold: 16_500,
             build_ms: 28_000,
             power: -80,
@@ -162,11 +163,11 @@ pub fn trainables() -> &'static [UnitDef] {
             attack_ms: 9_200,
         },
         UnitDef {
-            // F-16C — hangared at Airfield. Each attack order burns a sortie fee
+            // Kaan — hangared at Airfield. Each attack order burns a sortie fee
             // (see F16_SORTIE_GOLD); one bomb then RTB + rearm on the pad.
             // Mk84-class blast sized to erase a tight tank column (~10 MBT seat).
             unit: "f16",
-            name: "F-16 Şahin",
+            name: "Kaan",
             faction: "usa",
             from_building: "airfield",
             cost_gold: 3_400,

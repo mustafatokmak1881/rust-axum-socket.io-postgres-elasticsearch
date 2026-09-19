@@ -287,7 +287,7 @@ pub struct ResourcesView {
     /// Living + queued army size.
     #[serde(default)]
     pub units: u32,
-    /// Max army from owned HQs: home 10 + 5 per extra base.
+    /// Max army from owned HQs: home 12 + 6 per extra base.
     #[serde(default)]
     pub units_cap: u32,
     /// Non-HQ buildings (finished + under construction).

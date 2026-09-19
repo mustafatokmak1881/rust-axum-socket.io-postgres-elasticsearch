@@ -295,6 +295,16 @@ input, select {
   border-color: var(--warn);
 }
 
+.build-item.locked {
+  opacity: 0.45;
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
+.build-item.locked strong {
+  color: #a8a090;
+}
+
 .build-item strong, .unit-item strong {
   display: block;
   font-size: 11px;

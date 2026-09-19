@@ -37,13 +37,15 @@ fn min_spawn_clearance(commander_count: u16) -> f32 {
 }
 
 /// Total living+queued units with a single home HQ.
-pub const HOME_UNIT_BUDGET: usize = 10;
+pub const HOME_UNIT_BUDGET: usize = 12;
 /// Extra units per captured colony HQ.
-pub const COLONY_UNIT_BUDGET: usize = 5;
+pub const COLONY_UNIT_BUDGET: usize = 6;
 /// Non-HQ structures at home (econ + perimeter defense + light expansion).
 pub const HOME_BUILDING_BUDGET: usize = 10;
 /// Extra structures unlocked per captured colony HQ.
 pub const COLONY_BUILDING_BUDGET: usize = 4;
+/// Airfield / jet tech — late reward for holding 3 command centers.
+pub const AIRFIELD_MIN_BASES: usize = 3;
 /// Wipe / claim radius around a fallen HQ (city footprint).
 pub const CITY_CLAIM_RADIUS: f32 = 14.0;
 
@@ -2302,6 +2304,10 @@ impl MatchSim {
             return Err("Enemy territory");
         }
 
+        if kind == "airfield" && self.hq_count_for(user_id) < AIRFIELD_MIN_BASES {
+            return Err("Havaalanı için en az 3 üs gerekir");
+        }
+
         if self.water_blocks(fx, fy, place_r) {
             return Err("Cannot build on water");
         }
@@ -2423,7 +2429,12 @@ impl MatchSim {
             return Err("Wrong building type");
         }
 
-        // Airfield hangar: max 4 airframes (F-16 / TB2 parked + airborne home + queued).
+        // Air tech stays gated even if an airfield was built earlier.
+        if def.from_building == "airfield" && self.hq_count_for(user_id) < AIRFIELD_MIN_BASES {
+            return Err("Hava birimleri için en az 3 üs gerekir");
+        }
+
+        // Airfield hangar: max 4 airframes (Kaan / TB2 parked + airborne home + queued).
         if is_airfield_craft(def.unit) && building.kind == "airfield" {
             if self.airfield_air_load(building_id, user_id) >= AIRFIELD_HANGAR_CAP {
                 return Err("Hangar dolu — hava alanında en fazla 4 hava aracı");
@@ -2487,7 +2498,7 @@ impl MatchSim {
             .count()
     }
 
-    /// Home 10 + 5 per extra HQ (colony). No HQ → no train rights.
+    /// Home 12 + 6 per extra HQ (colony). No HQ → no train rights.
     pub fn unit_budget_for(&self, owner: Uuid) -> usize {
         let hqs = self.hq_count_for(owner);
         if hqs == 0 {

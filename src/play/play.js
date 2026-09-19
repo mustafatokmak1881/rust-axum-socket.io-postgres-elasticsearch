@@ -861,9 +861,19 @@ function updateResources(res) {
     basesEl.textContent = String(res.bases);
     if (prevBases != null && res.bases > prevBases) {
       toast(`Üs ele geçirildi · toplam ${res.bases} komuta merkezi`);
+      if (prevBases < AIRFIELD_MIN_BASES && res.bases >= AIRFIELD_MIN_BASES) {
+        toast("Havaalanı açıldı — Kaan ve TB2 üretilebilir", 4200);
+      }
     } else if (prevBases != null && res.bases < prevBases) {
       toast(`Komuta merkezi kaybedildi · kalan ${res.bases}`);
+      if (prevBases >= AIRFIELD_MIN_BASES && res.bases < AIRFIELD_MIN_BASES) {
+        toast("Havaalanı kilitlendi — 3 üs gerekir", 3500);
+      }
     }
+  }
+  // Refresh lock badges when base count changes.
+  if (prevBases !== res.bases && state.buildable?.length) {
+    renderBuildList(state.buildable);
   }
 }
 
@@ -900,17 +910,36 @@ function formatBuildingEconomy(item) {
   return `ALTIN ${gold} · ${pwrLabel} · ${secs}s`;
 }
 
+const AIRFIELD_MIN_BASES = 3;
+
+function ownedBases() {
+  return Number(state.resources?.bases) || 0;
+}
+
+function airfieldUnlocked() {
+  return ownedBases() >= AIRFIELD_MIN_BASES;
+}
+
 function findBuildable(kind) {
   return (state.buildable || []).find((b) => b.kind === kind) || null;
 }
 
 function renderBuildList(items) {
   state.buildable = items || [];
+  const bases = ownedBases();
   $("#build-list").innerHTML = state.buildable
-    .map(
-      (item, index) => `
-      <button type="button" class="build-item" data-kind="${escapeHtml(item.kind)}" data-hotkey="${index + 1}" title="${escapeHtml(formatBuildingEconomy(item))}">
-        <strong><span class="hotkey">${index + 1}</span> ${escapeHtml(item.name)}</strong>
+    .map((item, index) => {
+      const locked =
+        item.kind === "airfield" && bases < AIRFIELD_MIN_BASES;
+      const title = locked
+        ? `Havaalanı · en az ${AIRFIELD_MIN_BASES} üs gerekir (şimdi ${bases})`
+        : formatBuildingEconomy(item);
+      const name = locked
+        ? `${item.name} · ${AIRFIELD_MIN_BASES} üs`
+        : item.name;
+      return `
+      <button type="button" class="build-item${locked ? " locked" : ""}" data-kind="${escapeHtml(item.kind)}" data-hotkey="${index + 1}" data-locked="${locked ? "1" : "0"}" title="${escapeHtml(title)}">
+        <strong><span class="hotkey">${index + 1}</span> ${escapeHtml(name)}</strong>
         <small class="build-cost">
           <span class="cost-gold">ALTIN ${item.cost_gold ?? 0}</span>
           <span class="cost-pwr ${(item.power || 0) < 0 ? "drain" : (item.power || 0) > 0 ? "gen" : ""}">${
@@ -921,8 +950,8 @@ function renderBuildList(items) {
                 : "GÜÇ 0"
           }</span>
         </small>
-      </button>`,
-    )
+      </button>`;
+    })
     .join("");
 }
 
@@ -6986,7 +7015,7 @@ const ENTITY_INFO = {
   airfield: {
     name: "Havaalanı",
     role: "Üretim",
-    tags: ["Hava", "F-16 · TB2", "4 slot hangar"],
+    tags: ["Hava", "Kaan · TB2", "4 slot hangar", "3 üs gerekir"],
   },
   turret: {
     name: "Hisar Bataryası",
@@ -7076,7 +7105,7 @@ const ENTITY_INFO = {
     tags: ["Roket salvo", "Alan hasarı", "İnce zırh"],
   },
   f16: {
-    name: "F-16 Şahin",
+    name: "Kaan",
     role: "Hava",
     range: 16.5,
     damage: 8800,
@@ -7206,7 +7235,7 @@ function buildEntityTipLines(entity) {
   }
   if (String(entity.kind || "") === "airfield") {
     const hangar = hangaredF16Count(entity.owner, entity);
-    rows.push({ k: "Hangar", v: `${hangar}/4 F-16` });
+    rows.push({ k: "Hangar", v: `${hangar}/4 Kaan` });
   }
 
   return { name, rows, tags, relation: relationForEntity(entity), owner: entity.owner_name };
@@ -7329,7 +7358,7 @@ function onPointerDown(event) {
       }).length;
       toast(
         jets
-          ? `F-16 sorti · hedef ${enemy.kind} · kalkış 19500g/jet`
+          ? `Kaan sorti · hedef ${enemy.kind} · kalkış 19500g/jet`
           : tb2s
             ? `TB2 MAM · hedef ${enemy.kind} · boşsa hangar 1200g`
             : `Saldırı · ${enemy.kind} (${state.selectedUnits.length})`,
@@ -7342,7 +7371,7 @@ function onPointerDown(event) {
           return e && String(e.kind || "").includes("f16") && !e.airborne;
         });
       if (onlyHangaredF16) {
-        toast("F-16 hangarda — saldırı emri ver (kalkış 19500g)");
+        toast("Kaan hangarda — saldırı emri ver (kalkış 19500g)");
         return;
       }
       send({ t: "move_units", ids: state.selectedUnits, x: point.x, y: point.z });
@@ -13461,6 +13490,10 @@ $("#open-lobbies").addEventListener("click", (event) => {
 $("#build-list").addEventListener("click", (event) => {
   const btn = event.target.closest("[data-kind]");
   if (!btn) return;
+  if (btn.dataset.locked === "1" || (btn.dataset.kind === "airfield" && !airfieldUnlocked())) {
+    toast(`Havaalanı · en az ${AIRFIELD_MIN_BASES} üs gerekir (şimdi ${ownedBases()})`);
+    return;
+  }
   if (state.selectedBuild === btn.dataset.kind) {
     setBuildPlacement(null);
     return;
@@ -13535,6 +13568,10 @@ window.addEventListener("keydown", (event) => {
     const item = state.buildable[index];
     if (!item || !state.match) return;
     event.preventDefault();
+    if (item.kind === "airfield" && !airfieldUnlocked()) {
+      toast(`Havaalanı · en az ${AIRFIELD_MIN_BASES} üs gerekir (şimdi ${ownedBases()})`);
+      return;
+    }
     if (state.selectedBuild === item.kind) {
       setBuildPlacement(null);
     } else {
