@@ -4930,6 +4930,8 @@ function scatterGroundDecor(scene, size) {
   scene.add(group);
   applyDirectionalShadows(group);
 }
+
+function initThree(size, terrainTexture, home) {
   mapSize = size;
   const canvas = $("#viewport");
   ghostMesh = null;
