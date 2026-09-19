@@ -19,8 +19,10 @@ pub const MIN_MAP_SIZE: u16 = 96;
 /// Cap for auto-scaled arenas.
 pub const MAX_MAP_SIZE: u16 = 2048;
 
-/// Idle finished buildings only — never call this for units or active build/train.
-fn building_idle_wire_eq(a: &EntityView, b: &EntityView) -> bool {
+/// Buildings only — units must never use this path.
+/// Active build/train: skip only while progress stays within ~1%.
+/// `None` ↔ `Some` always differs so completion / start always ships.
+fn building_wire_eq(a: &EntityView, b: &EntityView) -> bool {
     a.id == b.id
         && a.building
         && b.building
@@ -33,14 +35,20 @@ fn building_idle_wire_eq(a: &EntityView, b: &EntityView) -> bool {
         && a.team == b.team
         && a.flag == b.flag
         && a.hacked == b.hacked
-        && a.progress.is_none()
-        && b.progress.is_none()
-        && a.train_progress.is_none()
-        && b.train_progress.is_none()
         && (a.x - b.x).abs() <= 0.001
         && (a.y - b.y).abs() <= 0.001
         && (a.hp - b.hp).abs() <= 0.5
         && (a.max_hp - b.max_hp).abs() <= 0.5
+        && opt_progress_eq(a.progress, b.progress)
+        && opt_progress_eq(a.train_progress, b.train_progress)
+}
+
+fn opt_progress_eq(a: Option<f32>, b: Option<f32>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => (x - y).abs() < 0.01,
+        _ => false,
+    }
 }
 
 /// Auto map edge from commander count — large gaps between bases.
@@ -5740,7 +5748,7 @@ impl MatchSim {
 
         let visible_ids = self.visible_ids_for(user_id);
 
-        // Gather views first (&self), then optionally dedupe idle buildings only.
+        // Gather views first (&self), then dedupe buildings only (never units).
         let mut candidates: Vec<(Uuid, EntityView, bool, bool, bool)> = Vec::new();
         for id in &visible_ids {
             let Some(entity) = self.entities.get(id) else {
@@ -5757,32 +5765,27 @@ impl MatchSim {
             {
                 continue;
             }
-            // Idle finished building → eligible for wire skip. Units / active builds never.
-            let idle_building = entity.building
-                && !entity.unit
-                && entity.build_remaining_ms == 0
-                && entity.train_queue.is_empty()
-                && !needs_completion_sync;
             candidates.push((
                 *id,
                 self.entity_view(entity),
                 entity.unit,
-                idle_building,
                 entered_vision,
+                needs_completion_sync,
             ));
         }
 
         let mut entities = Vec::new();
         if let Some(player) = self.players.get_mut(&user_id) {
-            for (id, view, is_unit, idle_building, entered_vision) in candidates {
+            for (id, view, is_unit, entered_vision, needs_completion_sync) in candidates {
                 if is_unit {
                     // Units: always stream — comparison caused tank stutter before.
                     entities.push(view);
                     continue;
                 }
-                if idle_building && !entered_vision {
+                // Buildings: skip identical / sub-1% progress noise (completion always sends).
+                if !entered_vision && !needs_completion_sync {
                     if let Some(prev) = player.last_sent_buildings.get(&id) {
-                        if building_idle_wire_eq(&view, prev) {
+                        if building_wire_eq(&view, prev) {
                             continue;
                         }
                     }
