@@ -93,17 +93,20 @@ pub fn trainables() -> &'static [UnitDef] {
             attack_ms: 6_200,
         },
         UnitDef {
-            // M270 MLRS — soft-skin launcher, long-range rocket ripple.
+            // M270 MLRS (M993 + M269) — FM 6-60 / AFV Database
+            // Road ~64 km/h; combat pace under Abrams → speed 0.55.
+            // M26 rockets 32–45 km → range 22 wu (compressed vs Abrams 13.5).
+            // Soft aluminum cab — dies fast to tank guns.
             unit: "mlrs",
             name: "M270 MLRS",
             faction: "usa",
             from_building: "war_factory",
             cost_gold: 3_700,
             train_ms: 42_000,
-            hp: 2_200.0,
-            damage: 420.0,
-            speed: 0.42,
-            range: 17.0,
+            hp: 2_400.0,
+            damage: 450.0,
+            speed: 0.55,
+            range: 22.0,
             attack_ms: 9_200,
         },
     ]

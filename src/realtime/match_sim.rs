@@ -349,20 +349,20 @@ fn shortest_angle(from: f32, to: f32) -> f32 {
     d
 }
 
-/// M1A1 turret traverse ≈ 40°/s (360° ≈ 9 s) → 0.70 rad/s.
-const TANK_TURRET_RATE: f32 = 0.70;
-const TANK_AIM_ALIGN: f32 = 0.05;
+/// M1A1 turret traverse ≈ 40°/s → 0.70 rad/s; client uses ~1.15 for readable slew.
+const TANK_TURRET_RATE: f32 = 1.05;
+const TANK_AIM_ALIGN: f32 = 0.06;
 /// Coax M240 — shorter than main gun, still beyond rifle.
 const TANK_MG_RANGE: f32 = 6.5;
 const TANK_MG_COOLDOWN_MS: u32 = 100;
-/// M270 pod slew — heavier than a tank turret, still waits for bearing.
-const MLRS_POD_RATE: f32 = 0.72;
-const MLRS_AIM_ALIGN: f32 = 0.10;
-/// Rockets in one ripple before the long reload.
+/// M269 LLM traverse ≈ 5°/s real — kept slightly faster for play (~9°/s).
+const MLRS_POD_RATE: f32 = 0.16;
+const MLRS_AIM_ALIGN: f32 = 0.08;
+/// Rockets in one ripple before the long reload (one LPC bay = 6).
 const MLRS_SALVO: u8 = 6;
 /// Gap between rockets in a ripple (~real M270 spacing, shortened for game pace).
-const MLRS_RIPPLE_MS: u32 = 140;
-const MLRS_RELOAD_MS: u32 = 9_200;
+const MLRS_RIPPLE_MS: u32 = 160;
+const MLRS_RELOAD_MS: u32 = 12_000;
 /// Patriot launcher slew — faster track than before (still waits for bearing).
 const PATRIOT_SLEW_RATE: f32 = 1.25;
 const PATRIOT_AIM_ALIGN: f32 = 0.07;

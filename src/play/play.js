@@ -1738,11 +1738,11 @@ const GATLING_DEF_VERSION = 1;
 /** Strategy Center / tech building mesh revision. */
 const STRATEGY_RIG_VERSION = 1;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
-const TANK_RIG_VERSION = 12;
+const TANK_RIG_VERSION = 15;
 /** Infantry mesh revision. */
 const INFANTRY_RIG_VERSION = 7;
 /** MLRS mesh revision. */
-const MLRS_RIG_VERSION = 2;
+const MLRS_RIG_VERSION = 3;
 
 function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) {
   const m = new THREE.Mesh(
@@ -5708,7 +5708,9 @@ function createMortarMesh(teamColor) {
 function tankVariantFor(kind) {
   const k = String(kind || "");
   if (k.includes("overlord")) return "overlord";
-  if (k.includes("paladin") || k.includes("abrams")) return "paladin";
+  // USA roster kind is exactly "tank" (M1A1) — must not alias to paladin.
+  if (k === "tank" || k.includes("abrams")) return "abrams";
+  if (k.includes("paladin")) return "paladin";
   if (k.includes("marauder")) return "marauder";
   if (k.includes("battlemaster")) return "battlemaster";
   if (k.includes("scorpion")) return "scorpion";
@@ -5770,6 +5772,7 @@ function createTankMesh(teamColor, opts = {}) {
   const style = opts.style || "usa";
   const heavy =
     !!opts.heavy ||
+    variant === "abrams" ||
     variant === "paladin" ||
     variant === "overlord" ||
     variant === "marauder";
@@ -5860,14 +5863,15 @@ function createTankMesh(teamColor, opts = {}) {
   const finishTank = (scale, unitH, hullRate, turretRate, opts = {}) => {
     g.userData.unitHeight = unitH;
     g.userData.isTank = true;
-    // Abrams: real pivot is slower; misalign boost in smoothUnitFacing still prevents crabbing.
-    // Other variants keep a higher floor for arcade turn-in.
-    const floor = opts.abrams ? 0.85 : 2.6;
-    g.userData.hullTurnRate = Math.max(floor, hullRate);
-    g.userData.turretTurnRate = turretRate;
+    // Hull must turn fast enough to kill crab-slide; turret can stay slower (gun traverse).
+    g.userData.hullTurnRate = Math.max(2.5, hullRate);
+    g.userData.turretTurnRate = Math.max(1.05, turretRate);
     g.userData.barrelRecoil = 0;
     g.userData.isAbrams = !!opts.abrams || !!g.userData.isAbrams;
     g.userData.tankRigVersion = TANK_RIG_VERSION;
+    // Recoil must restore to mesh rest Z (Abrams barrel sits at z≈0.15, not 0).
+    const barrel = g.getObjectByName("tankBarrel");
+    if (barrel) g.userData.barrelRestZ = barrel.position.z;
     g.scale.setScalar(scale);
     return g;
   };
@@ -6133,7 +6137,7 @@ function createTankMesh(teamColor, opts = {}) {
     return finishTank(0.64, 0.22, 2.0, 1.05);
   }
 
-  // Default: M1A1 Abrams — proportions / CARC Forest Green / 7 road wheels / arrowhead turret.
+  // Default / abrams / crusader: M1A1 — CARC Forest Green / 7 road wheels / arrowhead turret.
   // Real refs: L≈7.93 m hull, W≈3.66 m, H≈2.44 m; turret ~40°/s; CC ~48 km/h.
   const carc = (c, rough = 0.64) =>
     matStd(c, { metalness: 0.18, roughness: rough, envMapIntensity: 0.45 });
@@ -6231,8 +6235,8 @@ function createTankMesh(teamColor, opts = {}) {
   barrelGroup.add(tip);
   turret.add(barrelGroup);
   g.add(turret);
-  // Hull ~0.9 rad/s pivot feel; turret 0.70 rad/s = 40°/s (real M1A1).
-  return finishTank(0.58, 0.18, 0.95, 0.7, { abrams: true });
+  // Hull pivots playably (anti-crab); turret ~40°/s+ feel (1.15 rad/s).
+  return finishTank(0.58, 0.18, 2.6, 1.15, { abrams: true });
 }
 
 /** Humvee / Technical / buggy — wheeled, not a rescaled tank. */
@@ -6333,6 +6337,7 @@ function createWheeledVehicleMesh(teamColor, opts = {}) {
   g.userData.hullTurnRate = Math.max(2.6, 3.2);
   g.userData.turretTurnRate = 1.8;
   g.userData.barrelRecoil = 0;
+  g.userData.barrelRestZ = barrelGroup.position.z;
   g.scale.setScalar(style === "gla" ? 0.7 : 0.75);
   return g;
 }
@@ -6341,7 +6346,7 @@ function createLightVehicleMesh(teamColor, opts = {}) {
   return createWheeledVehicleMesh(teamColor, opts);
 }
 
-/** M270 MLRS — tracked launcher with elevating dual rocket pods (not a tank). */
+/** M270 MLRS — M993 carrier + M269 LLM + dual 6-tube LPCs (piece-built to real layout). */
 function createMlrsMesh(teamColor) {
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
@@ -6351,24 +6356,30 @@ function createMlrsMesh(teamColor) {
   g.userData.mlrsRigVersion = MLRS_RIG_VERSION;
   g.userData.tankRigVersion = TANK_RIG_VERSION;
 
-  const hull = 0x5a6450;
-  const hullDark = 0x4a5442;
-  const hullLight = 0x6a7460;
-  const track = 0x1c1a16;
-  const rubber = 0x12110f;
-  const metal = 0x5a5e58;
-  const pod = 0x525a48;
-  const podDark = 0x3e4638;
-  const tube = 0x2e3028;
-  const glass = 0x1a2830;
+  // CARC olive / Forest Green — matte aluminum & steel (not chrome).
+  const olive = 0x4a5438;
+  const oliveDk = 0x3a422c;
+  const oliveLt = 0x5a6448;
+  const llm = 0x2c3026;
+  const llmDk = 0x1e221a;
+  const podBox = 0x3e4630;
+  const tubeCol = 0x1a1c16;
+  const glass = 0x1a2820;
+  const iron = 0x4a4840;
+  const ironDk = 0x2e2c28;
+  const rubber = 0x0e0e0c;
+  const stencil = 0xc8b040;
   const accent = teamColor >>> 0;
 
+  const carc = (c, rough = 0.68) =>
+    matStd(c, { metalness: 0.16, roughness: rough, envMapIntensity: 0.4 });
+  const steel = (c, rough = 0.48) =>
+    matStd(c, { metalness: 0.55, roughness: rough, envMapIntensity: 0.65 });
+  const smoked = () =>
+    matStd(glass, { metalness: 0.35, roughness: 0.2, envMapIntensity: 0.8 });
+
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
-    const resolved =
-      typeof mat === "number"
-        ? matArmor(mat)
-        : mat;
-    const m = new THREE.Mesh(geo, resolved);
+    const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
     m.rotation.set(rx, ry, rz);
     m.castShadow = true;
@@ -6378,122 +6389,155 @@ function createMlrsMesh(teamColor) {
     return m;
   };
 
-  // —— Tracks (Bradley-derived, longer wheelbase) ——
+  // === E. Tracks & suspension (M993 — 6 wheels in 3 pairs, front sprocket) ===
   for (const side of [-1, 1]) {
-    const x = side * 0.168;
-    add(g, new THREE.BoxGeometry(0.052, 0.072, 0.58), matArmor(track, { metalness: 0.72, roughness: 0.35 }), x, 0.04, -0.02);
-    add(g, new THREE.BoxGeometry(0.038, 0.024, 0.56), matStd(rubber, { metalness: 0.18, roughness: 0.88 }), x, 0.01, -0.02);
-    for (let i = 0; i < 6; i++) {
-      const z = -0.22 + i * 0.088;
-      const wheel = add(
-        g,
-        new THREE.CylinderGeometry(0.028, 0.028, 0.034, 14),
-        matArmor(0x3a3c38),
-        x,
-        0.028,
-        z,
-        0,
-        0,
-        Math.PI / 2,
-      );
-      wheel.userData.roadWheel = true;
+    const sx = side * 0.172;
+    add(g, new THREE.BoxGeometry(0.055, 0.07, 0.64), steel(ironDk, 0.55), sx, 0.042, -0.02);
+    add(g, new THREE.BoxGeometry(0.042, 0.022, 0.62), matStd(rubber, { metalness: 0.05, roughness: 0.92 }), sx, 0.008, -0.02);
+    const pairs = [-0.22, -0.02, 0.18];
+    for (const pz of pairs) {
+      for (const dz of [-0.028, 0.028]) {
+        const w = add(
+          g,
+          new THREE.CylinderGeometry(0.03, 0.03, 0.032, 14),
+          steel(iron, 0.5),
+          sx,
+          0.032,
+          pz + dz,
+          0,
+          0,
+          Math.PI / 2,
+        );
+        w.userData.roadWheel = true;
+        add(g, new THREE.CylinderGeometry(0.012, 0.012, 0.034, 8), steel(ironDk), sx, 0.032, pz + dz, 0, 0, Math.PI / 2);
+      }
     }
     const sprocket = add(
       g,
-      new THREE.CylinderGeometry(0.032, 0.032, 0.036, 14),
-      matArmor(metal),
-      x,
-      0.034,
-      -0.28,
+      new THREE.CylinderGeometry(0.036, 0.036, 0.038, 16),
+      steel(iron, 0.4),
+      sx,
+      0.038,
+      0.3,
       0,
       0,
       Math.PI / 2,
     );
     sprocket.userData.roadWheel = true;
-    add(g, new THREE.CylinderGeometry(0.026, 0.026, 0.034, 12), matArmor(metal), x, 0.03, 0.26, 0, 0, Math.PI / 2);
+    const idler = add(
+      g,
+      new THREE.CylinderGeometry(0.028, 0.028, 0.034, 12),
+      steel(ironDk),
+      sx,
+      0.034,
+      -0.3,
+      0,
+      0,
+      Math.PI / 2,
+    );
+    idler.userData.roadWheel = true;
+    for (const rz of [-0.12, 0.08]) {
+      add(g, new THREE.CylinderGeometry(0.012, 0.012, 0.028, 8), steel(iron), sx, 0.072, rz, 0, 0, Math.PI / 2);
+    }
+    add(g, new THREE.BoxGeometry(0.016, 0.06, 0.58), carc(oliveDk, 0.72), sx * 1.22, 0.078, -0.02, 0, 0, 0, true);
   }
 
-  // —— Lower hull / chassis ——
-  add(g, new THREE.BoxGeometry(0.28, 0.07, 0.52), matArmor(hull), 0, 0.075, -0.01, 0, 0, 0, true);
-  add(g, new THREE.BoxGeometry(0.26, 0.04, 0.48), matArmor(hullDark), 0, 0.12, -0.01);
-  // Side skirts
+  // === A. Chassis M993 — aluminum box, flat deck, angled nose ===
+  add(g, new THREE.BoxGeometry(0.3, 0.08, 0.58), carc(olive), 0, 0.078, -0.02, 0, 0, 0, true);
+  add(g, new THREE.BoxGeometry(0.29, 0.035, 0.36), carc(oliveDk, 0.7), 0, 0.128, -0.08);
+  add(g, new THREE.BoxGeometry(0.28, 0.04, 0.12), carc(oliveLt, 0.62), 0, 0.1, 0.26, -0.42, 0, 0);
   for (const side of [-1, 1]) {
-    add(g, new THREE.BoxGeometry(0.018, 0.055, 0.5), matArmor(hullLight), side * 0.148, 0.08, -0.02, 0, 0, 0, true);
+    add(g, new THREE.BoxGeometry(0.03, 0.05, 0.5), carc(olive, 0.7), side * 0.155, 0.1, -0.04, 0, 0, 0, true);
   }
+  add(g, new THREE.BoxGeometry(0.06, 0.04, 0.08), steel(ironDk, 0.6), 0.12, 0.14, 0.12);
+  add(g, new THREE.BoxGeometry(0.05, 0.008, 0.07), steel(0x222420), 0.12, 0.16, 0.12);
 
-  // —— Cab (front) ——
+  // === B. Armored cab — smoked glass + launch shutters ===
   const cab = new THREE.Group();
-  cab.position.set(0, 0.14, 0.18);
+  cab.position.set(0, 0.145, 0.2);
   g.add(cab);
-  add(cab, new THREE.BoxGeometry(0.22, 0.14, 0.2), matArmor(hull), 0, 0.07, 0, 0, 0, 0, true);
-  add(cab, new THREE.BoxGeometry(0.2, 0.06, 0.04), matSatin(glass, { metalness: 0.55, roughness: 0.18 }), 0, 0.1, 0.09);
-  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), matSatin(glass, { metalness: 0.55, roughness: 0.18 }), -0.095, 0.09, 0.02);
-  add(cab, new THREE.BoxGeometry(0.04, 0.05, 0.02), matSatin(glass, { metalness: 0.55, roughness: 0.18 }), 0.095, 0.09, 0.02);
-  // Team stripe on cab roof
-  add(cab, new THREE.BoxGeometry(0.16, 0.012, 0.06), matSatin(accent, { metalness: 0.85 }), 0, 0.145, -0.02, 0, 0, 0, true);
-  // Bumper / light bar
-  add(cab, new THREE.BoxGeometry(0.2, 0.025, 0.03), matArmor(metal), 0, 0.02, 0.11);
-  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), matSatin(0xc8c090, { metalness: 0.7 }), -0.07, 0.035, 0.12);
-  add(cab, new THREE.BoxGeometry(0.03, 0.02, 0.015), matSatin(0xc8c090, { metalness: 0.7 }), 0.07, 0.035, 0.12);
+  add(cab, new THREE.BoxGeometry(0.24, 0.15, 0.22), carc(olive), 0, 0.08, 0, 0, 0, 0, true);
+  add(cab, new THREE.BoxGeometry(0.22, 0.02, 0.2), carc(oliveLt, 0.65), 0, 0.16, -0.01);
+  add(cab, new THREE.BoxGeometry(0.2, 0.07, 0.035), smoked(), 0, 0.1, 0.1, -0.15, 0, 0);
+  add(cab, new THREE.BoxGeometry(0.03, 0.055, 0.08), smoked(), -0.115, 0.1, 0.02);
+  add(cab, new THREE.BoxGeometry(0.03, 0.055, 0.08), smoked(), 0.115, 0.1, 0.02);
+  add(cab, new THREE.BoxGeometry(0.2, 0.018, 0.04), carc(oliveDk, 0.55), 0, 0.155, 0.1);
+  add(cab, new THREE.BoxGeometry(0.02, 0.05, 0.04), carc(oliveDk), -0.11, 0.12, 0.1);
+  add(cab, new THREE.BoxGeometry(0.02, 0.05, 0.04), carc(oliveDk), 0.11, 0.12, 0.1);
+  add(cab, new THREE.BoxGeometry(0.01, 0.1, 0.1), carc(oliveLt, 0.7), -0.125, 0.06, -0.02);
+  add(cab, new THREE.BoxGeometry(0.01, 0.1, 0.1), carc(oliveLt, 0.7), 0.125, 0.06, -0.02);
+  add(cab, new THREE.BoxGeometry(0.14, 0.01, 0.05), matSatin(accent, { metalness: 0.35, roughness: 0.45 }), 0, 0.172, -0.04, 0, 0, 0, true);
+  add(cab, new THREE.BoxGeometry(0.22, 0.03, 0.04), steel(ironDk), 0, 0.01, 0.12);
+  add(cab, new THREE.BoxGeometry(0.028, 0.018, 0.014), matStd(0xffe8a0, { emissive: 0x886600, emissiveIntensity: 0.3, metalness: 0.4, roughness: 0.4 }), -0.08, 0.03, 0.135);
+  add(cab, new THREE.BoxGeometry(0.028, 0.018, 0.014), matStd(0xffe8a0, { emissive: 0x886600, emissiveIntensity: 0.3, metalness: 0.4, roughness: 0.4 }), 0.08, 0.03, 0.135);
+  add(cab, new THREE.BoxGeometry(0.26, 0.06, 0.04), carc(oliveDk), 0, 0.02, -0.12);
 
-  // —— Elevating rocket pod (yaw + elevation) ——
+  // === C. M269 LLM — traverse base + elevating cage ===
   const turret = new THREE.Group();
   turret.name = "muzzleRoot";
-  turret.position.set(0, 0.155, -0.12);
+  turret.position.set(0, 0.15, -0.14);
   g.add(turret);
 
-  // Traversing ring / base
-  add(turret, new THREE.CylinderGeometry(0.08, 0.09, 0.03, 16), matArmor(metal), 0, 0.01, 0);
-  add(turret, new THREE.BoxGeometry(0.12, 0.04, 0.14), matArmor(hullDark), 0, 0.035, 0);
+  add(turret, new THREE.CylinderGeometry(0.1, 0.11, 0.028, 20), steel(ironDk, 0.45), 0, 0.012, 0);
+  add(turret, new THREE.CylinderGeometry(0.07, 0.07, 0.02, 16), steel(iron, 0.4), 0, 0.03, 0);
+  add(turret, new THREE.BoxGeometry(0.26, 0.035, 0.2), carc(llm, 0.7), 0, 0.045, 0);
 
   const elev = new THREE.Group();
   elev.name = "mlrsElev";
-  elev.position.set(0, 0.055, 0);
-  // Default elevation ~25° like a loaded launch posture
+  elev.position.set(0, 0.07, 0);
   elev.rotation.x = -0.42;
   turret.add(elev);
 
-  // Dual M269 pods side-by-side
+  add(elev, new THREE.BoxGeometry(0.28, 0.04, 0.36), carc(llm, 0.65), 0, 0.02, 0);
+  add(elev, new THREE.BoxGeometry(0.02, 0.14, 0.34), carc(llmDk, 0.7), -0.14, 0.08, 0);
+  add(elev, new THREE.BoxGeometry(0.02, 0.14, 0.34), carc(llmDk, 0.7), 0.14, 0.08, 0);
+  add(elev, new THREE.BoxGeometry(0.28, 0.02, 0.04), steel(ironDk), 0, 0.155, 0.12);
+  add(elev, new THREE.BoxGeometry(0.28, 0.02, 0.04), steel(ironDk), 0, 0.155, -0.12);
+  add(elev, new THREE.BoxGeometry(0.04, 0.02, 0.3), steel(iron), 0, 0.155, 0);
+  add(elev, new THREE.BoxGeometry(0.02, 0.02, 0.16), steel(iron), -0.1, 0.17, 0.02);
+  add(elev, new THREE.BoxGeometry(0.02, 0.02, 0.16), steel(iron), 0.1, 0.17, 0.02);
+  add(elev, new THREE.BoxGeometry(0.028, 0.1, 0.32), carc(llmDk), 0, 0.08, 0);
+  add(elev, new THREE.CylinderGeometry(0.01, 0.01, 0.16, 8), steel(iron), 0.04, -0.01, -0.1, 0.65, 0, 0);
+  add(elev, new THREE.CylinderGeometry(0.014, 0.014, 0.03, 8), steel(ironDk), 0.04, 0.05, -0.05, 0.65, 0, 0);
+
+  // === D. Dual LPC pods — each 3x2 tubes + stencil marks ===
   for (const side of [-1, 1]) {
     const bay = new THREE.Group();
-    bay.position.set(side * 0.072, 0.06, 0);
+    bay.position.set(side * 0.078, 0.08, 0);
     elev.add(bay);
-    add(bay, new THREE.BoxGeometry(0.11, 0.12, 0.32), matArmor(pod), 0, 0, 0);
-    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), matArmor(podDark), 0, 0.065, 0);
-    add(bay, new THREE.BoxGeometry(0.1, 0.02, 0.3), matArmor(podDark), 0, -0.065, 0);
-    // 3×2 tube mouths facing +Z (forward when elevated)
+    add(bay, new THREE.BoxGeometry(0.12, 0.13, 0.34), carc(podBox, 0.72), 0, 0, 0);
+    add(bay, new THREE.BoxGeometry(0.115, 0.015, 0.33), carc(llmDk, 0.75), 0, 0.07, 0);
+    add(bay, new THREE.BoxGeometry(0.115, 0.015, 0.33), carc(llmDk, 0.75), 0, -0.07, 0);
+    add(bay, new THREE.BoxGeometry(0.118, 0.125, 0.012), carc(oliveDk, 0.6), 0, 0, 0.175);
+    add(bay, new THREE.BoxGeometry(0.004, 0.04, 0.12), matStd(stencil, { metalness: 0.2, roughness: 0.55 }), side * 0.062, 0.02, 0);
+    add(bay, new THREE.BoxGeometry(0.004, 0.015, 0.08), matStd(0xe8e0d0, { metalness: 0.15, roughness: 0.6 }), side * 0.062, -0.03, -0.06);
     for (let row = 0; row < 2; row++) {
       for (let col = 0; col < 3; col++) {
-        const tx = (col - 1) * 0.028;
-        const ty = (row - 0.5) * 0.04;
-        add(bay, new THREE.CylinderGeometry(0.011, 0.011, 0.3, 8), tube, tx, ty, 0, Math.PI / 2, 0, 0);
-        add(bay, new THREE.CylinderGeometry(0.012, 0.012, 0.012, 8), metal, tx, ty, 0.155, Math.PI / 2, 0, 0);
+        const tx = (col - 1) * 0.032;
+        const ty = (row - 0.5) * 0.048;
+        add(bay, new THREE.CylinderGeometry(0.013, 0.013, 0.33, 10), steel(tubeCol, 0.35), tx, ty, 0, Math.PI / 2, 0, 0);
+        add(bay, new THREE.CylinderGeometry(0.0145, 0.0145, 0.01, 10), steel(iron, 0.4), tx, ty, 0.17, Math.PI / 2, 0, 0);
+        add(bay, new THREE.CylinderGeometry(0.009, 0.009, 0.008, 8), matStd(0x080808, { metalness: 0.3, roughness: 0.8 }), tx, ty, 0.175, Math.PI / 2, 0, 0);
       }
     }
   }
 
-  // Center spine between pods
-  add(elev, new THREE.BoxGeometry(0.03, 0.08, 0.28), metal, 0, 0.05, 0);
-  // Hydraulic ram suggestion
-  add(elev, new THREE.CylinderGeometry(0.008, 0.008, 0.14, 6), metal, 0.02, -0.02, -0.08, 0.6, 0, 0);
-
-  // Muzzle tip at pod array face (world FX)
   const muzzle = new THREE.Object3D();
   muzzle.name = "muzzle";
-  muzzle.position.set(0, 0.06, 0.18);
+  muzzle.position.set(0, 0.08, 0.2);
   elev.add(muzzle);
 
-  // Dummy barrel name so remesh checks that look for tankBarrel pass
   const dummyBarrel = new THREE.Object3D();
   dummyBarrel.name = "tankBarrel";
-  dummyBarrel.position.set(0, 0.06, 0.1);
+  dummyBarrel.position.set(0, 0.08, 0.12);
   elev.add(dummyBarrel);
 
-  g.userData.unitHeight = 0.28;
-  g.userData.hullTurnRate = Math.max(2.6, 2.2);
-  g.userData.turretTurnRate = 0.85;
+  g.userData.unitHeight = 0.3;
+  g.userData.hullTurnRate = 2.5;
+  g.userData.turretTurnRate = 0.16;
   g.userData.barrelRecoil = 0;
-  g.scale.setScalar(0.5);
+  g.userData.barrelRestZ = dummyBarrel.position.z;
+  g.scale.setScalar(0.52);
   return g;
 }
 
@@ -6517,7 +6561,9 @@ function isJetKind(kind) {
 
 function isHeavyTankKind(kind) {
   const k = String(kind || "");
+  // Exact "tank" = USA M1A1 (not tank_hunter / etc).
   return (
+    k === "tank" ||
     k.includes("abrams") ||
     k.includes("paladin") ||
     k.includes("marauder") ||
@@ -7300,7 +7346,7 @@ function clientMoveSpeed(kind) {
     k.includes("overlord") ||
     k.includes("abrams")
   ) {
-    return k.includes("paladin") || k.includes("overlord") || k.includes("marauder") ? 0.52 : 0.58;
+    return k.includes("paladin") || k.includes("overlord") || k.includes("marauder") ? 0.52 : 0.60;
   }
   if (
     k.includes("mlrs") ||
@@ -7308,7 +7354,7 @@ function clientMoveSpeed(kind) {
     k.includes("inferno") ||
     k.includes("scud")
   ) {
-    return 0.42;
+    return k.includes("mlrs") ? 0.55 : 0.42;
   }
   if (
     k.includes("mortar") ||
@@ -7377,6 +7423,13 @@ function applyUnitMotion(mesh, entity) {
   mesh.userData.lastZ = entity.y;
   if (mesh.userData.isTank) {
     mesh.userData.aimAt = entity.aim_at || null;
+    if (entity.aim_at && entity.aim_yaw != null && Number.isFinite(entity.aim_yaw)) {
+      // Server gun bearing — used when target mesh isn't in AOI yet.
+      mesh.userData.aimYaw = entity.aim_yaw;
+    } else if (!entity.aim_at) {
+      // Idle: don't stick world yaw (often 0) — turret follows hull via faceYaw.
+      mesh.userData.aimYaw = null;
+    }
   }
 }
 
@@ -7437,11 +7490,11 @@ function updateTankDrive(mesh, dt) {
     face != null && Number.isFinite(face)
       ? Math.abs(shortestAngle(hullYaw, face))
       : 0;
-  // >~50°: mostly pivot; >~25°: reduced drive. Stops sideways skating.
+  // Harder gate after Abrams rate change — no sideways ice-skate.
   let driveScale = 1;
-  if (misalign > 0.95) driveScale = 0.08;
-  else if (misalign > 0.55) driveScale = 0.28;
-  else if (misalign > 0.3) driveScale = 0.55;
+  if (misalign > 0.85) driveScale = 0.05;
+  else if (misalign > 0.5) driveScale = 0.22;
+  else if (misalign > 0.28) driveScale = 0.5;
 
   const beforeX = mesh.position.x;
   const beforeZ = mesh.position.z;
@@ -7465,13 +7518,15 @@ function updateTankDrive(mesh, dt) {
   if (toDist > 0.05 || step > 0.0005 || misalign > 0.15) {
     mesh.userData.moving = true;
   }
-  if (step > 0.0008) {
-    const spin = step * 28;
-    if (spin > 0.0002) {
-      mesh.traverse((obj) => {
-        if (obj.userData?.roadWheel) obj.rotation.x += spin;
-      });
-    }
+  // Road wheels: roll with travel, and crawl while hull pivots in place.
+  let spin = step * 28;
+  if (misalign > 0.12 && (toDist > 0.04 || mesh.userData.moving)) {
+    spin = Math.max(spin, Math.min(0.22, misalign * 0.45));
+  }
+  if (spin > 0.00015) {
+    mesh.traverse((obj) => {
+      if (obj.userData?.roadWheel) obj.rotation.x += spin;
+    });
   }
 
   // Remember misalign so smoothUnitFacing can boost hull slew.
@@ -7568,10 +7623,11 @@ function smoothUnitFacing(mesh, dt) {
           mesh.userData.aimYaw = Math.atan2(tx - mesh.position.x, tz - mesh.position.z);
         }
       }
+      // No target → turret locked to hull (relative yaw 0), not a stale world aim.
       const aim =
-        mesh.userData.aimYaw != null ? mesh.userData.aimYaw : mesh.userData.faceYaw;
+        tid && mesh.userData.aimYaw != null ? mesh.userData.aimYaw : mesh.userData.faceYaw;
       if (aim != null) {
-        const desiredLocal = shortestAngle(0, aim - mesh.rotation.y);
+        const desiredLocal = tid ? shortestAngle(0, aim - mesh.rotation.y) : 0;
         const cur = turret.rotation.y;
         const diff = shortestAngle(cur, desiredLocal);
         const maxStep = turretRate * dt;
@@ -7580,9 +7636,15 @@ function smoothUnitFacing(mesh, dt) {
       const mg = turret.getObjectByName("tankMg");
       if (mg) {
         const mgAim =
-          mesh.userData.mgAimYaw != null ? mesh.userData.mgAimYaw : aim;
+          mesh.userData.mgAimYaw != null
+            ? mesh.userData.mgAimYaw
+            : tid && mesh.userData.aimYaw != null
+              ? mesh.userData.aimYaw
+              : mesh.userData.faceYaw;
         if (mgAim != null) {
-          const desiredLocal = shortestAngle(0, mgAim - mesh.rotation.y - turret.rotation.y);
+          const desiredLocal = tid
+            ? shortestAngle(0, mgAim - mesh.rotation.y - turret.rotation.y)
+            : 0;
           const cur = mg.rotation.y;
           const diff = shortestAngle(cur, desiredLocal);
           mg.rotation.y = cur + Math.max(-2.8 * dt, Math.min(2.8 * dt, diff));
@@ -8196,14 +8258,20 @@ function updateCombatFx(now) {
   for (const mesh of state.meshes.values()) {
     if (!mesh.userData?.isTank) continue;
     const barrel = mesh.getObjectByName("tankBarrel");
+    const restZ =
+      mesh.userData.barrelRestZ != null
+        ? mesh.userData.barrelRestZ
+        : barrel
+          ? (mesh.userData.barrelRestZ = barrel.position.z)
+          : 0;
     if (mesh.userData.barrelRecoil > 0) {
       mesh.userData.barrelRecoil = Math.max(0, mesh.userData.barrelRecoil - 0.045);
       if (barrel) {
-        barrel.position.z = -0.055 * mesh.userData.barrelRecoil;
+        barrel.position.z = restZ - 0.055 * mesh.userData.barrelRecoil;
       }
-    } else if (barrel && barrel.position.z !== 0) {
-      barrel.position.z *= 0.7;
-      if (Math.abs(barrel.position.z) < 0.001) barrel.position.z = 0;
+    } else if (barrel && Math.abs(barrel.position.z - restZ) > 0.0005) {
+      barrel.position.z += (restZ - barrel.position.z) * 0.35;
+      if (Math.abs(barrel.position.z - restZ) < 0.001) barrel.position.z = restZ;
     }
     if (mesh.userData.hullKick > 0) {
       mesh.userData.hullKick = Math.max(0, mesh.userData.hullKick - 0.06);
