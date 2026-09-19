@@ -361,6 +361,46 @@ input, select {
   color: #f0e8c0;
 }
 
+.build-actions {
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--line);
+  pointer-events: auto;
+}
+
+.build-actions[hidden] {
+  display: none !important;
+}
+
+.demolish-btn {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #8a4030;
+  background: #2a1814;
+  color: #ffc8a8;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.demolish-btn:hover {
+  background: #3a2018;
+  border-color: #c45a3a;
+  color: #ffe0c8;
+}
+
+.demolish-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#build-detail .demolish-hint {
+  color: #ffb090;
+  font-weight: 600;
+}
+
 .radar {
   position: absolute;
   right: 10px;

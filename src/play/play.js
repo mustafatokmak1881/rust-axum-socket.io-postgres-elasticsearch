@@ -1109,6 +1109,7 @@ function applyDelta(msg) {
     if (gone.has(state.selectedBuilding)) {
       state.selectedBuilding = null;
       refreshTrainablePanel();
+      updateDemolishUi();
     }
   }
   for (const entity of msg.entities || []) {
@@ -4950,6 +4951,7 @@ function pruneFogGhosts() {
     if (dead.has(state.selectedBuilding)) {
       state.selectedBuilding = null;
       refreshTrainablePanel();
+      updateDemolishUi();
     }
   }
 }
@@ -6221,6 +6223,59 @@ function updateGhostPreview(event) {
   tintGhost(valid);
 }
 
+function canDemolishBuilding(ent) {
+  if (!ent?.building) return false;
+  if (String(ent.owner) !== String(state.match?.you)) return false;
+  if (ent.kind === "hq") return false;
+  return true;
+}
+
+function updateDemolishUi() {
+  const actions = $("#build-actions");
+  const btn = $("#btn-demolish");
+  if (!actions || !btn) return;
+  const ent = state.selectedBuilding
+    ? state.entities.get(state.selectedBuilding)
+    : null;
+  const ok = canDemolishBuilding(ent) && !state.selectedBuild;
+  actions.hidden = !ok;
+  btn.disabled = !ok;
+  if (ok) {
+    const def = findBuildable(ent.kind);
+    const unfinished = ent.progress != null && ent.progress < 1;
+    const scrap = def
+      ? Math.floor((def.cost_gold || 0) / (unfinished ? 2 : 4))
+      : 0;
+    btn.textContent = scrap > 0 ? `Yık · ~${scrap}g · Delete` : "Yık · Delete";
+  }
+}
+
+function showSelectedBuildingDetail(ent) {
+  if (!ent?.building) {
+    updateDemolishUi();
+    return;
+  }
+  const def = findBuildable(ent.kind);
+  const name = def?.name || BUILDING_LABELS[ent.kind] || ent.kind;
+  const econ = formatBuildingEconomy(def);
+  const own = String(ent.owner) === String(state.match?.you);
+  const isHq = ent.kind === "hq";
+  let extra = "";
+  if (own && !isHq) {
+    extra = econ
+      ? ` · <span class="demolish-hint">Yık = Delete</span>`
+      : ` · <span class="demolish-hint">Yık = Delete</span>`;
+  } else if (own && isHq) {
+    extra = " · HQ yıkılamaz";
+  }
+  if (econ && !state.selectedBuild) {
+    $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}${extra}`;
+  } else if (!state.selectedBuild) {
+    $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b>${extra}`;
+  }
+  updateDemolishUi();
+}
+
 function setBuildPlacement(kind) {
   state.selectedBuild = kind;
   document.querySelectorAll(".build-item").forEach((el) => {
@@ -6234,9 +6289,18 @@ function setBuildPlacement(kind) {
     $("#build-detail").innerHTML = econ
       ? `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)} · haritaya tıkla`
       : `Placing ${escapeHtml(kind)} — click map (Esc cancel)`;
+    updateDemolishUi();
   } else {
     clearGhost();
-    $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+    const selected = state.selectedBuilding
+      ? state.entities.get(state.selectedBuilding)
+      : null;
+    if (selected) {
+      showSelectedBuildingDetail(selected);
+    } else {
+      $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+      updateDemolishUi();
+    }
     document.querySelectorAll(".build-item").forEach((el) => el.classList.remove("on"));
   }
 }
@@ -6390,6 +6454,7 @@ function setSelectedUnits(ids, toastMsg) {
   state.selectedUnits = ids;
   state.selectedBuilding = null;
   refreshTrainablePanel();
+  updateDemolishUi();
   syncSelectionMarkers();
   if (toastMsg) toast(toastMsg);
 }
@@ -6564,17 +6629,14 @@ function finishBoxSelect(event) {
       clearUnitSelection();
       syncSelectionMarkers();
       refreshTrainablePanel();
+      showSelectedBuildingDetail(best);
       {
         const def = findBuildable(best.kind);
         const name = def?.name || best.kind;
-        const econ = formatBuildingEconomy(def);
-        if (econ && !state.selectedBuild) {
-          $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}`;
-        }
         toast(
-          econ
-            ? `${name}: ${econ} · Delete=yık`
-            : `Selected ${name} · Delete=yık`,
+          canDemolishBuilding(best)
+            ? `${name} seçildi · Yık butonu veya Delete`
+            : `Selected ${name}`,
         );
       }
     } else if (!boxSelect.additive) {
@@ -6582,6 +6644,10 @@ function finishBoxSelect(event) {
       state.selectedBuilding = null;
       syncSelectionMarkers();
       refreshTrainablePanel();
+      updateDemolishUi();
+      if (!state.selectedBuild) {
+        $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+      }
       if (point) send({ t: "set_focus", x: point.x, y: point.z });
     }
     return;
@@ -12830,7 +12896,16 @@ function demolishSelectedBuilding() {
   state.selectedBuilding = null;
   refreshTrainablePanel();
   syncSelectionMarkers();
+  updateDemolishUi();
+  if (!state.selectedBuild) {
+    $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+  }
 }
+
+$("#btn-demolish")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  demolishSelectedBuilding();
+});
 
 window.addEventListener("keyup", (event) => {
   if (event.key === "Tab") {
