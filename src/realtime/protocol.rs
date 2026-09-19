@@ -287,13 +287,13 @@ pub struct ResourcesView {
     /// Living + queued army size.
     #[serde(default)]
     pub units: u32,
-    /// Max army from owned HQs: home + home/2 per extra base.
+    /// Max army from owned HQs: home 10 + 5 per extra base.
     #[serde(default)]
     pub units_cap: u32,
     /// Non-HQ buildings (finished + under construction).
     #[serde(default)]
     pub buildings: u32,
-    /// Max structures from owned HQs (same x + x/2 rule).
+    /// Max structures from owned HQs: home 10 + 4 per extra base.
     #[serde(default)]
     pub buildings_cap: u32,
     /// Living command centers owned.
@@ -418,31 +418,31 @@ pub fn default_catalog() -> Vec<CatalogItem> {
     vec![
         CatalogItem {
             id: "flag_gold".into(),
-            name: "Gold Command Flag".into(),
+            name: "Altın Komuta Bayrağı".into(),
             kind: "cosmetic_flag".into(),
-            price_label: "$2.99 / or free grant in dev".into(),
-            description: "Cosmetic flag on your HQ. No combat effect.".into(),
+            price_label: "₺99 / veya dev'de ücretsiz".into(),
+            description: "Üs üzerinde kozmetik bayrak. Savaş etkisi yok.".into(),
         },
         CatalogItem {
             id: "flag_stripe".into(),
-            name: "Stripe Banner".into(),
+            name: "Çizgili Sancak".into(),
             kind: "cosmetic_flag".into(),
-            price_label: "$1.99".into(),
-            description: "Cosmetic banner skin for buildings.".into(),
+            price_label: "₺69".into(),
+            description: "Binalar için kozmetik sancak kaplaması.".into(),
         },
         CatalogItem {
             id: "mlrs_camo_skin".into(),
-            name: "M270 Woodland Camo".into(),
+            name: "Kasırga Orman Kamuflajı".into(),
             kind: "cosmetic_unit".into(),
-            price_label: "$3.99".into(),
-            description: "Visual only — same stats as standard M270 MLRS.".into(),
+            price_label: "₺129".into(),
+            description: "Sadece görsel — T-300 Kasırga ile aynı istatistikler.".into(),
         },
         CatalogItem {
             id: "xp_boost".into(),
-            name: "Season XP Boost".into(),
+            name: "Sezon XP Artışı".into(),
             kind: "meta_boost".into(),
-            price_label: "$4.99".into(),
-            description: "+15% match XP (soft-capped). No in-match power.".into(),
+            price_label: "₺149".into(),
+            description: "+%15 maç XP (yumuşak tavan). Maç içi güç yok.".into(),
         },
     ]
 }

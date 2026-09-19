@@ -131,7 +131,7 @@ pub async fn upsert_user_and_session(
             display_name: email
                 .split('@')
                 .next()
-                .unwrap_or("Commander")
+                .unwrap_or("Komutan")
                 .chars()
                 .take(24)
                 .collect(),

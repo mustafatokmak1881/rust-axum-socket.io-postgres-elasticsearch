@@ -60,7 +60,7 @@ async fn handle_socket(state: SharedState, user_id: uuid::Uuid, socket: WebSocke
                     state.hub.send(
                         user_id,
                         ServerMsg::Error {
-                            message: "Invalid message".into(),
+                            message: "Geçersiz mesaj".into(),
                         },
                     );
                 }

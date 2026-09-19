@@ -36,14 +36,14 @@ fn min_spawn_clearance(commander_count: u16) -> f32 {
     (112.0 * (2.0 / n.sqrt()).sqrt()).clamp(48.0, 96.0)
 }
 
-/// Total living+queued units with a single home HQ — room to grow over a long match.
-pub const HOME_UNIT_BUDGET: usize = 36;
-/// Extra units per captured colony HQ (= half of home → x + x/2 + x/2 …).
-pub const COLONY_UNIT_BUDGET: usize = HOME_UNIT_BUDGET / 2;
-/// Non-HQ structures at home (econ + 5 Patriots + expansion headroom).
-pub const HOME_BUILDING_BUDGET: usize = 14;
-/// Extra structures unlocked per captured colony HQ (= half of home).
-pub const COLONY_BUILDING_BUDGET: usize = HOME_BUILDING_BUDGET / 2;
+/// Total living+queued units with a single home HQ.
+pub const HOME_UNIT_BUDGET: usize = 10;
+/// Extra units per captured colony HQ.
+pub const COLONY_UNIT_BUDGET: usize = 5;
+/// Non-HQ structures at home (econ + perimeter defense + light expansion).
+pub const HOME_BUILDING_BUDGET: usize = 10;
+/// Extra structures unlocked per captured colony HQ.
+pub const COLONY_BUILDING_BUDGET: usize = 4;
 /// Wipe / claim radius around a fallen HQ (city footprint).
 pub const CITY_CLAIM_RADIUS: f32 = 14.0;
 
@@ -1688,8 +1688,8 @@ impl MatchSim {
         let faction = "usa".to_string();
         if let Some(player) = self.players.get_mut(&user_id) {
             player.faction = faction.clone();
-            // HQ base + margin so 5 Patriots (−150) don't brown out the starter plant.
-            player.resources.power = player.resources.power.saturating_add(160);
+            // HQ base + margin so 2 Hisar (−60) don't brown out the starter plant.
+            player.resources.power = player.resources.power.saturating_add(80);
         }
 
         // Ring of finished starter structures around the Command Center.
@@ -1704,13 +1704,10 @@ impl MatchSim {
             self.spawn_finished_building(user_id, team, &faction, kind, hx + ox, hy + oy);
         }
 
-        // Five Patriots on the perimeter — early all-ins should stall, not snowball.
-        let patriot_slots: [(f32, f32); 5] = [
+        // Two Hisar on the perimeter — lighter start (perf + building budget).
+        let patriot_slots: [(f32, f32); 2] = [
             (4.2, -3.4),
             (-4.2, -3.4),
-            (4.6, 2.8),
-            (-4.6, 2.8),
-            (0.0, 5.0),
         ];
         for (ox, oy) in patriot_slots {
             self.spawn_finished_building(user_id, team, &faction, "turret", hx + ox, hy + oy);
@@ -1720,8 +1717,8 @@ impl MatchSim {
             return;
         };
 
-        // Small opening armor only — big armies are earned over a long match.
-        const TANK_COUNT: usize = 3;
+        // One opening Altay — armies grow through the match (cap 10).
+        const TANK_COUNT: usize = 1;
         let hq_r = building_radius("hq");
         let tr = unit_radius(tank.unit);
         let pack_cx = hx + 4.2;
@@ -2490,7 +2487,7 @@ impl MatchSim {
             .count()
     }
 
-    /// Home X + X/2 per extra HQ (colony). No HQ → no train rights.
+    /// Home 10 + 5 per extra HQ (colony). No HQ → no train rights.
     pub fn unit_budget_for(&self, owner: Uuid) -> usize {
         let hqs = self.hq_count_for(owner);
         if hqs == 0 {
@@ -2499,7 +2496,7 @@ impl MatchSim {
         HOME_UNIT_BUDGET + COLONY_UNIT_BUDGET.saturating_mul(hqs.saturating_sub(1))
     }
 
-    /// Same x + x/2 rule for non-HQ structures.
+    /// Home 10 + 4 per extra HQ for non-HQ structures.
     pub fn building_budget_for(&self, owner: Uuid) -> usize {
         let hqs = self.hq_count_for(owner);
         if hqs == 0 {

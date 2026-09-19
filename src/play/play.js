@@ -744,7 +744,7 @@ function enterMatch(snapshot) {
   }
   $("#lobby-screen").hidden = true;
   $("#match-screen").hidden = false;
-  const fac = String(snapshot.you_faction || state.faction || "usa").toUpperCase();
+  const fac = factionDisplayName(snapshot.you_faction || state.faction || "usa");
   if (snapshot.ffa) {
     toast(`${fac} · Tek başına — herkes düşman`);
   } else {
@@ -894,10 +894,10 @@ function formatBuildingEconomy(item) {
   const gold = Number(item.cost_gold) || 0;
   const pwr = Number(item.power) || 0;
   const secs = Math.round((item.build_ms || 0) / 1000);
-  let pwrLabel = "PWR 0";
-  if (pwr > 0) pwrLabel = `PWR +${pwr}`;
-  else if (pwr < 0) pwrLabel = `PWR ${pwr}`;
-  return `GOLD ${gold} · ${pwrLabel} · ${secs}s`;
+  let pwrLabel = "GÜÇ 0";
+  if (pwr > 0) pwrLabel = `GÜÇ +${pwr}`;
+  else if (pwr < 0) pwrLabel = `GÜÇ ${pwr}`;
+  return `ALTIN ${gold} · ${pwrLabel} · ${secs}s`;
 }
 
 function findBuildable(kind) {
@@ -912,13 +912,13 @@ function renderBuildList(items) {
       <button type="button" class="build-item" data-kind="${escapeHtml(item.kind)}" data-hotkey="${index + 1}" title="${escapeHtml(formatBuildingEconomy(item))}">
         <strong><span class="hotkey">${index + 1}</span> ${escapeHtml(item.name)}</strong>
         <small class="build-cost">
-          <span class="cost-gold">GOLD ${item.cost_gold ?? 0}</span>
+          <span class="cost-gold">ALTIN ${item.cost_gold ?? 0}</span>
           <span class="cost-pwr ${(item.power || 0) < 0 ? "drain" : (item.power || 0) > 0 ? "gen" : ""}">${
             (item.power || 0) > 0
-              ? `PWR +${item.power}`
+              ? `GÜÇ +${item.power}`
               : (item.power || 0) < 0
-                ? `PWR ${item.power}`
-                : "PWR 0"
+                ? `GÜÇ ${item.power}`
+                : "GÜÇ 0"
           }</span>
         </small>
       </button>`,
@@ -1100,8 +1100,8 @@ function applyDelta(msg) {
         pruneFogGhosts();
       }
       refreshLiveVision();
-      if (globalVision) toast("Dev map: full vision ON (M)");
-      else toast("Dev map: fog restored (M)");
+      if (globalVision) toast("Geliştirici: tam görüş AÇIK (M)");
+      else toast("Geliştirici: sis geri yüklendi (M)");
     }
   }
   if (msg.scoreboard) {
@@ -1161,7 +1161,7 @@ function applyDelta(msg) {
     if (selected) showSelectedBuildingDetail(selected);
   }
   $("#match-caption").textContent =
-    `Tick ${msg.tick} · ${state.entities.size} entities · ${globalVision ? "open map" : "vision fog"}`;
+    `Tick ${msg.tick} · ${state.entities.size} varlık · ${globalVision ? "açık harita" : "görüş sisi"}`;
 }
 
 function syncBuildingSfx(prev, entity) {
@@ -6370,7 +6370,7 @@ function showSelectedBuildingDetail(ent) {
       ? ` · <span class="demolish-hint">Yık = Delete</span>`
       : ` · <span class="demolish-hint">Yık = Delete</span>`;
   } else if (own && isHq) {
-    extra = " · HQ yıkılamaz";
+    extra = " · Üs yıkılamaz";
   }
   if (econ && !state.selectedBuild) {
     const q = Number(ent.train_queue) || 0;
@@ -6378,7 +6378,7 @@ function showSelectedBuildingDetail(ent) {
     const hangar = isAir ? hangaredF16Count(ent.owner, ent) : 0;
     let train = "";
     if (ent.train_progress != null && ent.train_progress < 1) {
-      train = ` · ${isAir ? "AIR" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
+      train = ` · ${isAir ? "HAVA" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
         q > 1 ? ` ×${q}` : ""
       }`;
     } else if (q > 0) {
@@ -6394,7 +6394,7 @@ function showSelectedBuildingDetail(ent) {
     const hangar = isAir ? hangaredF16Count(ent.owner, ent) : 0;
     let train = "";
     if (ent.train_progress != null && ent.train_progress < 1) {
-      train = ` · ${isAir ? "AIR" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
+      train = ` · ${isAir ? "HAVA" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
         q > 1 ? ` ×${q}` : ""
       }`;
     } else if (q > 0) {
@@ -6420,7 +6420,7 @@ function setBuildPlacement(kind) {
     const econ = formatBuildingEconomy(def);
     $("#build-detail").innerHTML = econ
       ? `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)} · haritaya tıkla`
-      : `Placing ${escapeHtml(kind)} — click map (Esc cancel)`;
+      : `<b>${escapeHtml(name)}</b> — haritaya tıkla (Esc iptal)`;
     updateDemolishUi();
   } else {
     clearGhost();
@@ -6430,7 +6430,7 @@ function setBuildPlacement(kind) {
     if (selected) {
       showSelectedBuildingDetail(selected);
     } else {
-      $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+      $("#build-detail").textContent = "Bina seç → ALTIN / GÜÇ burada görünür";
       updateDemolishUi();
     }
     document.querySelectorAll(".build-item").forEach((el) => el.classList.remove("on"));
@@ -6778,7 +6778,7 @@ function finishBoxSelect(event) {
       refreshTrainablePanel();
       updateDemolishUi();
       if (!state.selectedBuild) {
-        $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+        $("#build-detail").textContent = "Bina seç → ALTIN / GÜÇ burada görünür";
       }
       if (point) send({ t: "set_focus", x: point.x, y: point.z });
     }
@@ -6969,69 +6969,69 @@ const ENTITY_INFO = {
     tags: ["Komuta", "Ordu / bina kapasitesi"],
   },
   power_plant: {
-    name: "Cold Fusion Reactor",
+    name: "Soğuk Füzyon Reaktörü",
     role: "Enerji",
     tags: ["Güç üretir"],
   },
   nuclear_reactor: {
-    name: "Nuclear Reactor",
+    name: "Nükleer Reaktör",
     role: "Enerji",
     tags: ["Güç üretir"],
   },
-  barracks: { name: "Barracks", role: "Üretim", tags: ["Piyade"] },
-  supply: { name: "Supply Center", role: "Lojistik", tags: ["İkmal"] },
-  supply_stash: { name: "Supply Stash", role: "Lojistik", tags: ["İkmal"] },
-  war_factory: { name: "War Factory", role: "Üretim", tags: ["Araç"] },
-  arms_dealer: { name: "Arms Dealer", role: "Üretim", tags: ["Araç"] },
+  barracks: { name: "Kışla", role: "Üretim", tags: ["Piyade"] },
+  supply: { name: "İkmal Merkezi", role: "Lojistik", tags: ["İkmal"] },
+  supply_stash: { name: "İkmal Deposu", role: "Lojistik", tags: ["İkmal"] },
+  war_factory: { name: "Savaş Fabrikası", role: "Üretim", tags: ["Araç"] },
+  arms_dealer: { name: "Silah Taciri", role: "Üretim", tags: ["Araç"] },
   airfield: {
-    name: "Airfield",
+    name: "Havaalanı",
     role: "Üretim",
     tags: ["Hava", "F-16 · TB2", "4 slot hangar"],
   },
   turret: {
-    name: "Patriot Battery",
+    name: "Hisar Bataryası",
     role: "Savunma",
     range: 17,
     damage: 780,
     tags: ["Hava savunma", "Güdümlü füze"],
   },
   stinger_site: {
-    name: "Stinger Site",
+    name: "Sungur Üssü",
     role: "Savunma",
     range: 17,
     damage: 780,
     tags: ["Hava savunma"],
   },
   gatling_cannon: {
-    name: "Gattling Cannon",
+    name: "Gatling Topu",
     role: "Savunma",
     range: 8,
     damage: 42,
     tags: ["Hızlı ateş", "Yumuşak hedef"],
   },
   bunker: {
-    name: "Bunker",
+    name: "Sığınak",
     role: "Savunma",
     range: 4.8,
     damage: 72,
     tags: ["Piyade yuvası"],
   },
   tunnel_network: {
-    name: "Tunnel Network",
+    name: "Tünel Ağı",
     role: "Savunma",
     range: 4.8,
     damage: 72,
     tags: ["MG yuvası"],
   },
   firebase: {
-    name: "Fire Base",
+    name: "Topçu Üssü",
     role: "Savunma",
     range: 12.5,
     damage: 560,
     tags: ["Obüs", "Uzun menzil"],
   },
   ranger: {
-    name: "Ranger",
+    name: "Komando",
     role: "Piyade",
     range: 4.5,
     damage: 85,
@@ -7039,28 +7039,28 @@ const ENTITY_INFO = {
     tags: ["Tüfek"],
   },
   spy: {
-    name: "Spy",
+    name: "Casus",
     role: "Özel",
     speed: 0.24,
     tags: ["Görünmez", "Silahsız", "Sabotaj", "Geniş görüş", "AoE isabet = ölüm"],
     stealth: true,
   },
   hacker: {
-    name: "Hacker",
+    name: "Siber Operatör",
     role: "Özel",
     speed: 0.18,
     tags: ["Görünmez", "Silahsız", "Bina hack", "AoE isabet = ölüm"],
     stealth: true,
   },
   terrorist: {
-    name: "Terrorist",
+    name: "Fedai",
     role: "Özel",
     speed: 0.21,
     tags: ["Görünmez", "Silahsız", "İsyan", "AoE isabet = ölüm"],
     stealth: true,
   },
   tank: {
-    name: "M1A1 Abrams",
+    name: "Altay",
     role: "Tank",
     range: 13.5,
     damage: 650,
@@ -7068,7 +7068,7 @@ const ENTITY_INFO = {
     tags: ["Ana muharebe", "Zırh"],
   },
   mlrs: {
-    name: "M270 MLRS",
+    name: "T-300 Kasırga",
     role: "Topçu",
     range: 22,
     damage: 450,
@@ -7076,7 +7076,7 @@ const ENTITY_INFO = {
     tags: ["Roket salvo", "Alan hasarı", "İnce zırh"],
   },
   f16: {
-    name: "F-16 Fighting Falcon",
+    name: "F-16 Şahin",
     role: "Hava",
     range: 16.5,
     damage: 8800,
@@ -7160,7 +7160,7 @@ function buildEntityTipLines(entity) {
   const tags = [...(lore.tags || [])];
   if (lore.stealth && !tags.some((t) => /görünmez/i.test(t))) tags.unshift("Görünmez");
   if (entity.prone && !tags.includes("Yere yatmış")) tags.push("Yere yatmış");
-  if (entity.hacked && !tags.includes("Hack'li")) tags.push("Hack'li");
+  if (entity.hacked && !tags.includes("Hacklenmiş")) tags.push("Hacklenmiş");
   if (kind.includes("f16")) {
     tags.push(entity.airborne ? "Sortide" : "Hangarda");
   }
@@ -7198,7 +7198,7 @@ function buildEntityTipLines(entity) {
     const pct = `${Math.round(entity.train_progress * 100)}%`;
     const air = String(entity.kind || "") === "airfield";
     rows.push({
-      k: air ? "AIR" : "Üretim",
+      k: air ? "HAVA" : "Üretim",
       v: queue > 1 ? `${pct} · ×${queue} emir` : pct,
     });
   } else if (queue > 0) {
@@ -7332,7 +7332,7 @@ function onPointerDown(event) {
           ? `F-16 sorti · hedef ${enemy.kind} · kalkış 19500g/jet`
           : tb2s
             ? `TB2 MAM · hedef ${enemy.kind} · boşsa hangar 1200g`
-            : `Attacking ${enemy.kind} (${state.selectedUnits.length})`,
+            : `Saldırı · ${enemy.kind} (${state.selectedUnits.length})`,
       );
     } else {
       const onlyHangaredF16 =
@@ -7346,7 +7346,7 @@ function onPointerDown(event) {
         return;
       }
       send({ t: "move_units", ids: state.selectedUnits, x: point.x, y: point.z });
-      toast(`Moving ${state.selectedUnits.length}`);
+      toast(`${state.selectedUnits.length} birim hareket ediyor`);
     }
     return;
   }
@@ -7547,11 +7547,11 @@ function hangaredF16Count(owner, nearEntity) {
 function activeLoadProgress(entity) {
   // Nearly-complete frames (0.99) are still constructing; only null means done.
   if (entity.progress != null && entity.progress < 1) {
-    return { pct: entity.progress, label: "BUILD", queue: 0 };
+    return { pct: entity.progress, label: "İNŞA", queue: 0 };
   }
   const queue = Number(entity.train_queue) || 0;
   const air = String(entity.kind || "") === "airfield";
-  const label = air ? "AIR" : "TRAIN";
+  const label = air ? "HAVA" : "ÜRET";
   if (entity.train_progress != null && entity.train_progress < 1) {
     return { pct: entity.train_progress, label, queue };
   }
@@ -7613,7 +7613,7 @@ function makeProgressSprite(pct, label, compact = false, queue = 0) {
       c0 = "#287034";
       c1 = "#6fc252";
     }
-  } else if (label === "TRAIN" || label === "AIR") {
+  } else if (label === "ÜRET" || label === "HAVA" || label === "TRAIN" || label === "AIR") {
     c0 = "#2f6a8a";
     c1 = "#6ec4e8";
   }
@@ -7638,7 +7638,7 @@ function makeProgressSprite(pct, label, compact = false, queue = 0) {
   // Generals-style: show queued orders as ×N (War Factory / Airfield / Barracks).
   const q = Number(queue) || 0;
   const text =
-    (label === "TRAIN" || label === "AIR") && q > 1
+    (label === "ÜRET" || label === "HAVA" || label === "TRAIN" || label === "AIR") && q > 1
       ? `${label} ×${q}  ${percent}%`
       : `${label} ${percent}%`;
   ctx.strokeText(text, 80, 9);
@@ -13429,7 +13429,7 @@ $("#btn-create").addEventListener("click", () => {
     ffa: ($("#match-mode")?.value || "ally") === "alone",
     faction: "usa",
   });
-  toast(`Starting USA match · ${maxPlayers} komutan · alan ${mapSize}`);
+  toast(`Türkiye maçı başlıyor · ${maxPlayers} komutan · alan ${mapSize}`);
 });
 
 $("#btn-match-exit")?.addEventListener("click", () => {
@@ -13447,7 +13447,7 @@ $("#btn-refresh-lobbies").addEventListener("click", async () => {
     const data = await res.json();
     renderOpenMatches(data.matches || data.lobbies || []);
   } catch {
-    toast("Could not list matches");
+    toast("Maç listesi alınamadı");
   }
 });
 
@@ -13483,9 +13483,9 @@ $("#build-list").addEventListener("pointerleave", () => {
     const econ = formatBuildingEconomy(def);
     $("#build-detail").innerHTML = econ
       ? `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)} · haritaya tıkla`
-      : `Placing ${escapeHtml(state.selectedBuild)}`;
+      : `<b>${escapeHtml(state.selectedBuild)}</b> yerleştiriliyor`;
   } else {
-    $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+    $("#build-detail").textContent = "Bina seç → ALTIN / GÜÇ burada görünür";
   }
 });
 
@@ -13605,7 +13605,7 @@ function demolishSelectedBuilding() {
   syncSelectionMarkers();
   updateDemolishUi();
   if (!state.selectedBuild) {
-    $("#build-detail").textContent = "Bina seç → GOLD / PWR burada görünür";
+    $("#build-detail").textContent = "Bina seç → ALTIN / GÜÇ burada görünür";
   }
 }
 
@@ -13634,7 +13634,7 @@ $("#unit-list").addEventListener("click", (event) => {
   const btn = event.target.closest("[data-unit]");
   if (!btn) return;
   if (!state.selectedBuilding) {
-    toast("Select a barracks/factory first");
+    toast("Önce kışla / fabrika seç");
     return;
   }
   send({
