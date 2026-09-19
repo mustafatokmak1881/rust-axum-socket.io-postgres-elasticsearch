@@ -115,6 +115,15 @@ pub enum ServerMsg {
         winner_team: Option<u8>,
         reason: String,
         xp_gained: i64,
+        /// True if this client's team won (Ally) / this player won (FFA).
+        #[serde(default)]
+        you_won: bool,
+        /// This commander's lifetime stats.
+        #[serde(default)]
+        you: Option<MatchPlayerStats>,
+        /// Full roster for the end-screen table.
+        #[serde(default)]
+        roster: Vec<MatchPlayerStats>,
     },
     Error {
         message: String,
@@ -182,6 +191,30 @@ pub struct ShotEvent {
 
 fn default_shot_hit() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MatchPlayerStats {
+    pub id: Uuid,
+    pub name: String,
+    pub faction: String,
+    pub team: u8,
+    pub bot: bool,
+    pub you: bool,
+    pub won: bool,
+    pub buildings_built: u32,
+    pub buildings_destroyed: u32,
+    pub buildings_lost: u32,
+    pub infantry_killed: u32,
+    pub tanks_killed: u32,
+    pub aircraft_killed: u32,
+    pub infantry_produced: u32,
+    pub tanks_produced: u32,
+    pub aircraft_produced: u32,
+    pub units_lost: u32,
+    pub gold_earned: u32,
+    pub power_earned: u32,
+    pub bases_captured: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

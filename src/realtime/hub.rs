@@ -553,13 +553,17 @@ impl MatchHub {
                         if is_bot {
                             continue;
                         }
-                        let won = {
+                        let (won, you_stats, roster) = {
                             let rt = runtime.read().await;
-                            rt.sim
+                            let won = rt
+                                .sim
                                 .players
                                 .get(&uid)
                                 .map(|p| Some(p.team) == winner)
-                                .unwrap_or(false)
+                                .unwrap_or(false);
+                            let roster = rt.sim.match_end_roster(uid);
+                            let you_stats = roster.iter().find(|r| r.you).cloned();
+                            (won, you_stats, roster)
                         };
                         let xp = hub.award_xp(uid, won).await;
                         hub.send(
@@ -569,6 +573,9 @@ impl MatchHub {
                                 winner_team: winner,
                                 reason: reason.clone(),
                                 xp_gained: xp,
+                                you_won: won,
+                                you: you_stats,
+                                roster,
                             },
                         );
                         hub.inner.user_match.remove(&uid);

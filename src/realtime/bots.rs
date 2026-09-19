@@ -8,7 +8,7 @@ use super::grid::MAX_ENTITY_RADIUS;
 use super::match_sim::{building_radius, MatchSim, MAX_PLAYERS};
 
 /// Seed bots up toward a full lobby (human already seated when MatchSim::new runs).
-pub const OPENING_BOT_TARGET: usize = 32;
+pub const OPENING_BOT_TARGET: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotStyle {

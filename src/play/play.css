@@ -520,17 +520,58 @@ input, select {
 }
 
 .scoreboard tr.you td {
-  background: #1e301850;
+  background: #1e301860;
   color: #fff4ce;
+  box-shadow: inset 3px 0 0 #9fef4a;
 }
 
 .scoreboard tr.ally td {
-  background: #12304040;
+  background: #12304055;
   color: #b8e8ff;
+  box-shadow: inset 3px 0 0 #5ad0ff;
+}
+
+.scoreboard tr.enemy td {
+  background: #30181855;
+  color: #ffb0a0;
+  box-shadow: inset 3px 0 0 #ff5a3a;
 }
 
 .scoreboard tr.dead td {
   opacity: 0.55;
+}
+
+.scoreboard-legend {
+  display: flex;
+  gap: 14px;
+  padding: 6px 18px 8px;
+  pointer-events: none;
+}
+
+.scoreboard-legend .leg {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  border: 1px solid;
+}
+
+.scoreboard-legend .leg.you {
+  color: #9fef4a;
+  border-color: #6a8a3a;
+  background: #1a301850;
+}
+
+.scoreboard-legend .leg.ally {
+  color: #5ad0ff;
+  border-color: #2a6a8a;
+  background: #12304050;
+}
+
+.scoreboard-legend .leg.enemy {
+  color: #ff5a3a;
+  border-color: #8a3a2a;
+  background: #30181850;
 }
 
 .scoreboard .status {
@@ -582,9 +623,153 @@ input, select {
 }
 
 .scoreboard .who small {
-  color: #8a9a78;
+  color: inherit;
+  opacity: 0.75;
   font-size: 11px;
   letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.match-end {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #060804d8;
+  pointer-events: auto;
+}
+
+.match-end[hidden] { display: none !important; }
+
+.match-end-card {
+  width: min(920px, 94vw);
+  max-height: min(88vh, 820px);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #141c12f8, #0a0e08f5);
+  border: 1px solid #6a8a3a;
+  box-shadow: 0 20px 60px #000c;
+}
+
+.match-end-card > header {
+  padding: 18px 22px 10px;
+  border-bottom: 1px solid #3a4a28;
+  text-align: center;
+}
+
+.match-end-tag {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.2em;
+  color: #8a9a78;
+}
+
+.match-end-card h2 {
+  margin: 0;
+  font-family: Oswald, sans-serif;
+  font-size: 36px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.match-end-card h2.win { color: #9fef4a; }
+.match-end-card h2.lose { color: #ff8a7a; }
+
+.match-end-reason,
+.match-end-xp {
+  margin: 6px 0 0;
+  color: #c8d8b0;
+  font-size: 14px;
+}
+
+.match-end-you {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #2a3a1c;
+}
+
+.match-end-you .stat {
+  background: #10160e;
+  border: 1px solid #2a3a1c;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.match-end-you .stat b {
+  display: block;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  color: #e8f0d8;
+}
+
+.match-end-you .stat span {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #8a9a78;
+  text-transform: uppercase;
+}
+
+.match-end-scroll {
+  overflow: auto;
+  flex: 1;
+  padding: 0 10px 8px;
+}
+
+.match-end-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.match-end-scroll th,
+.match-end-scroll td {
+  padding: 7px 6px;
+  border-bottom: 1px solid #1a2414;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.match-end-scroll th:first-child,
+.match-end-scroll td:first-child {
+  text-align: left;
+}
+
+.match-end-scroll th {
+  color: #8a9a78;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  position: sticky;
+  top: 0;
+  background: #121a10;
+}
+
+.match-end-scroll tr.you td {
+  background: #1e301850;
+  color: #fff4ce;
+}
+
+.match-end-scroll tr.won td:first-child::after {
+  content: " · KAZANDI";
+  color: #9fef4a;
+  font-size: 10px;
+}
+
+.match-end-card > footer {
+  padding: 12px 18px 16px;
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid #2a3a1c;
+}
+
+.match-end-card > footer .primary {
+  min-width: 180px;
+  padding: 12px 20px;
+  font-size: 15px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 

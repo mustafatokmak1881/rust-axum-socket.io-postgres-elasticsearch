@@ -37,7 +37,7 @@
     <section id="lobby-screen" class="screen">
       <div class="lobby-panel">
         <h1>Command Lobby</h1>
-        <p class="blurb">Match-based Generals · drop-in join · up to 32 commanders · fair cosmetics only</p>
+        <p class="blurb">Match-based Generals · drop-in join · up to 64 commanders · fair cosmetics only</p>
 
         <div class="faction-row" id="faction-row" hidden>
           <button type="button" data-faction="usa" class="faction on">USA</button>
@@ -45,7 +45,7 @@
 
         <div class="lobby-actions">
           <label>Komutan
-            <input id="max-players" type="number" min="2" max="32" value="8">
+            <input id="max-players" type="number" min="2" max="64" value="8">
           </label>
           <label>Mode
             <select id="match-mode">
@@ -119,8 +119,13 @@
       <div id="scoreboard" class="scoreboard" hidden>
         <header>
           <h2>Komutanlar</h2>
-          <span class="hint">Tab · tıkla → görünür üs (sis) · tekrar = sonraki</span>
+          <span class="hint" id="scoreboard-hint">Tab · tıkla → görünür üs</span>
         </header>
+        <div class="scoreboard-legend" id="scoreboard-legend" hidden>
+          <span class="leg you">SEN</span>
+          <span class="leg ally">DOST</span>
+          <span class="leg enemy">DÜŞMAN</span>
+        </div>
         <div class="scoreboard-scroll">
           <table>
             <thead>
@@ -140,9 +145,43 @@
           </table>
         </div>
       </div>
+
+      <div id="match-end" class="match-end" hidden>
+        <div class="match-end-card">
+          <header>
+            <p class="match-end-tag" id="match-end-tag">MAÇ BİTTİ</p>
+            <h2 id="match-end-title">Sonuç</h2>
+            <p class="match-end-reason" id="match-end-reason"></p>
+            <p class="match-end-xp" id="match-end-xp"></p>
+          </header>
+          <div class="match-end-you" id="match-end-you"></div>
+          <div class="match-end-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Komutan</th>
+                  <th>Bina+</th>
+                  <th>Bina↓</th>
+                  <th>Ask↓</th>
+                  <th>Tank↓</th>
+                  <th>Hava↓</th>
+                  <th>Üret</th>
+                  <th>Kayıp</th>
+                  <th>Gold</th>
+                  <th>Üs+</th>
+                </tr>
+              </thead>
+              <tbody id="match-end-body"></tbody>
+            </table>
+          </div>
+          <footer>
+            <button type="button" id="btn-match-exit" class="primary">Lobye dön</button>
+          </footer>
+        </div>
+      </div>
     </section>
   </div>
 
-  <script type="module" src="/assets/play.js?v=radar-hq1"></script>
+  <script type="module" src="/assets/play.js?v=endstats1"></script>
 </body>
 </html>

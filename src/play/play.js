@@ -150,8 +150,7 @@ function onServer(msg) {
       break;
     case "match_end":
       state.matchEnded = true;
-      toast(`Match over: ${msg.reason} · +${msg.xp_gained} XP`);
-      setTimeout(() => location.reload(), 4000);
+      showMatchEndScreen(msg);
       break;
     case "store_ok":
       state.entitlements = msg.entitlements || [];
@@ -175,6 +174,96 @@ function syncFactionButtons() {
 }
 
 function renderLobby() {}
+
+function showMatchEndScreen(msg) {
+  const root = $("#match-end");
+  if (!root) {
+    toast(`Match over: ${msg.reason} · +${msg.xp_gained} XP`);
+    return;
+  }
+  setScoreboardOpen(false);
+  const won = !!msg.you_won;
+  const title = $("#match-end-title");
+  const tag = $("#match-end-tag");
+  if (title) {
+    title.textContent = won ? "ZAFER" : "YENİLGİ";
+    title.classList.toggle("win", won);
+    title.classList.toggle("lose", !won);
+  }
+  if (tag) tag.textContent = won ? "GÖREV BAŞARILI" : "GÖREV BAŞARISIZ";
+  const reason = $("#match-end-reason");
+  if (reason) reason.textContent = msg.reason || "Maç bitti";
+  const xp = $("#match-end-xp");
+  if (xp) xp.textContent = `+${msg.xp_gained ?? 0} XP`;
+
+  const you = msg.you || (msg.roster || []).find((r) => r.you) || null;
+  const youBox = $("#match-end-you");
+  if (youBox) {
+    const produced =
+      (you?.infantry_produced || 0) +
+      (you?.tanks_produced || 0) +
+      (you?.aircraft_produced || 0);
+    const kills =
+      (you?.infantry_killed || 0) +
+      (you?.tanks_killed || 0) +
+      (you?.aircraft_killed || 0);
+    youBox.innerHTML = [
+      ["Bina üretti", you?.buildings_built ?? 0],
+      ["Bina yıktı", you?.buildings_destroyed ?? 0],
+      ["Bina kaybetti", you?.buildings_lost ?? 0],
+      ["Asker yok etti", you?.infantry_killed ?? 0],
+      ["Tank yok etti", you?.tanks_killed ?? 0],
+      ["Hava yok etti", you?.aircraft_killed ?? 0],
+      ["Toplam öldürme", kills],
+      ["Üretti", produced],
+      ["Birim kaybı", you?.units_lost ?? 0],
+      ["Gold kazandı", you?.gold_earned ?? 0],
+      ["Güç kazandı", you?.power_earned ?? 0],
+      ["Üs ele geçirdi", you?.bases_captured ?? 0],
+    ]
+      .map(
+        ([label, val]) =>
+          `<div class="stat"><b>${val}</b><span>${escapeHtml(label)}</span></div>`,
+      )
+      .join("");
+  }
+
+  const body = $("#match-end-body");
+  if (body) {
+    const roster = msg.roster || [];
+    body.innerHTML = roster
+      .map((r) => {
+        const produced =
+          (r.infantry_produced || 0) +
+          (r.tanks_produced || 0) +
+          (r.aircraft_produced || 0);
+        const cls = [r.you ? "you" : "", r.won ? "won" : ""]
+          .filter(Boolean)
+          .join(" ");
+        const team = state.match?.ffa ? "" : ` · T${Number(r.team) + 1}`;
+        return `<tr class="${cls}">
+          <td>${escapeHtml(r.name || "—")}${escapeHtml(team)}</td>
+          <td>${r.buildings_built ?? 0}</td>
+          <td>${r.buildings_destroyed ?? 0}</td>
+          <td>${r.infantry_killed ?? 0}</td>
+          <td>${r.tanks_killed ?? 0}</td>
+          <td>${r.aircraft_killed ?? 0}</td>
+          <td>${produced}</td>
+          <td>${r.units_lost ?? 0}</td>
+          <td>${r.gold_earned ?? 0}</td>
+          <td>${r.bases_captured ?? 0}</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  root.hidden = false;
+  toast(won ? "Zafer — istatistikler ekranda" : "Yenilgi — istatistikler ekranda");
+}
+
+function exitMatchToLobby() {
+  location.reload();
+}
 
 function renderOpenMatches(matches) {
   const root = $("#open-lobbies");
@@ -271,6 +360,15 @@ function renderScoreboard() {
   const body = $("#scoreboard-body");
   if (!body) return;
   const rows = state.scoreboard || [];
+  const legend = $("#scoreboard-legend");
+  const hint = $("#scoreboard-hint");
+  const allyMode = state.match && !state.match.ffa;
+  if (legend) legend.hidden = !allyMode;
+  if (hint) {
+    hint.textContent = allyMode
+      ? "Tab · yeşil=sen · mavi=dost · kırmızı=düşman · tıkla=üs"
+      : "Tab · tıkla → görünür üs (sis) · tekrar = sonraki";
+  }
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="10" class="muted">Veri yok</td></tr>`;
     return;
@@ -279,19 +377,27 @@ function renderScoreboard() {
     .map((r) => {
       const [c0, c1, c2] = r.colors || [0x888888, 0x555555, 0x333333];
       const ally =
-        !state.match?.ffa &&
-        !r.you &&
-        Number(r.team) === Number(state.match?.team);
+        allyMode && !r.you && Number(r.team) === Number(state.match?.team);
+      const enemy = !r.you && !ally;
       const cls = [
         r.you ? "you" : "",
         ally ? "ally" : "",
+        enemy ? "enemy" : "",
         r.alive ? "alive" : "dead",
         "jumpable",
       ]
         .filter(Boolean)
         .join(" ");
       const faction = String(r.faction || "").toUpperCase();
-      const tag = r.bot ? "BOT" : r.you ? "SEN" : ally ? "DOST" : "OYUNCU";
+      const tag = r.bot
+        ? "BOT"
+        : r.you
+          ? "SEN"
+          : ally
+            ? "DOST"
+            : allyMode
+              ? "DÜŞMAN"
+              : "OYUNCU";
       const teamLabel = state.match?.ffa
         ? "—"
         : `T${Number(r.team) + 1}`;
@@ -10122,10 +10228,10 @@ function animate() {
 
 /** Auto edge from commander count — mirrors server `map_size_for_players` (roomy). */
 function mapSizeForCommanders(n) {
-  const c = Math.max(2, Math.min(32, Number(n) || 2));
-  let size = Math.round(96 + (c - 2) * 26);
+  const c = Math.max(2, Math.min(64, Number(n) || 2));
+  let size = Math.round(96 * Math.sqrt(c) + 40);
   size = Math.round(size / 2) * 2;
-  return Math.max(64, Math.min(2048, size));
+  return Math.max(96, Math.min(2048, size));
 }
 
 $("#faction-row")?.addEventListener("click", (event) => {
@@ -10148,6 +10254,10 @@ $("#btn-create").addEventListener("click", () => {
     faction: "usa",
   });
   toast(`Starting USA match · ${maxPlayers} komutan · alan ${mapSize}`);
+});
+
+$("#btn-match-exit")?.addEventListener("click", () => {
+  exitMatchToLobby();
 });
 
 $("#btn-join").addEventListener("click", () => {

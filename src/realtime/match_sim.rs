@@ -9,24 +9,24 @@ use super::bots::{self, BotMind};
 use super::generals_roster::{self, faction_ok};
 use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
-    BuildableInfo, EntityView, MatchSnapshot, MountainView, PondView, ResourcesView, ScoreboardRow,
-    ShotEvent, TrainableInfo,
+    BuildableInfo, EntityView, MatchPlayerStats, MatchSnapshot, MountainView, PondView,
+    ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
 };
 
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
-pub const MAX_PLAYERS: u8 = 32;
+pub const MAX_PLAYERS: u8 = 64;
 /// Smallest playable edge (2 commanders).
-pub const MIN_MAP_SIZE: u16 = 64;
+pub const MIN_MAP_SIZE: u16 = 96;
 /// Cap for auto-scaled arenas.
 pub const MAX_MAP_SIZE: u16 = 2048;
 
-/// Auto map edge from commander count — roomy so bases aren't cramped.
-/// 2 → 96, 8 → 252, 16 → 460, 32 → 876.
+/// Auto map edge from commander count — large gaps between bases.
+/// ~96 wu cell spacing on a √n grid → 2≈170, 8≈310, 32≈580, 64≈800.
 pub fn map_size_for_players(max_players: u8) -> u16 {
     let n = max_players.clamp(2, MAX_PLAYERS) as f32;
-    // ~26 wu extra edge per commander past 2, plus base breathing room.
-    let size = (96.0 + (n - 2.0) * 26.0).round() as i32;
+    let spacing = 96.0;
+    let size = (spacing * n.sqrt() + 40.0).round() as i32;
     let size = ((size + 1) / 2) * 2; // even
     (size as u16).clamp(MIN_MAP_SIZE, MAX_MAP_SIZE)
 }
@@ -41,6 +41,66 @@ pub const HOME_BUILDING_BUDGET: usize = 9;
 pub const COLONY_BUILDING_BUDGET: usize = HOME_BUILDING_BUDGET / 2;
 /// Wipe / claim radius around a fallen HQ (city footprint).
 pub const CITY_CLAIM_RADIUS: f32 = 14.0;
+
+/// Lifetime combat / economy counters for the post-match report.
+#[derive(Clone, Debug, Default)]
+pub struct PlayerStats {
+    pub buildings_built: u32,
+    pub buildings_destroyed: u32,
+    pub buildings_lost: u32,
+    pub infantry_killed: u32,
+    pub tanks_killed: u32,
+    pub aircraft_killed: u32,
+    pub infantry_produced: u32,
+    pub tanks_produced: u32,
+    pub aircraft_produced: u32,
+    pub units_lost: u32,
+    pub gold_earned: u32,
+    pub power_earned: u32,
+    pub bases_captured: u32,
+}
+
+fn unit_is_vehicle(kind: &str) -> bool {
+    let k = kind;
+    k.contains("tank")
+        || k.contains("mlrs")
+        || k.contains("humvee")
+        || k.contains("technical")
+        || k.contains("buggy")
+        || k.contains("scorpion")
+        || k.contains("tomahawk")
+        || k.contains("scud")
+        || k.contains("inferno")
+        || k.contains("crawler")
+        || k.contains("battle_bus")
+        || k.contains("bomb_truck")
+        || k.contains("radar_van")
+        || k.contains("quad")
+        || k.contains("paladin")
+        || k.contains("marauder")
+        || k.contains("overlord")
+        || k.contains("microwave")
+}
+
+fn credit_unit_kill(stats: &mut PlayerStats, kind: &str) {
+    if is_air_kind(kind) {
+        stats.aircraft_killed = stats.aircraft_killed.saturating_add(1);
+    } else if unit_is_vehicle(kind) {
+        stats.tanks_killed = stats.tanks_killed.saturating_add(1);
+    } else {
+        stats.infantry_killed = stats.infantry_killed.saturating_add(1);
+    }
+}
+
+fn credit_unit_produced(stats: &mut PlayerStats, kind: &str) {
+    if is_air_kind(kind) {
+        stats.aircraft_produced = stats.aircraft_produced.saturating_add(1);
+    } else if unit_is_vehicle(kind) {
+        stats.tanks_produced = stats.tanks_produced.saturating_add(1);
+    } else {
+        stats.infantry_produced = stats.infantry_produced.saturating_add(1);
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PlayerState {
@@ -67,6 +127,7 @@ pub struct PlayerState {
     pub colonies: u32,
     /// Original Command Center — H-key / scoreboard prefer this over later colonies.
     pub home_hq: Option<Uuid>,
+    pub stats: PlayerStats,
 }
 
 impl PlayerState {
@@ -981,6 +1042,7 @@ impl MatchSim {
                 debug_omniscient: false,
                 colonies: 0,
                 home_hq: None,
+                stats: PlayerStats::default(),
             },
         );
 
@@ -1024,101 +1086,83 @@ impl MatchSim {
         self.reveal_vision_for(user_id);
     }
 
-    /// Place new HQs on a wide scatter. Ally and Alone both spread across the map.
+    /// Spread HQs across the whole map — maximize distance to existing bases.
+    /// Avoids the old center-spiral which stacked late joins near the middle.
     fn allocate_spawn_xy(&self, _team: u8) -> (f32, f32) {
         let map = self.map_size as f32;
+        let margin = (map * 0.07).clamp(14.0, 36.0);
         let hq_positions: Vec<(f32, f32)> = self
             .entities
             .values()
-            .filter(|e| e.kind == "hq")
+            .filter(|e| e.kind == "hq" && e.hp > 0.0)
             .map(|e| (e.x, e.y))
             .collect();
+        let hq_r = building_radius("hq") + 0.5;
+        let usable = (map - 2.0 * margin).max(8.0);
 
-        // Scatter from map center (or existing HQ centroid) — no west/east team bias.
-        let (bx, by) = if hq_positions.is_empty() {
-            (map * 0.50, map * 0.50)
-        } else {
-            let n = hq_positions.len() as f32;
-            let sx: f32 = hq_positions.iter().map(|(x, _)| *x).sum();
-            let sy: f32 = hq_positions.iter().map(|(_, y)| *y).sum();
-            (sx / n, sy / n)
-        };
+        // Sample a dense lattice; pick the cell farthest from every living HQ.
+        let steps = ((map / 10.0).clamp(16.0, 56.0)) as i32;
+        let mut best = (map * 0.5, map * 0.5);
+        let mut best_score = -1.0f32;
 
-        const GOLDEN: f32 = 2.399_963;
-        // Wider bases — fewer collisions / less early fight clutter (still packs for 32).
-        let min_sep = if self.players.len() >= 20 {
-            18.0
-        } else if self.players.len() >= 12 {
-            26.0
-        } else {
-            34.0
-        };
-
-        // Rotate the golden spiral per match so Ally spawns aren't the same ring every game.
-        let mut spin = self.id.as_u128() as u64 ^ (self.players.len() as u64 * 17);
+        // Match-seeded jitter so grids aren't identical every game.
+        let mut spin = self.id.as_u128() as u64 ^ (self.players.len() as u64 * 31);
         spin = spin
             .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
-        let spin_ang = (spin % 10_000) as f32 / 10_000.0 * std::f32::consts::TAU;
+            .wrapping_add(7);
+        let jx = ((spin % 1000) as f32 / 1000.0 - 0.5) * (usable / steps as f32) * 0.35;
+        spin = spin
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(11);
+        let jy = ((spin % 1000) as f32 / 1000.0 - 0.5) * (usable / steps as f32) * 0.35;
 
-        for k in 0..360 {
-            let r = if hq_positions.is_empty() {
-                // First HQ near center-ish, then spiral out.
-                if k == 0 {
-                    0.0
-                } else {
-                    min_sep * 0.7 + (k as f32).sqrt() * 6.5
-                }
-            } else {
-                min_sep + (k as f32).sqrt() * 7.0
-            };
-            let angle = k as f32 * GOLDEN + spin_ang;
-            let x = (bx + angle.cos() * r).clamp(4.0, map - 5.0);
-            let y = (by + angle.sin() * r).clamp(4.0, map - 5.0);
-            let fx = x.floor() as f32 + 0.5;
-            let fy = y.floor() as f32 + 0.5;
-            let sep = min_sep * 0.95;
-            let mut blocked = false;
-            self.grid.for_each_nearby(fx, fy, sep + MAX_ENTITY_RADIUS, |id| {
-                let Some(e) = self.entities.get(&id) else {
-                    return false;
-                };
-                if !e.building {
-                    return false;
-                }
-                let dx = e.x - fx;
-                let dy = e.y - fy;
-                if dx * dx + dy * dy < sep * sep {
-                    blocked = true;
-                    return true;
-                }
-                false
-            });
-            if !blocked {
-                if self.ground_blocks(fx, fy, building_radius("hq") + 0.5) {
+        for iy in 0..=steps {
+            for ix in 0..=steps {
+                let x = margin + usable * (ix as f32 / steps as f32) + jx;
+                let y = margin + usable * (iy as f32 / steps as f32) + jy;
+                let fx = x.clamp(margin, map - margin).floor() + 0.5;
+                let fy = y.clamp(margin, map - margin).floor() + 0.5;
+                if self.ground_blocks(fx, fy, hq_r) {
                     continue;
                 }
-                return (fx, fy);
+                let score = if hq_positions.is_empty() {
+                    // First commander: prefer a corner/side, not the dead center.
+                    let dx = fx - map * 0.5;
+                    let dy = fy - map * 0.5;
+                    (dx * dx + dy * dy).sqrt()
+                } else {
+                    hq_positions
+                        .iter()
+                        .map(|(hx, hy)| {
+                            let dx = fx - hx;
+                            let dy = fy - hy;
+                            (dx * dx + dy * dy).sqrt()
+                        })
+                        .fold(f32::MAX, f32::min)
+                };
+                if score > best_score {
+                    best_score = score;
+                    best = (fx, fy);
+                }
             }
         }
 
-        let fallback_x = bx.clamp(4.0, map - 5.0);
-        let fy = by.clamp(4.0, map - 5.0);
-        let hq_r = building_radius("hq") + 0.5;
-        if !self.ground_blocks(fallback_x, fy, hq_r) {
-            return (fallback_x, fy);
+        if best_score >= 0.0 && !self.ground_blocks(best.0, best.1, hq_r) {
+            return best;
         }
-        // Nudge off water / rock if the naive fallback landed on blocked terrain.
-        for k in 0..48 {
+
+        // Fallback spiral if the lattice somehow failed (rare).
+        let (bx, by) = best;
+        for k in 0..96 {
             let ang = k as f32 * 0.7;
-            let dist = 2.0 + k as f32 * 0.35;
-            let x = (fallback_x + ang.cos() * dist).clamp(4.0, map - 5.0);
-            let y = (fy + ang.sin() * dist).clamp(4.0, map - 5.0);
+            let dist = 3.0 + k as f32 * 0.55;
+            let x = (bx + ang.cos() * dist).clamp(margin, map - margin);
+            let y = (by + ang.sin() * dist).clamp(margin, map - margin);
             if !self.ground_blocks(x, y, hq_r) {
-                return (x, y);
+                return (x.floor() + 0.5, y.floor() + 0.5);
             }
         }
-        (fallback_x, fy)
+        (bx, by)
     }
 
     /// Mid-match join: spawn HQ on the same wide ring as the opening cities.
@@ -1429,6 +1473,8 @@ impl MatchSim {
 
     /// Tab scoreboard: every commander, army size, and economy.
     pub fn scoreboard_for(&self, viewer: Uuid) -> Vec<ScoreboardRow> {
+        let viewer_team = self.players.get(&viewer).map(|p| p.team);
+        let ffa = self.ffa;
         let mut rows: Vec<ScoreboardRow> = self
             .players
             .values()
@@ -1484,11 +1530,66 @@ impl MatchSim {
             })
             .collect();
         rows.sort_by(|a, b| {
-            b.alive
-                .cmp(&a.alive)
+            let relation = |r: &ScoreboardRow| -> u8 {
+                if r.you {
+                    0
+                } else if !ffa && viewer_team == Some(r.team) {
+                    1 // ally
+                } else {
+                    2 // enemy
+                }
+            };
+            relation(a)
+                .cmp(&relation(b))
+                .then_with(|| b.alive.cmp(&a.alive))
                 .then_with(|| b.bases.cmp(&a.bases))
                 .then_with(|| (b.infantry + b.tanks).cmp(&(a.infantry + a.tanks)))
                 .then_with(|| b.gold.cmp(&a.gold))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        rows
+    }
+
+    /// Full roster stats for the post-match report.
+    pub fn match_end_roster(&self, viewer: Uuid) -> Vec<MatchPlayerStats> {
+        let mut rows: Vec<MatchPlayerStats> = self
+            .players
+            .values()
+            .map(|p| {
+                let s = &p.stats;
+                let won = self.winner_team.map(|t| t == p.team).unwrap_or(false);
+                MatchPlayerStats {
+                    id: p.user_id,
+                    name: p.label(),
+                    faction: p.faction.clone(),
+                    team: p.team,
+                    bot: p.is_bot(),
+                    you: p.user_id == viewer,
+                    won,
+                    buildings_built: s.buildings_built,
+                    buildings_destroyed: s.buildings_destroyed,
+                    buildings_lost: s.buildings_lost,
+                    infantry_killed: s.infantry_killed,
+                    tanks_killed: s.tanks_killed,
+                    aircraft_killed: s.aircraft_killed,
+                    infantry_produced: s.infantry_produced,
+                    tanks_produced: s.tanks_produced,
+                    aircraft_produced: s.aircraft_produced,
+                    units_lost: s.units_lost,
+                    gold_earned: s.gold_earned,
+                    power_earned: s.power_earned,
+                    bases_captured: s.bases_captured,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.won
+                .cmp(&a.won)
+                .then_with(|| {
+                    let ak = a.buildings_destroyed + a.infantry_killed + a.tanks_killed + a.aircraft_killed;
+                    let bk = b.buildings_destroyed + b.infantry_killed + b.tanks_killed + b.aircraft_killed;
+                    bk.cmp(&ak)
+                })
                 .then_with(|| a.name.cmp(&b.name))
         });
         rows
@@ -1744,6 +1845,11 @@ impl MatchSim {
             due_tick: self.tick + (def.build_ms as u64 / (1000 / TICK_HZ as u64)).max(1),
         });
         self.reveal_vision_for(user_id);
+
+        if let Some(p) = self.players.get_mut(&user_id) {
+            // Count on place — construction started / ordered.
+            p.stats.buildings_built = p.stats.buildings_built.saturating_add(1);
+        }
 
         Ok(())
     }
@@ -2081,8 +2187,16 @@ impl MatchSim {
             let powered = player.resources.has_power();
             if powered {
                 player.resources.gold = player.resources.gold.saturating_add(g.gold);
+                if g.gold > 0 {
+                    player.stats.gold_earned =
+                        player.stats.gold_earned.saturating_add(g.gold as u32);
+                }
             }
             player.resources.power = player.resources.power.saturating_add(g.pwr);
+            if g.pwr > 0 {
+                player.stats.power_earned =
+                    player.stats.power_earned.saturating_add(g.pwr as u32);
+            }
         }
     }
 
@@ -2243,6 +2357,9 @@ impl MatchSim {
                                 last_hit_by: None,
                             };
                             self.put_entity(spawn);
+                            if let Some(p) = self.players.get_mut(&owner) {
+                                credit_unit_produced(&mut p.stats, def.unit);
+                            }
                         }
                     }
                 }
@@ -2775,6 +2892,26 @@ impl MatchSim {
             .collect();
         for id in dead {
             if let Some(entity) = self.take_entity(id) {
+                // Combat credits — killer vs owner losses.
+                if let Some(killer) = entity.last_hit_by {
+                    if killer != entity.owner {
+                        if let Some(p) = self.players.get_mut(&killer) {
+                            if entity.building {
+                                p.stats.buildings_destroyed =
+                                    p.stats.buildings_destroyed.saturating_add(1);
+                            } else if entity.unit {
+                                credit_unit_kill(&mut p.stats, &entity.kind);
+                            }
+                        }
+                    }
+                }
+                if let Some(p) = self.players.get_mut(&entity.owner) {
+                    if entity.building {
+                        p.stats.buildings_lost = p.stats.buildings_lost.saturating_add(1);
+                    } else if entity.unit {
+                        p.stats.units_lost = p.stats.units_lost.saturating_add(1);
+                    }
+                }
                 self.refund_building_economy(&entity);
                 self.removed.push(id);
                 if entity.kind == "hq" {
@@ -3004,6 +3141,7 @@ impl MatchSim {
             .count();
         if let Some(player) = self.players.get_mut(&owner) {
             player.colonies = hqs.saturating_sub(1) as u32;
+            player.stats.bases_captured = player.stats.bases_captured.saturating_add(1);
             // Keep the commander's camera / focus where they were fighting —
             // snapping to the colony made the home base feel like it vanished.
             // Captured HQ brings its own base power online.
