@@ -16,14 +16,24 @@ use super::protocol::{
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 32;
+/// Smallest playable edge (2 commanders).
+pub const MIN_MAP_SIZE: u16 = 64;
+/// Largest selectable edge — huge custom arenas allowed.
+pub const MAX_MAP_SIZE: u16 = 2048;
 
-/// Map edge length scales with commander slots so more players get more ground.
-/// 2 → 64, 8 → 128, 32 → 256 (area ~linear in player count).
-pub fn map_size_for_players(max_players: u8) -> u16 {
+/// Minimum map edge for N commanders (area grows with player count).
+/// 2 → 64, 8 → 128, 32 → 256. User may pick anything ≥ this up to MAX_MAP_SIZE.
+pub fn min_map_size_for_players(max_players: u8) -> u16 {
     let n = max_players.clamp(2, MAX_PLAYERS) as f32;
     let size = (64.0 * (n / 2.0).sqrt()).round() as i32;
     let size = ((size + 1) / 2) * 2; // even
-    size.clamp(64, 256) as u16
+    (size as u16).clamp(MIN_MAP_SIZE, MAX_MAP_SIZE)
+}
+
+/// Resolve final edge: at least the commander minimum, at most MAX_MAP_SIZE.
+pub fn resolve_map_size(requested: u16, max_players: u8) -> u16 {
+    let min = min_map_size_for_players(max_players);
+    requested.max(min).clamp(MIN_MAP_SIZE, MAX_MAP_SIZE)
 }
 
 /// Total living+queued units with a single home HQ.
@@ -840,7 +850,7 @@ impl MatchSim {
         roster: Vec<(Uuid, String, String, u8, Option<String>)>,
         target_players: u8,
     ) -> Self {
-        let map_size = map_size.clamp(64, 256);
+        let map_size = map_size.clamp(MIN_MAP_SIZE, MAX_MAP_SIZE);
         let ponds = generate_ponds(id, map_size);
         let mountains = generate_mountains(id, map_size, &ponds);
         let mut sim = Self {

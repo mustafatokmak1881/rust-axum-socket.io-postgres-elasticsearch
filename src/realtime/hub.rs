@@ -8,7 +8,7 @@ use redis::AsyncCommands;
 use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
-use super::match_sim::{self, MatchSim, MAX_PLAYERS, map_size_for_players};
+use super::match_sim::{self, MatchSim, MAX_PLAYERS, resolve_map_size};
 use super::protocol::{
     ClientMsg, OpenMatchView, ServerMsg, default_catalog, normalize_faction,
 };
@@ -285,7 +285,7 @@ impl MatchHub {
         &self,
         user_id: Uuid,
         max_players: u8,
-        _map_size: u16,
+        map_size: u16,
         ffa: bool,
         faction: String,
     ) -> Result<(), String> {
@@ -296,8 +296,8 @@ impl MatchHub {
         }
 
         let max_players = max_players.clamp(2, MAX_PLAYERS);
-        // Commander count drives map size — client map_size is ignored.
-        let map_size = map_size_for_players(max_players);
+        // Area is user-chosen but never below the commander minimum.
+        let map_size = resolve_map_size(map_size, max_players);
         let user = users::load_user(&self.inner.redis, user_id)
             .await
             .map_err(|e| e.to_string())?

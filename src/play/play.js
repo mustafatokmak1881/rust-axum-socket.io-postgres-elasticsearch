@@ -10052,24 +10052,50 @@ function animate() {
 
 /* ---------- UI events ---------- */
 
-/** Edge length from commander slots — mirrors server `map_size_for_players`. */
-function mapSizeForCommanders(n) {
+const MIN_MAP_AREA = 64;
+const MAX_MAP_AREA = 2048;
+
+/** Minimum edge length for N commanders — mirrors server `min_map_size_for_players`. */
+function minAreaForCommanders(n) {
   const c = Math.max(2, Math.min(32, Number(n) || 2));
   let size = Math.round(64 * Math.sqrt(c / 2));
   size = Math.round(size / 2) * 2;
-  return Math.max(64, Math.min(256, size));
+  return Math.max(MIN_MAP_AREA, Math.min(MAX_MAP_AREA, size));
 }
 
-function syncLobbyMapSize() {
+function clampMapArea(v, commanders) {
+  const min = minAreaForCommanders(commanders);
+  let n = Math.round(Number(v) || min);
+  if (!Number.isFinite(n)) n = min;
+  n = Math.round(n / 2) * 2;
+  return Math.max(min, Math.min(MAX_MAP_AREA, n));
+}
+
+/** When commanders rise, lift area to the new floor (keep larger custom values). */
+function syncLobbyAreaFromCommanders() {
   const slots = $("#max-players");
-  const mapEl = $("#map-size");
-  if (!slots || !mapEl) return;
-  mapEl.value = String(mapSizeForCommanders(slots.value));
+  const areaEl = $("#map-area");
+  if (!slots || !areaEl) return;
+  const commanders = Number(slots.value) || 8;
+  const min = minAreaForCommanders(commanders);
+  areaEl.min = String(min);
+  areaEl.max = String(MAX_MAP_AREA);
+  const cur = Number(areaEl.value) || min;
+  if (cur < min) areaEl.value = String(min);
+  areaEl.title = `Minimum ${min} · en fazla ${MAX_MAP_AREA}`;
 }
 
-$("#max-players")?.addEventListener("input", syncLobbyMapSize);
-$("#max-players")?.addEventListener("change", syncLobbyMapSize);
-syncLobbyMapSize();
+function syncLobbyAreaClamp() {
+  const slots = $("#max-players");
+  const areaEl = $("#map-area");
+  if (!slots || !areaEl) return;
+  areaEl.value = String(clampMapArea(areaEl.value, slots.value));
+}
+
+$("#max-players")?.addEventListener("input", syncLobbyAreaFromCommanders);
+$("#max-players")?.addEventListener("change", syncLobbyAreaFromCommanders);
+$("#map-area")?.addEventListener("change", syncLobbyAreaClamp);
+syncLobbyAreaFromCommanders();
 
 $("#faction-row")?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-faction]");
@@ -10082,8 +10108,8 @@ $("#faction-row")?.addEventListener("click", (event) => {
 $("#btn-create").addEventListener("click", () => {
   void enterGameFullscreen();
   const maxPlayers = Number($("#max-players").value) || 8;
-  const mapSize = mapSizeForCommanders(maxPlayers);
-  if ($("#map-size")) $("#map-size").value = String(mapSize);
+  const mapSize = clampMapArea($("#map-area")?.value, maxPlayers);
+  if ($("#map-area")) $("#map-area").value = String(mapSize);
   send({
     t: "create_lobby",
     max_players: maxPlayers,
@@ -10091,7 +10117,7 @@ $("#btn-create").addEventListener("click", () => {
     ffa: ($("#match-mode")?.value || "ally") === "alone",
     faction: "usa",
   });
-  toast(`Starting USA match · ${maxPlayers} komutan · harita ${mapSize}`);
+  toast(`Starting USA match · ${maxPlayers} komutan · alan ${mapSize}`);
 });
 
 $("#btn-join").addEventListener("click", () => {
