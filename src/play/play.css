@@ -407,6 +407,7 @@ input, select {
 .radar-legend .own { color: #9fef4a; }
 .radar-legend .ally { color: #5ad0ff; }
 .radar-legend .enemy { color: #ff5a3a; }
+.radar-legend .hq { color: #c8f080; font-weight: 600; }
 .radar-legend .fight { color: #ffe066; }
 
 .match-caption {

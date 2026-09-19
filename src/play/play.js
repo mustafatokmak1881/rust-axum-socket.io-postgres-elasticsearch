@@ -235,6 +235,38 @@ function hexColor(n) {
   return `#${(Number(n) >>> 0).toString(16).padStart(6, "0")}`;
 }
 
+/** Radar / Tab jump: own+ally always; enemies only in live vision (or full map if no fog). */
+function entityVisibleOnMap(entity) {
+  if (!entity || (entity.hp != null && entity.hp <= 0)) return false;
+  if (globalVision) return true;
+  const you = state.match?.you;
+  const myTeam = Number(state.match?.team);
+  const share = state.match && !state.match.ffa;
+  if (entity.owner === you) return true;
+  if (share && Number(entity.team) === myTeam) return true;
+  if (!fogVisionData || !mapSize) return false;
+  const ix = Math.max(0, Math.min(mapSize - 1, Math.floor(entity.x)));
+  const iy = Math.max(0, Math.min(mapSize - 1, Math.floor(entity.y)));
+  return fogVisionData[iy * mapSize + ix] > 0;
+}
+
+function visibleHqsForOwner(ownerId) {
+  const owner = String(ownerId || "");
+  const list = [];
+  for (const entity of state.entities.values()) {
+    if (entity.kind !== "hq") continue;
+    if (String(entity.owner) !== owner) continue;
+    if ((entity.hp ?? 1) <= 0) continue;
+    if (!entityVisibleOnMap(entity)) continue;
+    list.push(entity);
+  }
+  // Prefer home-ish (first spawned / scoreboard home) by stable id order.
+  list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return list;
+}
+
+const hqJumpCursor = { owner: null, index: 0 };
+
 function renderScoreboard() {
   const body = $("#scoreboard-body");
   if (!body) return;
@@ -266,13 +298,27 @@ function renderScoreboard() {
       const status = r.alive
         ? `<span class="status on">ACTIVE</span>`
         : `<span class="status off">DEAD</span>`;
-      const hqX = r.hq_x != null && Number.isFinite(Number(r.hq_x)) ? Number(r.hq_x) : "";
-      const hqY = r.hq_y != null && Number.isFinite(Number(r.hq_y)) ? Number(r.hq_y) : "";
-      return `<tr class="${cls}" data-owner="${escapeHtml(String(r.id || ""))}" data-hq-x="${hqX}" data-hq-y="${hqY}" title="Command Center'a git">
+      const seen = visibleHqsForOwner(r.id).length;
+      const bases = r.bases ?? 0;
+      const basesLabel =
+        globalVision || r.you || ally
+          ? String(bases)
+          : seen > 0
+            ? `${seen}/${bases || seen}`
+            : bases > 0
+              ? "?"
+              : "0";
+      const title =
+        seen > 0
+          ? `Görünen üs: ${seen}${bases > seen ? ` / ${bases}` : ""} · tıkla (tekrar = sonraki)`
+          : bases > 0 && !(r.you || ally || globalVision)
+            ? "Üsler sis altında"
+            : "Command Center'a git";
+      return `<tr class="${cls}" data-owner="${escapeHtml(String(r.id || ""))}" title="${escapeHtml(title)}">
         <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
         <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag} · ${teamLabel}</small></div></td>
         <td>${status}</td>
-        <td>${r.bases ?? 0}</td>
+        <td>${basesLabel}</td>
         <td>${r.infantry ?? 0}</td>
         <td>${r.tanks ?? 0}</td>
         <td>${r.buildings ?? 0}</td>
@@ -283,50 +329,47 @@ function renderScoreboard() {
     .join("");
 }
 
-function centerCameraOnOwner(ownerId, hqX, hqY) {
+function centerCameraOnOwner(ownerId) {
   if (!controls || !camera || !state.match) return;
   const owner = String(ownerId || "");
-  let x = hqX === "" || hqX == null ? NaN : Number(hqX);
-  let y = hqY === "" || hqY == null ? NaN : Number(hqY);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    // Prefer live scoreboard coords (works even when HQ is outside AOI).
+  const hqs = visibleHqsForOwner(owner);
+  if (!hqs.length) {
     const row = (state.scoreboard || []).find((r) => String(r.id) === owner);
-    if (row && row.hq_x != null && row.hq_y != null) {
-      x = Number(row.hq_x);
-      y = Number(row.hq_y);
+    const yours = row?.you || owner === String(state.match.you);
+    const ally =
+      !state.match.ffa &&
+      row &&
+      Number(row.team) === Number(state.match.team);
+    if (yours || ally) {
+      toast("Üs yok / henüz senkron değil");
+    } else {
+      toast("Üs sis altında — görünmüyor");
     }
+    return;
   }
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
-    let hq = null;
-    for (const entity of state.entities.values()) {
-      if (String(entity.owner) === owner && entity.kind === "hq" && (entity.hp ?? 1) > 0) {
-        hq = entity;
-        break;
-      }
-    }
-    if (!hq) {
-      toast("Command Center görünmüyor / yok");
-      return;
-    }
-    x = hq.x;
-    y = hq.y;
+  if (hqJumpCursor.owner === owner) {
+    hqJumpCursor.index = (hqJumpCursor.index + 1) % hqs.length;
+  } else {
+    hqJumpCursor.owner = owner;
+    hqJumpCursor.index = 0;
   }
-  panCameraTo(x, y);
+  const hq = hqs[hqJumpCursor.index];
+  panCameraTo(hq.x, hq.y);
   const row = (state.scoreboard || []).find((r) => String(r.id) === owner);
   const label = row
     ? `${String(row.faction || "").toUpperCase()} · ${row.name || "HQ"}`
     : "Command Center";
-  toast(label);
+  toast(
+    hqs.length > 1
+      ? `${label} · üs ${hqJumpCursor.index + 1}/${hqs.length}`
+      : label,
+  );
 }
 
 function centerCameraOnHq() {
   if (!state.match) return;
   const self = (state.scoreboard || []).find((r) => r.you);
-  if (self) {
-    centerCameraOnOwner(self.id, self.hq_x, self.hq_y);
-    return;
-  }
-  centerCameraOnOwner(state.match.you, null, null);
+  centerCameraOnOwner(self?.id || state.match.you);
 }
 
 function setScoreboardOpen(open) {
@@ -1575,9 +1618,46 @@ const Radar = {
   },
 
   drawFog(ctx, w, h) {
-    ctx.fillStyle = "#0b120b";
-    ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = "#1c2818";
+    // Sis yok → düz açık zemin; varsa keşfedilmemiş / keşfedilmiş / canlı görüş.
+    if (globalVision || !fogExploredData || !mapSize) {
+      ctx.fillStyle = "#152016";
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      let img = this.fogImage;
+      if (!img || img.width !== w || img.height !== h) {
+        img = ctx.createImageData(w, h);
+        this.fogImage = img;
+      }
+      const data = img.data;
+      const exp = fogExploredData;
+      const vis = fogVisionData;
+      for (let py = 0; py < h; py++) {
+        const my = Math.min(mapSize - 1, Math.floor((py / h) * mapSize));
+        for (let px = 0; px < w; px++) {
+          const mx = Math.min(mapSize - 1, Math.floor((px / w) * mapSize));
+          const cell = my * mapSize + mx;
+          const o = (py * w + px) * 4;
+          const explored = exp[cell] > 0;
+          const live = vis && vis[cell] > 0;
+          if (!explored) {
+            data[o] = 8;
+            data[o + 1] = 12;
+            data[o + 2] = 8;
+          } else if (live) {
+            data[o] = 28;
+            data[o + 1] = 42;
+            data[o + 2] = 26;
+          } else {
+            data[o] = 16;
+            data[o + 1] = 22;
+            data[o + 2] = 14;
+          }
+          data[o + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+    ctx.strokeStyle = "rgba(40,55,36,0.55)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(w * 0.5, 0);
@@ -1598,61 +1678,69 @@ const Radar = {
 
     const you = state.match.you;
     const myTeam = state.match.team;
-    let ownN = 0;
-    let foeN = 0;
-    ctx.fillStyle = "#9fef4a";
-    for (const entity of state.entities.values()) {
-      if (entity.hp != null && entity.hp <= 0) continue;
-      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank") || String(entity.kind).includes("mlrs")) {
-        continue;
-      }
-      if (entity.owner !== you) continue;
-      ownN += 1;
-      if (ownN % 2) continue;
-      ctx.fillRect((entity.x / mapSize) * w - 0.75, (entity.y / mapSize) * h - 0.75, 2, 2);
-    }
-    // Allied infantry (non-FFA)
-    if (!state.match.ffa) {
-      ctx.fillStyle = "#5ad0ff";
-      let allyN = 0;
-      for (const entity of state.entities.values()) {
-        if (entity.hp != null && entity.hp <= 0) continue;
-        if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank") || String(entity.kind).includes("mlrs")) {
-          continue;
-        }
-        if (entity.owner === you || entity.team !== myTeam) continue;
-        allyN += 1;
-        if (allyN % 2) continue;
-        ctx.fillRect((entity.x / mapSize) * w - 0.75, (entity.y / mapSize) * h - 0.75, 2, 2);
-      }
-    }
-    ctx.fillStyle = "#ff5a3a";
-    for (const entity of state.entities.values()) {
-      if (entity.hp != null && entity.hp <= 0) continue;
-      if (entity.building || entity.kind === "hq" || String(entity.kind).includes("tank") || String(entity.kind).includes("mlrs")) {
-        continue;
-      }
-      if (entity.owner === you || entity.team === myTeam) continue;
-      foeN += 1;
-      if (foeN % 3) continue;
-      ctx.fillRect((entity.x / mapSize) * w - 0.75, (entity.y / mapSize) * h - 0.75, 2, 2);
-    }
 
-    for (const entity of state.entities.values()) {
-      if (entity.hp != null && entity.hp <= 0) continue;
-      const kind = entity.kind || "";
-      const heavy = entity.building || kind.includes("tank") || kind.includes("mlrs") || kind === "hq";
-      if (!heavy) continue;
+    const blip = (entity, color, sizePx) => {
+      if (!entityVisibleOnMap(entity)) return;
       const px = (entity.x / mapSize) * w;
       const py = (entity.y / mapSize) * h;
+      ctx.fillStyle = color;
+      ctx.fillRect(px - sizePx / 2, py - sizePx / 2, sizePx, sizePx);
+    };
+
+    // Infantry (thinned)
+    let ownN = 0;
+    let foeN = 0;
+    let allyN = 0;
+    for (const entity of state.entities.values()) {
+      if ((entity.hp ?? 1) <= 0) continue;
+      const kind = String(entity.kind || "");
+      if (entity.building || kind === "hq" || kind.includes("tank") || kind.includes("mlrs")) {
+        continue;
+      }
+      if (!entityVisibleOnMap(entity)) continue;
       const mine = entity.owner === you;
-      const ally = !mine && entity.team === myTeam;
-      ctx.fillStyle = mine ? "#9fef4a" : ally ? "#5ad0ff" : "#ff5a3a";
+      const ally = !mine && entity.team === myTeam && !state.match.ffa;
+      if (mine) {
+        ownN += 1;
+        if (ownN % 2) continue;
+        blip(entity, "#9fef4a", 2);
+      } else if (ally) {
+        allyN += 1;
+        if (allyN % 2) continue;
+        blip(entity, "#5ad0ff", 2);
+      } else {
+        foeN += 1;
+        if (foeN % 3) continue;
+        blip(entity, "#ff5a3a", 2);
+      }
+    }
+
+    // Buildings / vehicles / HQs — üsler belirgin kare
+    for (const entity of state.entities.values()) {
+      if ((entity.hp ?? 1) <= 0) continue;
+      if (!entityVisibleOnMap(entity)) continue;
+      const kind = String(entity.kind || "");
+      const heavy =
+        entity.building || kind.includes("tank") || kind.includes("mlrs") || kind === "hq";
+      if (!heavy) continue;
+      const mine = entity.owner === you;
+      const ally = !mine && entity.team === myTeam && !state.match.ffa;
+      const color = mine ? "#9fef4a" : ally ? "#5ad0ff" : "#ff5a3a";
+      const px = (entity.x / mapSize) * w;
+      const py = (entity.y / mapSize) * h;
       if (kind === "hq") {
-        ctx.fillRect(px - 2.5, py - 2.5, 5, 5);
+        // Hollow diamond-ish square so bases read clearly on radar.
+        ctx.fillStyle = color;
+        ctx.fillRect(px - 3, py - 3, 6, 6);
+        ctx.fillStyle = "rgba(10,16,10,0.85)";
+        ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+        ctx.fillStyle = color;
+        ctx.fillRect(px - 1, py - 1, 2, 2);
       } else if (entity.building) {
+        ctx.fillStyle = color;
         ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
       } else {
+        ctx.fillStyle = color;
         ctx.fillRect(px - 2, py - 2, 4, 4);
       }
     }
@@ -1662,6 +1750,12 @@ const Radar = {
     ctx.lineWidth = 1.5;
     for (const ping of this.pings) {
       if (!ping.tank) continue;
+      // Fight pings only if that cell is currently visible (or open map).
+      if (!globalVision && fogVisionData) {
+        const ix = Math.max(0, Math.min(mapSize - 1, Math.floor(ping.x)));
+        const iy = Math.max(0, Math.min(mapSize - 1, Math.floor(ping.y)));
+        if (!(fogVisionData[iy * mapSize + ix] > 0)) continue;
+      }
       const t = (now - ping.born) / ping.life;
       ctx.beginPath();
       ctx.arc((ping.x / mapSize) * w, (ping.y / mapSize) * h, 4 + t * 7, 0, Math.PI * 2);
@@ -1682,6 +1776,12 @@ const Radar = {
         (halfW * 2 / mapSize) * w,
         (halfH * 2 / mapSize) * h,
       );
+    }
+
+    // Keep Tab "görünen üs" counts fresh while the board is open.
+    if (!$("#scoreboard")?.hidden && now - (this._sbAt || 0) > 600) {
+      this._sbAt = now;
+      renderScoreboard();
     }
   },
 };
@@ -1748,7 +1848,7 @@ const BUILDING_VISUAL = {
 /** Bump when procedural building meshes change so live matches remesh. */
 const BUILDING_FIT_VERSION = 9;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
-const PATRIOT_RIG_VERSION = 4;
+const PATRIOT_RIG_VERSION = 5;
 /** China Gattling Cannon mesh revision. */
 const GATLING_DEF_VERSION = 1;
 /** Strategy Center / tech building mesh revision. */
@@ -2551,18 +2651,24 @@ function createStrategyCenterMesh(fallbackMat, kind = "strategy_center") {
   return finished;
 }
 
-/** Hand-built MIM-104 Patriot — sized vs Crusader tank (~0.28 long) & infantry (~0.08 tall).
- *  Real launcher ~10 m → ~0.40 wu; elevated tubes ~4–5 m → ~0.35 wu. */
+/**
+ * MIM-104 Patriot — M901 Launching Station + AN/MPQ-53 radar (piece-built, Generals scale).
+ * Refs: Raytheon LS, M860 trailer, 4× PAC-2 canisters; array face ~hex lattice cue.
+ */
 function createPatriotBatteryMesh(fallbackMat) {
   const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
-  const olive = 0x4a5538;
-  const oliveDark = 0x353c2c;
-  const oliveLight = 0x5a6648;
-  const desert = 0x6b6550;
-  const metal = 0x3a3c38;
-  const metalBright = 0x5c6058;
-  const rubber = 0x141210;
-  const glassCol = 0x1a2830;
+  // CARC Forest Green / NATO olive — matte, not chrome.
+  const olive = 0x4a5438;
+  const oliveDk = 0x3a422c;
+  const oliveLt = 0x5a6448;
+  const desert = 0x6a6450;
+  const iron = 0x4a4840;
+  const ironDk = 0x2e2c28;
+  const steelHi = 0x6a7268;
+  const rubber = 0x0e0e0c;
+  const glass = 0x1a2820;
+  const arrayFace = 0x1a2830;
+  const stencil = 0xc8b040;
 
   const root = new THREE.Group();
   root.userData.building = true;
@@ -2572,237 +2678,270 @@ function createPatriotBatteryMesh(fallbackMat) {
   root.userData.isFallback = false;
   root.userData.keepMtlColors = true;
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.unitHeight = 0.42;
   root.userData.turretTurnRate = 0.95;
   root.userData.scanRate = 0.55;
   root.userData.aimYaw = 0;
+  root.userData.tintParts = [];
 
-  const add = (parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
-    const m = new THREE.Mesh(
-      geo,
-      matStd(color, {
-        metalness: opts.metalness ?? 0.35,
-        roughness: opts.roughness ?? 0.55,
-        transparent: opts.transparent,
-        opacity: opts.opacity,
-      }),
-    );
-    if (opts.transparent) {
-      m.material.transparent = true;
-      m.material.opacity = opts.opacity ?? 0.85;
-      m.material.depthWrite = (opts.opacity ?? 0.85) >= 0.95;
-    }
+  const carc = (c, rough = 0.66) =>
+    matStd(c, { metalness: 0.16, roughness: rough, envMapIntensity: 0.42 });
+  const steel = (c, rough = 0.45) =>
+    matStd(c, { metalness: 0.58, roughness: rough, envMapIntensity: 0.7 });
+  const smoked = () =>
+    matStd(glass, { metalness: 0.4, roughness: 0.18, envMapIntensity: 0.85 });
+
+  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
+    const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
     m.rotation.set(rx, ry, rz);
-    m.castShadow = opts.cast !== false;
+    m.castShadow = true;
     m.receiveShadow = true;
+    if (tint) root.userData.tintParts.push(m);
     parent.add(m);
     return m;
   };
 
-  // —— Soft gravel pad (tight footprint) ——
-  add(root, new THREE.BoxGeometry(0.52, 0.018, 0.34), 0x3a3830, 0, 0.009, 0, 0, 0, 0, {
-    metalness: 0.05,
-    roughness: 0.92,
-    cast: false,
-  });
-  add(root, new THREE.BoxGeometry(0.48, 0.006, 0.3), 0x2e2c26, 0, 0.02, 0, 0, 0, 0, {
-    metalness: 0.08,
-    roughness: 0.88,
-    cast: false,
-  });
+  // === A. Blast apron / gravel pad ===
+  add(root, new THREE.BoxGeometry(0.62, 0.016, 0.42), carc(0x3a3830, 0.92), 0, 0.008, 0);
+  add(root, new THREE.BoxGeometry(0.56, 0.008, 0.36), carc(0x2e2c26, 0.9), 0, 0.018, 0);
+  add(root, new THREE.BoxGeometry(0.2, 0.006, 0.04), carc(stencil, 0.55), 0.12, 0.023, 0.15);
+  add(root, new THREE.BoxGeometry(0.08, 0.006, 0.08), carc(accent, 0.5), -0.2, 0.023, 0.15, 0, 0, 0, true);
 
-  // —— M983-style tractor stub (short) ——
+  // === B. M983 / HEMTT tractor stub ===
   const tractor = new THREE.Group();
-  tractor.position.set(-0.16, 0, 0);
+  tractor.position.set(-0.2, 0, 0);
   root.add(tractor);
-  add(tractor, new THREE.BoxGeometry(0.14, 0.055, 0.13), oliveDark, 0, 0.055, 0);
-  add(tractor, new THREE.BoxGeometry(0.1, 0.07, 0.12), olive, -0.01, 0.11, 0);
-  add(tractor, new THREE.BoxGeometry(0.08, 0.028, 0.01), glassCol, -0.01, 0.125, 0.062, 0, 0, 0, {
-    metalness: 0.7,
-    roughness: 0.18,
-    transparent: true,
-    opacity: 0.8,
-  });
-  // Cab wheels
-  for (const z of [-0.055, 0.055]) {
-    add(tractor, new THREE.CylinderGeometry(0.028, 0.028, 0.022, 12), rubber, 0.02, 0.028, z, 0, 0, Math.PI / 2, {
-      metalness: 0.15,
-      roughness: 0.85,
-    });
-    add(tractor, new THREE.CylinderGeometry(0.012, 0.012, 0.024, 8), metal, 0.02, 0.028, z, 0, 0, Math.PI / 2, {
-      metalness: 0.6,
-      roughness: 0.4,
-    });
+  // Chassis rail
+  add(tractor, new THREE.BoxGeometry(0.2, 0.035, 0.14), steel(ironDk, 0.55), 0.01, 0.04, 0);
+  add(tractor, new THREE.BoxGeometry(0.16, 0.05, 0.13), carc(oliveDk, 0.7), 0.02, 0.075, 0);
+  // Cab
+  add(tractor, new THREE.BoxGeometry(0.12, 0.09, 0.13), carc(olive), -0.02, 0.13, 0, 0, 0, 0, true);
+  add(tractor, new THREE.BoxGeometry(0.11, 0.02, 0.125), carc(oliveDk, 0.72), -0.02, 0.18, 0);
+  // Windshield + side glass
+  add(tractor, new THREE.BoxGeometry(0.09, 0.04, 0.01), smoked(), -0.02, 0.145, 0.068);
+  add(tractor, new THREE.BoxGeometry(0.01, 0.035, 0.08), smoked(), -0.078, 0.14, 0);
+  add(tractor, new THREE.BoxGeometry(0.01, 0.035, 0.08), smoked(), 0.038, 0.14, 0);
+  // Grille / bumper / lights
+  add(tractor, new THREE.BoxGeometry(0.04, 0.045, 0.12), steel(iron, 0.5), -0.1, 0.08, 0);
+  for (const gz of [-0.035, 0, 0.035]) {
+    add(tractor, new THREE.BoxGeometry(0.006, 0.032, 0.018), steel(ironDk), -0.122, 0.082, gz);
   }
+  add(tractor, new THREE.BoxGeometry(0.015, 0.012, 0.018), matStd(0xfff0a8, { emissive: 0x886600, emissiveIntensity: 0.4, metalness: 0.35, roughness: 0.35 }), -0.11, 0.055, -0.055);
+  add(tractor, new THREE.BoxGeometry(0.015, 0.012, 0.018), matStd(0xfff0a8, { emissive: 0x886600, emissiveIntensity: 0.4, metalness: 0.35, roughness: 0.35 }), -0.11, 0.055, 0.055);
+  // Exhaust stack
+  add(tractor, new THREE.CylinderGeometry(0.01, 0.012, 0.08, 8), steel(ironDk), 0.04, 0.16, -0.055);
+  add(tractor, new THREE.CylinderGeometry(0.014, 0.014, 0.012, 8), steel(iron), 0.04, 0.2, -0.055);
+  // Mirrors
+  add(tractor, new THREE.BoxGeometry(0.008, 0.018, 0.012), steel(steelHi), -0.08, 0.155, 0.075);
+  add(tractor, new THREE.BoxGeometry(0.008, 0.018, 0.012), steel(steelHi), -0.08, 0.155, -0.075);
+  // Door seam + handle
+  add(tractor, new THREE.BoxGeometry(0.004, 0.06, 0.04), carc(oliveDk, 0.75), 0.04, 0.125, 0.066);
+  add(tractor, new THREE.BoxGeometry(0.012, 0.006, 0.006), steel(steelHi), 0.035, 0.12, 0.072);
+  // Front axle wheels
+  for (const z of [-0.065, 0.065]) {
+    const w = add(tractor, new THREE.CylinderGeometry(0.03, 0.03, 0.024, 14), matStd(rubber, { metalness: 0.08, roughness: 0.9 }), 0.0, 0.03, z, 0, 0, Math.PI / 2);
+    w.userData.roadWheel = true;
+    add(tractor, new THREE.CylinderGeometry(0.012, 0.012, 0.026, 8), steel(iron), 0.0, 0.03, z, 0, 0, Math.PI / 2);
+    add(tractor, new THREE.CylinderGeometry(0.02, 0.02, 0.008, 10), steel(steelHi, 0.4), 0.0, 0.03, z + Math.sign(z) * 0.01, 0, 0, Math.PI / 2);
+  }
+  // Fifth-wheel plate
+  add(tractor, new THREE.BoxGeometry(0.06, 0.012, 0.08), steel(iron, 0.4), 0.08, 0.095, 0);
+  add(tractor, new THREE.CylinderGeometry(0.018, 0.018, 0.016, 10), steel(steelHi), 0.08, 0.105, 0);
 
-  // —— Launcher trailer bed ——
+  // === C. M860 launcher trailer ===
   const bed = new THREE.Group();
-  bed.position.set(0.08, 0, 0);
+  bed.position.set(0.1, 0, 0);
   root.add(bed);
-  add(bed, new THREE.BoxGeometry(0.34, 0.04, 0.15), olive, 0, 0.048, 0);
-  add(bed, new THREE.BoxGeometry(0.32, 0.012, 0.14), oliveDark, 0, 0.07, 0);
-  // Side rails
-  add(bed, new THREE.BoxGeometry(0.33, 0.018, 0.012), metalBright, 0, 0.08, -0.078, 0, 0, 0, {
-    metalness: 0.55,
-    roughness: 0.4,
-  });
-  add(bed, new THREE.BoxGeometry(0.33, 0.018, 0.012), metalBright, 0, 0.08, 0.078, 0, 0, 0, {
-    metalness: 0.55,
-    roughness: 0.4,
-  });
-  // Team ID stripe
-  add(bed, new THREE.BoxGeometry(0.3, 0.008, 0.02), accent, 0, 0.078, -0.05, 0, 0, 0, {
-    metalness: 0.2,
-    roughness: 0.55,
-  });
-  // Trailer wheels (dual axle)
-  for (const x of [-0.08, 0.1]) {
-    for (const z of [-0.072, 0.072]) {
-      add(bed, new THREE.CylinderGeometry(0.026, 0.026, 0.02, 12), rubber, x, 0.026, z, 0, 0, Math.PI / 2, {
-        metalness: 0.12,
-        roughness: 0.88,
-      });
-      add(bed, new THREE.CylinderGeometry(0.01, 0.01, 0.022, 8), metal, x, 0.026, z, 0, 0, Math.PI / 2, {
-        metalness: 0.65,
-        roughness: 0.35,
-      });
+  // Frame rails
+  add(bed, new THREE.BoxGeometry(0.38, 0.028, 0.022), steel(ironDk, 0.5), 0, 0.042, -0.072);
+  add(bed, new THREE.BoxGeometry(0.38, 0.028, 0.022), steel(ironDk, 0.5), 0, 0.042, 0.072);
+  for (const cx of [-0.12, 0, 0.12]) {
+    add(bed, new THREE.BoxGeometry(0.02, 0.022, 0.14), steel(iron, 0.55), cx, 0.042, 0);
+  }
+  // Deck plate
+  add(bed, new THREE.BoxGeometry(0.36, 0.022, 0.155), carc(olive), 0, 0.058, 0, 0, 0, 0, true);
+  add(bed, new THREE.BoxGeometry(0.34, 0.01, 0.14), carc(oliveDk, 0.72), 0, 0.072, 0);
+  // Side rub rails + diamond plate cue
+  add(bed, new THREE.BoxGeometry(0.37, 0.014, 0.01), steel(steelHi, 0.4), 0, 0.08, -0.082);
+  add(bed, new THREE.BoxGeometry(0.37, 0.014, 0.01), steel(steelHi, 0.4), 0, 0.08, 0.082);
+  // Team stripe + stencil
+  add(bed, new THREE.BoxGeometry(0.28, 0.006, 0.018), carc(accent, 0.5), 0, 0.078, -0.055, 0, 0, 0, true);
+  add(bed, new THREE.BoxGeometry(0.05, 0.005, 0.03), carc(stencil, 0.55), 0.12, 0.079, 0.04);
+  // Toolbox + fire bottle
+  add(bed, new THREE.BoxGeometry(0.05, 0.035, 0.04), carc(oliveDk), -0.14, 0.09, 0.05);
+  add(bed, new THREE.CylinderGeometry(0.01, 0.01, 0.035, 8), matStd(0x8a2020, { metalness: 0.4, roughness: 0.45 }), -0.14, 0.095, -0.055);
+  // Dual axle
+  for (const x of [-0.1, 0.12]) {
+    for (const z of [-0.078, 0.078]) {
+      const w = add(bed, new THREE.CylinderGeometry(0.028, 0.028, 0.022, 14), matStd(rubber, { metalness: 0.08, roughness: 0.9 }), x, 0.028, z, 0, 0, Math.PI / 2);
+      w.userData.roadWheel = true;
+      add(bed, new THREE.CylinderGeometry(0.011, 0.011, 0.024, 8), steel(iron), x, 0.028, z, 0, 0, Math.PI / 2);
+      add(bed, new THREE.CylinderGeometry(0.018, 0.018, 0.006, 10), steel(steelHi, 0.4), x, 0.028, z + Math.sign(z) * 0.01, 0, 0, Math.PI / 2);
     }
+    // Mudflap
+    add(bed, new THREE.BoxGeometry(0.04, 0.035, 0.004), matStd(0x12110e, { metalness: 0.05, roughness: 0.95 }), x - 0.02, 0.03, -0.095);
+    add(bed, new THREE.BoxGeometry(0.04, 0.035, 0.004), matStd(0x12110e, { metalness: 0.05, roughness: 0.95 }), x - 0.02, 0.03, 0.095);
   }
-  // Stabilizer jacks
+  // Stabilizer outriggers (4 corners)
   for (const [jx, jz] of [
-    [-0.14, -0.09],
-    [-0.14, 0.09],
-    [0.14, -0.09],
-    [0.14, 0.09],
+    [-0.16, -0.1],
+    [-0.16, 0.1],
+    [0.16, -0.1],
+    [0.16, 0.1],
   ]) {
-    add(bed, new THREE.CylinderGeometry(0.006, 0.008, 0.04, 6), metal, jx, 0.02, jz, 0, 0, 0, {
-      metalness: 0.7,
-      roughness: 0.35,
-    });
-    add(bed, new THREE.CylinderGeometry(0.014, 0.014, 0.006, 8), desert, jx, 0.004, jz, 0, 0, 0, {
-      metalness: 0.2,
-      roughness: 0.8,
-      cast: false,
-    });
+    add(bed, new THREE.BoxGeometry(0.018, 0.012, 0.05), steel(iron), jx * 0.7, 0.07, jz * 0.55, 0, 0, jz > 0 ? 0.2 : -0.2);
+    add(bed, new THREE.CylinderGeometry(0.007, 0.009, 0.048, 8), steel(steelHi, 0.35), jx, 0.028, jz);
+    add(bed, new THREE.CylinderGeometry(0.016, 0.016, 0.008, 10), carc(desert, 0.8), jx, 0.006, jz);
   }
+  // Cable spool
+  add(bed, new THREE.CylinderGeometry(0.022, 0.022, 0.028, 12), carc(oliveDk), 0.14, 0.09, -0.02, 0, 0, Math.PI / 2);
+  add(bed, new THREE.TorusGeometry(0.018, 0.004, 6, 12), matStd(rubber, { metalness: 0.1, roughness: 0.9 }), 0.14, 0.09, -0.02, 0, 0, Math.PI / 2);
 
-  // —— Hydraulics / elevation base ——
+  // === D. Elevation turret (muzzleRoot) + cradle ===
   const launcher = new THREE.Group();
   launcher.name = "muzzleRoot";
-  launcher.position.set(0.1, 0.075, 0);
+  launcher.position.set(0.12, 0.078, 0);
   root.add(launcher);
 
-  add(launcher, new THREE.CylinderGeometry(0.028, 0.034, 0.03, 14), metal, 0, 0.015, 0, 0, 0, 0, {
-    metalness: 0.65,
-    roughness: 0.35,
-  });
-  add(launcher, new THREE.BoxGeometry(0.06, 0.02, 0.06), oliveDark, 0, 0.032, 0);
+  // Azimuth ring / slew bearing
+  add(launcher, new THREE.CylinderGeometry(0.042, 0.048, 0.022, 20), steel(iron, 0.4), 0, 0.012, 0);
+  add(launcher, new THREE.CylinderGeometry(0.03, 0.03, 0.012, 16), steel(steelHi, 0.35), 0, 0.026, 0);
+  add(launcher, new THREE.BoxGeometry(0.07, 0.018, 0.07), carc(oliveDk), 0, 0.04, 0);
 
-  // Elevation cradle (~50°)
   const cradle = new THREE.Group();
-  cradle.position.set(0, 0.04, 0);
-  cradle.rotation.x = -0.88;
+  cradle.position.set(0, 0.05, 0);
+  cradle.rotation.x = -0.92; // ~53° elevate — ready-to-fire cue
   launcher.add(cradle);
 
-  add(cradle, new THREE.BoxGeometry(0.16, 0.028, 0.2), olive, 0, 0.02, 0.06);
-  add(cradle, new THREE.BoxGeometry(0.14, 0.016, 0.18), oliveDark, 0, 0.038, 0.06);
-  // Hydraulic ram
-  add(cradle, new THREE.CylinderGeometry(0.008, 0.008, 0.14, 8), metalBright, -0.07, -0.02, 0.02, 0.9, 0, 0, {
-    metalness: 0.75,
-    roughness: 0.28,
-  });
-  add(cradle, new THREE.CylinderGeometry(0.006, 0.006, 0.1, 8), metal, 0.07, -0.015, 0.03, 0.9, 0, 0, {
-    metalness: 0.75,
-    roughness: 0.28,
-  });
+  // Trunnion / frame
+  add(cradle, new THREE.BoxGeometry(0.18, 0.032, 0.22), carc(olive), 0, 0.02, 0.05, 0, 0, 0, true);
+  add(cradle, new THREE.BoxGeometry(0.16, 0.018, 0.2), carc(oliveDk, 0.7), 0, 0.042, 0.05);
+  add(cradle, new THREE.BoxGeometry(0.02, 0.06, 0.18), carc(oliveLt, 0.65), -0.09, 0.04, 0.05);
+  add(cradle, new THREE.BoxGeometry(0.02, 0.06, 0.18), carc(oliveLt, 0.65), 0.09, 0.04, 0.05);
+  // Cross braces
+  add(cradle, new THREE.BoxGeometry(0.16, 0.01, 0.012), steel(iron), 0, 0.055, 0.0);
+  add(cradle, new THREE.BoxGeometry(0.16, 0.01, 0.012), steel(iron), 0, 0.055, 0.1);
+  // Hydraulic rams
+  for (const sx of [-0.075, 0.075]) {
+    add(cradle, new THREE.CylinderGeometry(0.01, 0.01, 0.13, 10), steel(steelHi, 0.3), sx, -0.02, 0.015, 1.05, 0, 0);
+    add(cradle, new THREE.CylinderGeometry(0.007, 0.007, 0.09, 8), steel(0x8a9088, 0.25), sx, 0.02, 0.06, 1.05, 0, 0);
+    add(cradle, new THREE.SphereGeometry(0.012, 8, 8), steel(iron), sx, -0.055, -0.02);
+  }
+  // ECS junction box on cradle
+  add(cradle, new THREE.BoxGeometry(0.045, 0.035, 0.04), carc(oliveDk), 0, 0.06, -0.04);
+  add(cradle, new THREE.BoxGeometry(0.02, 0.008, 0.015), matStd(0x224422, { emissive: 0x113311, emissiveIntensity: 0.35, metalness: 0.3, roughness: 0.4 }), 0, 0.078, -0.04);
 
-  // Four sealed canisters (2×2) — classic Patriot look
+  // === E. Four PAC-2 sealed canisters (2×2) ===
   const tubes = [
-    [-0.038, 0.028, 0.0],
-    [0.038, 0.028, 0.0],
-    [-0.038, 0.028, 0.095],
-    [0.038, 0.028, 0.095],
+    [-0.04, 0.032, -0.02],
+    [0.04, 0.032, -0.02],
+    [-0.04, 0.032, 0.09],
+    [0.04, 0.032, 0.09],
   ];
-  for (const [tx, ty, tz] of tubes) {
-    add(cradle, new THREE.CylinderGeometry(0.02, 0.022, 0.26, 12), oliveLight, tx, ty, tz + 0.02, Math.PI / 2, 0, 0, {
-      metalness: 0.4,
-      roughness: 0.45,
-    });
-    // Nose fairing / blast door
-    add(cradle, new THREE.CylinderGeometry(0.018, 0.02, 0.012, 12), metal, tx, ty, tz + 0.155, Math.PI / 2, 0, 0, {
-      metalness: 0.7,
-      roughness: 0.3,
-    });
-    // Rear seal
-    add(cradle, new THREE.CylinderGeometry(0.019, 0.019, 0.008, 10), oliveDark, tx, ty, tz - 0.115, Math.PI / 2, 0, 0, {
-      metalness: 0.45,
-      roughness: 0.5,
-    });
-    // Band clamp
-    add(cradle, new THREE.TorusGeometry(0.021, 0.003, 6, 14), metalBright, tx, ty, tz + 0.04, 0, 0, Math.PI / 2, {
-      metalness: 0.8,
-      roughness: 0.25,
-    });
+  for (let ti = 0; ti < tubes.length; ti++) {
+    const [tx, ty, tz] = tubes[ti];
+    const can = new THREE.Group();
+    can.position.set(tx, ty, tz + 0.02);
+    cradle.add(can);
+    // Canister body
+    add(can, new THREE.CylinderGeometry(0.022, 0.024, 0.28, 14), carc(oliveLt, 0.58), 0, 0, 0, Math.PI / 2, 0, 0);
+    // Longitudinal stiffeners
+    for (const a of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]) {
+      add(can, new THREE.BoxGeometry(0.004, 0.006, 0.26), carc(oliveDk, 0.7), Math.cos(a) * 0.022, Math.sin(a) * 0.022, 0);
+    }
+    // Clamp bands
+    for (const bz of [-0.08, 0.02, 0.1]) {
+      add(can, new THREE.TorusGeometry(0.024, 0.0035, 6, 16), steel(steelHi, 0.3), 0, 0, bz, 0, 0, Math.PI / 2);
+    }
+    // Forward blast door / fairing
+    add(can, new THREE.CylinderGeometry(0.02, 0.023, 0.018, 14), steel(ironDk, 0.4), 0, 0, 0.15, Math.PI / 2, 0, 0);
+    add(can, new THREE.CylinderGeometry(0.012, 0.012, 0.008, 10), matStd(0x080808, { metalness: 0.25, roughness: 0.85 }), 0, 0, 0.162, Math.PI / 2, 0, 0);
+    // Aft seal + umbilical stub
+    add(can, new THREE.CylinderGeometry(0.021, 0.021, 0.012, 12), carc(oliveDk), 0, 0, -0.145, Math.PI / 2, 0, 0);
+    add(can, new THREE.CylinderGeometry(0.006, 0.006, 0.03, 6), matStd(rubber, { metalness: 0.1, roughness: 0.9 }), 0.02, -0.01, -0.15, 0.4, 0, 0.3);
+    // Stencil ID
+    add(can, new THREE.BoxGeometry(0.03, 0.008, 0.012), carc(stencil, 0.55), 0, 0.024, 0.04);
   }
 
   const tip = new THREE.Object3D();
   tip.name = "muzzle";
-  tip.position.set(0.038, 0.028, 0.2);
+  tip.position.set(0.04, 0.032, 0.22);
   cradle.add(tip);
 
-  // —— AN/MPQ-53 style phased-array (scans independently) ——
+  // === F. AN/MPQ-53 phased-array radar (independent scan) ===
   const radar = new THREE.Group();
   radar.name = "radarRoot";
-  radar.position.set(-0.02, 0, -0.12);
+  radar.position.set(-0.05, 0, -0.14);
   root.add(radar);
-  add(radar, new THREE.CylinderGeometry(0.012, 0.016, 0.2, 10), metal, 0, 0.12, 0, 0, 0, 0, {
-    metalness: 0.7,
-    roughness: 0.32,
-  });
-  add(radar, new THREE.BoxGeometry(0.04, 0.02, 0.04), oliveDark, 0, 0.03, 0);
-  // Array face (slight tilt)
+  // Pedestal base + rotating mast
+  add(radar, new THREE.CylinderGeometry(0.028, 0.036, 0.025, 14), steel(iron, 0.45), 0, 0.02, 0);
+  add(radar, new THREE.BoxGeometry(0.05, 0.02, 0.05), carc(oliveDk), 0, 0.038, 0);
+  add(radar, new THREE.CylinderGeometry(0.014, 0.018, 0.22, 12), steel(ironDk, 0.4), 0, 0.15, 0);
+  // Cable conduit along mast
+  add(radar, new THREE.BoxGeometry(0.01, 0.18, 0.01), matStd(rubber, { metalness: 0.1, roughness: 0.9 }), 0.02, 0.14, 0);
+  // Cooling / IFF box
+  add(radar, new THREE.BoxGeometry(0.04, 0.035, 0.04), carc(olive), 0, 0.12, 0.03);
+  add(radar, new THREE.BoxGeometry(0.03, 0.008, 0.012), matStd(0x1a3020, { emissive: 0x0a2010, emissiveIntensity: 0.25, metalness: 0.3, roughness: 0.45 }), 0, 0.14, 0.04);
+
   const array = new THREE.Group();
-  array.position.set(0, 0.24, 0);
-  array.rotation.x = -0.35;
+  array.position.set(0, 0.28, 0);
+  array.rotation.x = -0.38;
   radar.add(array);
-  add(array, new THREE.BoxGeometry(0.14, 0.12, 0.018), metalBright, 0, 0, 0, 0, 0, 0, {
-    metalness: 0.55,
-    roughness: 0.35,
-  });
-  add(array, new THREE.BoxGeometry(0.12, 0.1, 0.006), 0x1e2a32, 0, 0, 0.012, 0, 0, 0, {
-    metalness: 0.85,
-    roughness: 0.12,
-  });
-  // Phase slots (detail lines)
-  for (let i = -2; i <= 2; i++) {
-    add(array, new THREE.BoxGeometry(0.11, 0.004, 0.004), 0x0e161c, 0, i * 0.018, 0.016, 0, 0, 0, {
-      metalness: 0.5,
-      roughness: 0.4,
-      cast: false,
-    });
+  // Array frame
+  add(array, new THREE.BoxGeometry(0.17, 0.15, 0.028), steel(steelHi, 0.38), 0, 0, -0.008);
+  add(array, new THREE.BoxGeometry(0.155, 0.135, 0.012), carc(oliveDk), 0, 0, -0.018);
+  // Radiating face
+  add(array, new THREE.BoxGeometry(0.145, 0.125, 0.008), matStd(arrayFace, { metalness: 0.82, roughness: 0.14, envMapIntensity: 1.0 }), 0, 0, 0.01);
+  // Hex / slot lattice cue
+  for (let row = -3; row <= 3; row++) {
+    for (let col = -3; col <= 3; col++) {
+      if ((row + col) % 2 !== 0) continue;
+      add(
+        array,
+        new THREE.BoxGeometry(0.014, 0.01, 0.003),
+        matStd(0x0c1418, { metalness: 0.55, roughness: 0.35 }),
+        col * 0.018,
+        row * 0.015,
+        0.016,
+      );
+    }
   }
-  add(array, new THREE.BoxGeometry(0.03, 0.03, 0.02), desert, 0, -0.08, -0.01, 0, 0, 0, {
-    metalness: 0.3,
-    roughness: 0.6,
-  });
+  // Feed horn / rear electronics
+  add(array, new THREE.BoxGeometry(0.05, 0.05, 0.04), carc(desert, 0.7), 0, -0.02, -0.04);
+  add(array, new THREE.CylinderGeometry(0.012, 0.018, 0.025, 10), steel(iron), 0, 0.02, -0.045, Math.PI / 2, 0, 0);
+  // Corner markers
+  for (const [ax, ay] of [
+    [-0.07, 0.06],
+    [0.07, 0.06],
+    [-0.07, -0.06],
+    [0.07, -0.06],
+  ]) {
+    add(array, new THREE.BoxGeometry(0.012, 0.012, 0.01), carc(accent, 0.5), ax, ay, 0.02, 0, 0, 0, true);
+  }
 
-  // —— Small ECS / generator box ——
-  add(root, new THREE.BoxGeometry(0.08, 0.055, 0.06), oliveDark, -0.18, 0.045, 0.1);
-  add(root, new THREE.BoxGeometry(0.06, 0.012, 0.045), metal, -0.18, 0.075, 0.1, 0, 0, 0, {
-    metalness: 0.6,
-    roughness: 0.4,
-  });
-  add(root, new THREE.CylinderGeometry(0.01, 0.01, 0.03, 8), metalBright, -0.18, 0.095, 0.1, 0, 0, 0, {
-    metalness: 0.7,
-    roughness: 0.3,
-  });
+  // === G. Generator / ECS pallet ===
+  add(root, new THREE.BoxGeometry(0.1, 0.06, 0.08), carc(oliveDk), -0.2, 0.05, 0.12);
+  add(root, new THREE.BoxGeometry(0.08, 0.015, 0.06), steel(iron, 0.45), -0.2, 0.085, 0.12);
+  add(root, new THREE.BoxGeometry(0.07, 0.02, 0.05), carc(oliveLt), -0.2, 0.1, 0.12);
+  // Exhaust / intake louvers
+  for (let i = 0; i < 4; i++) {
+    add(root, new THREE.BoxGeometry(0.055, 0.004, 0.008), steel(ironDk), -0.2, 0.095 + i * 0.008, 0.155);
+  }
+  add(root, new THREE.CylinderGeometry(0.012, 0.014, 0.035, 10), steel(steelHi, 0.35), -0.2, 0.125, 0.12);
+  // Power cable to launcher
+  add(root, new THREE.CylinderGeometry(0.006, 0.006, 0.22, 6), matStd(rubber, { metalness: 0.08, roughness: 0.92 }), -0.05, 0.035, 0.04, 0, 0, 1.1);
+  add(root, new THREE.BoxGeometry(0.14, 0.008, 0.014), matStd(rubber, { metalness: 0.08, roughness: 0.92 }), 0.02, 0.03, -0.07, 0, 0.35, 0);
 
-  // Cable run between radar and launcher
-  add(root, new THREE.BoxGeometry(0.12, 0.008, 0.012), rubber, 0.02, 0.028, -0.06, 0, 0.4, 0, {
-    metalness: 0.1,
-    roughness: 0.9,
-    cast: false,
-  });
+  // Sandbags / berm cue at apron edge
+  for (const [sx, sz] of [
+    [-0.28, 0.18],
+    [0.28, 0.18],
+    [-0.28, -0.18],
+    [0.28, -0.18],
+  ]) {
+    add(root, new THREE.BoxGeometry(0.06, 0.035, 0.045), carc(desert, 0.85), sx, 0.028, sz, 0, sx * 0.15, 0);
+  }
 
   return root;
 }
@@ -3518,9 +3657,84 @@ function lerpColor(a, b, t) {
   ];
 }
 
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/** Organic lake / mountain shoreline radius at angle (world-texture space). */
+function shoreWarp(ang, seed, strength = 1) {
+  return (
+    1 +
+    (Math.sin(ang * 2.1 + seed * 0.017) * 0.11 +
+      Math.sin(ang * 3.7 - seed * 0.023) * 0.07 +
+      Math.sin(ang * 5.3 + seed * 0.011) * 0.045 +
+      Math.sin(ang * 8.1 - seed * 0.031) * 0.028) *
+      strength
+  );
+}
+
+/**
+ * Irregular horizontal disc (lake footprint) — smooth shaded, not a perfect circle.
+ */
+function makeOrganicDiscGeometry(radius, seed, segments = 72, yJitter = 0) {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  positions.push(0, 0, 0);
+  normals.push(0, 1, 0);
+  uvs.push(0.5, 0.5);
+  for (let i = 0; i <= segments; i++) {
+    const t = (i / segments) * Math.PI * 2;
+    const w = shoreWarp(t, seed, 1.05);
+    const rr = radius * w;
+    const x = Math.cos(t) * rr;
+    const z = Math.sin(t) * rr;
+    const y = yJitter ? (hash2(i, seed | 0, seed) - 0.5) * yJitter : 0;
+    positions.push(x, y, z);
+    normals.push(0, 1, 0);
+    uvs.push(0.5 + Math.cos(t) * 0.5, 0.5 + Math.sin(t) * 0.5);
+    if (i < segments) indices.push(0, i + 1, i + 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Rocky peak — subdivided icosahedron, noise-displaced, smooth normals.
+ */
+function makeRockMassGeometry(radius, height, seed) {
+  const geo = new THREE.IcosahedronGeometry(1, 2);
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const n =
+      0.72 +
+      valueNoise2(v.x * 2.4 + seed * 0.01, v.z * 2.4 - seed * 0.013, seed) * 0.38 +
+      valueNoise2(v.x * 5.5, v.y * 5.5 + seed, seed + 9) * 0.16;
+    // Stretch into a ridge / peak; flatten the underside into the ground.
+    const yN = (v.y + 1) * 0.5;
+    const flare = 1.05 - yN * 0.35;
+    v.x *= radius * n * flare;
+    v.z *= radius * n * flare;
+    v.y = Math.max(-0.02, (v.y * 0.55 + 0.45) * height * n);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
 /** Painted biome atlas: desert dunes, olive scrub, deep forest canopy — soft blends. */
 function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
-  const size = 1280;
+  const size = 2048;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
@@ -3538,7 +3752,7 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
   const forest = [48, 68, 36];
   const forestDeep = [34, 52, 28];
   const dust = [130, 98, 62];
-  const mud = [78, 54, 36];
+  const mudSoil = [78, 54, 36];
 
   const scale = 2.4 + (terrainSeed % 7) * 0.12;
   const ox = (terrainSeed % 97) * 0.37;
@@ -3548,11 +3762,9 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
     for (let bx = 0; bx < terrainBiomeSize; bx++) {
       const nx = bx / terrainBiomeSize;
       const ny = by / terrainBiomeSize;
-      // Large continents + mid ridges — not salt-and-pepper noise.
       let n =
         fbm2(nx * scale + ox, ny * scale + oy, terrainSeed, 5) * 0.72 +
         fbm2(nx * scale * 0.35 + 20, ny * scale * 0.35 - 11, terrainSeed + 17, 3) * 0.28;
-      // Gentle warp so borders feel organic.
       const warp = fbm2(nx * 1.6 + 40, ny * 1.6, terrainSeed + 33, 2);
       n = Math.max(0, Math.min(1, n + (warp - 0.5) * 0.12));
       terrainBiomeField[by * terrainBiomeSize + bx] = n;
@@ -3567,7 +3779,6 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
     for (let x = 0; x < size; x++) {
       const bx = Math.min(terrainBiomeSize - 1, Math.floor(x / cell));
       const by = Math.min(terrainBiomeSize - 1, Math.floor(y / cell));
-      // Bilinear biome for soft edges
       const fx = x / cell - bx;
       const fy = y / cell - by;
       const bx1 = Math.min(terrainBiomeSize - 1, bx + 1);
@@ -3592,7 +3803,7 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
         col = lerpColor(col, soilLight, detail * 0.25);
         const dune = Math.sin(x * 0.04 + y * 0.01 + ridge * 6) * 0.5 + 0.5;
         col = lerpColor(col, dust, dune * 0.14 * (1 - t));
-        col = lerpColor(col, mud, (1 - detail) * 0.12);
+        col = lerpColor(col, mudSoil, (1 - detail) * 0.12);
       } else if (biome < 0.62) {
         const t = (biome - 0.38) / 0.24;
         col = lerpColor(soil, scrubLight, Math.min(1, t * 1.15));
@@ -3603,8 +3814,7 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
         col = lerpColor(col, forestDeep, t * 0.45 + (1 - detail) * 0.2);
       }
 
-      // Micro variation / soil grain
-      const grain = (detail - 0.5) * 18;
+      const grain = (detail - 0.5) * 14;
       const o = (y * size + x) * 4;
       px[o] = Math.max(0, Math.min(255, col[0] + grain));
       px[o + 1] = Math.max(0, Math.min(255, col[1] + grain * 0.85));
@@ -3613,119 +3823,150 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
     }
   }
 
-  // Paint impassable lakes — irregular shore, mud bank, deep water.
+  // ——— Lakes: painted like a map illustration (soft shore, depth falloff, no hard pixels) ———
   const ponds = state.ponds || [];
   for (const pond of ponds) {
     const cx = (pond.x / mapSize) * size;
     const cy = (pond.y / mapSize) * size;
     const pr = (pond.r / mapSize) * size;
-    const r0 = Math.max(3, Math.floor(pr));
-    const mudW = Math.max(3, r0 * 0.18);
-    const x0 = Math.max(0, Math.floor(cx - r0 - mudW - 2));
-    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + mudW + 2));
-    const y0 = Math.max(0, Math.floor(cy - r0 - mudW - 2));
-    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + mudW + 2));
-    const deep = [18, 48, 62];
-    const mid = [36, 88, 98];
-    const shallow = [58, 118, 112];
-    const mud = [78, 68, 42];
-    const wetSand = [98, 88, 58];
+    const r0 = Math.max(6, pr);
+    const mudW = Math.max(5, r0 * 0.28);
+    const pad = mudW + r0 * 0.2;
+    const x0 = Math.max(0, Math.floor(cx - r0 - pad));
+    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + pad));
+    const y0 = Math.max(0, Math.floor(cy - r0 - pad));
+    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + pad));
+    const abyss = [12, 36, 52];
+    const deep = [22, 62, 78];
+    const mid = [42, 102, 112];
+    const shallow = [72, 132, 124];
+    const foam = [168, 196, 186];
+    const mud = [86, 72, 46];
+    const wetSand = [112, 98, 64];
     const seed = ((pond.x * 17) ^ (pond.y * 31) ^ (pond.r * 13)) | 0;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx;
         const dy = y + 0.5 - cy;
         const ang = Math.atan2(dy, dx);
-        // Soft irregular shoreline (not a hard circle).
-        const warp =
-          Math.sin(ang * 3.0 + seed * 0.01) * 0.07 +
-          Math.sin(ang * 5.0 - seed * 0.02) * 0.045 +
-          fbm2(x * 0.04 + seed, y * 0.04, seed + 7, 2) * 0.1 -
-          0.05;
-        const shoreR = r0 * (1 + warp);
+        const micro =
+          fbm2(x * 0.028 + seed * 0.1, y * 0.028, seed + 7, 3) * 0.14 -
+          0.05 +
+          fbm2(x * 0.07, y * 0.07, seed + 19, 2) * 0.05;
+        const shoreR = r0 * shoreWarp(ang, seed, 1.15) * (1 + micro);
         const d = Math.hypot(dx, dy);
         if (d > shoreR + mudW) continue;
         const o = (y * size + x) * 4;
         const under = [px[o], px[o + 1], px[o + 2]];
         let col;
+        let blend = 1;
         if (d > shoreR) {
-          // Wet mud / damp soil ring
           const t = (d - shoreR) / mudW;
-          col = lerpColor(mud, wetSand, Math.min(1, t * 0.7));
-          col = lerpColor(col, under, Math.min(1, t * t * 0.85));
+          const edge = smoothstep(0, 1, t);
+          col = lerpColor(mud, wetSand, Math.min(1, edge * 0.75));
+          col = lerpColor(col, under, smoothstep(0.15, 1, edge));
+          blend = 1 - smoothstep(0.55, 1, edge);
         } else {
           const t = d / Math.max(0.001, shoreR);
-          if (t < 0.45) {
-            col = lerpColor(deep, mid, (t / 0.45) * (t / 0.45));
-          } else if (t < 0.82) {
-            col = lerpColor(mid, shallow, (t - 0.45) / 0.37);
+          const depth = 1 - smoothstep(0, 1, t);
+          if (t < 0.28) {
+            col = lerpColor(abyss, deep, smoothstep(0, 0.28, t));
+          } else if (t < 0.62) {
+            col = lerpColor(deep, mid, smoothstep(0.28, 0.62, t));
+          } else if (t < 0.88) {
+            col = lerpColor(mid, shallow, smoothstep(0.62, 0.88, t));
           } else {
-            // Soft foam / reed-tinted shallows into mud
-            const u = (t - 0.82) / 0.18;
-            col = lerpColor(shallow, mud, Math.min(1, u));
-            col = lerpColor(col, under, u * 0.35);
+            const u = smoothstep(0.88, 1, t);
+            col = lerpColor(shallow, foam, u * 0.45);
+            col = lerpColor(col, mud, u * 0.55);
           }
-          // Gentle caustic shimmer (low contrast — no hard stripes)
-          const shimmer =
-            Math.sin(x * 0.055 + y * 0.04 + seed) * 5 +
-            Math.sin(x * 0.12 - y * 0.09) * 3;
-          col = [col[0] + shimmer, col[1] + shimmer * 1.05, col[2] + shimmer * 0.9];
+          // Soft caustics / wind ripples — painted, not striped pixels
+          const rip =
+            fbm2(x * 0.09 + seed, y * 0.09, seed + 3, 3) * 10 +
+            Math.sin((x * 0.7 + y * 0.35) * 0.08 + seed) * 3 * depth;
+          col = [col[0] + rip * 0.35, col[1] + rip * 0.55, col[2] + rip * 0.5];
+          // Inner highlight toward light
+          const lit = Math.max(0, Math.cos(ang - 0.6)) * depth * 8;
+          col = [col[0] + lit, col[1] + lit * 1.05, col[2] + lit * 0.7];
+          blend = 0.92 + depth * 0.08;
         }
-        px[o] = Math.max(0, Math.min(255, col[0]));
-        px[o + 1] = Math.max(0, Math.min(255, col[1]));
-        px[o + 2] = Math.max(0, Math.min(255, col[2]));
+        px[o] = Math.max(0, Math.min(255, under[0] * (1 - blend) + col[0] * blend));
+        px[o + 1] = Math.max(0, Math.min(255, under[1] * (1 - blend) + col[1] * blend));
+        px[o + 2] = Math.max(0, Math.min(255, under[2] * (1 - blend) + col[2] * blend));
       }
     }
   }
 
-  // Rocky mountain footprints — brown-grey rock, soft skirts into soil.
+  // ——— Mountains: strata, cliff shade, soft scree skirt (illustration, not Lego cones) ———
   const mountains = state.mountains || [];
   for (const mt of mountains) {
     const cx = (mt.x / mapSize) * size;
     const cy = (mt.y / mapSize) * size;
     const pr = (mt.r / mapSize) * size;
-    const r0 = Math.max(4, Math.floor(pr));
-    const skirt = Math.max(4, r0 * 0.22);
-    const x0 = Math.max(0, Math.floor(cx - r0 - skirt - 2));
-    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + skirt + 2));
-    const y0 = Math.max(0, Math.floor(cy - r0 - skirt - 2));
-    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + skirt + 2));
-    const peak = [92, 88, 78];
-    const rock = [72, 66, 56];
-    const scree = [98, 82, 58];
+    const r0 = Math.max(8, pr);
+    const skirt = Math.max(6, r0 * 0.32);
+    const pad = skirt + r0 * 0.15;
+    const x0 = Math.max(0, Math.floor(cx - r0 - pad));
+    const x1 = Math.min(size - 1, Math.ceil(cx + r0 + pad));
+    const y0 = Math.max(0, Math.floor(cy - r0 - pad));
+    const y1 = Math.min(size - 1, Math.ceil(cy + r0 + pad));
+    const snow = [198, 196, 188];
+    const peak = [118, 112, 102];
+    const rock = [78, 72, 62];
+    const cliff = [52, 48, 42];
+    const scree = [108, 90, 64];
     const seed = ((mt.x * 23) ^ (mt.y * 41) ^ (mt.r * 11)) | 0;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const dx = x + 0.5 - cx;
         const dy = y + 0.5 - cy;
         const ang = Math.atan2(dy, dx);
-        const warp =
-          Math.sin(ang * 2.5 + seed * 0.01) * 0.08 +
-          Math.sin(ang * 4.2 - seed * 0.015) * 0.05 +
-          fbm2(x * 0.035 + seed, y * 0.035, seed + 11, 2) * 0.12 -
-          0.04;
-        const shoreR = r0 * (1 + warp);
+        const micro =
+          fbm2(x * 0.022 + seed, y * 0.022, seed + 11, 3) * 0.16 -
+          0.04 +
+          fbm2(x * 0.06, y * 0.06, seed + 28, 2) * 0.06;
+        const shoreR = r0 * shoreWarp(ang, seed + 3, 1.25) * (1 + micro);
         const d = Math.hypot(dx, dy);
         if (d > shoreR + skirt) continue;
         const o = (y * size + x) * 4;
         const under = [px[o], px[o + 1], px[o + 2]];
         let col;
+        let blend = 1;
         if (d > shoreR) {
           const t = (d - shoreR) / skirt;
-          col = lerpColor(scree, under, Math.min(1, t * t));
+          const edge = smoothstep(0, 1, t);
+          col = lerpColor(scree, under, smoothstep(0.05, 1, edge));
+          blend = 1 - smoothstep(0.4, 1, edge);
         } else {
           const t = d / Math.max(0.001, shoreR);
-          if (t < 0.35) {
-            col = lerpColor(peak, rock, t / 0.35);
+          const elev = 1 - smoothstep(0, 1, t);
+          // Pseudo cliff: darker on the "south-east" face
+          const shade = 0.55 + Math.cos(ang - 0.85) * 0.28;
+          if (elev > 0.78) {
+            col = lerpColor(peak, snow, smoothstep(0.78, 1, elev) * 0.35);
+          } else if (elev > 0.42) {
+            col = lerpColor(rock, peak, smoothstep(0.42, 0.78, elev));
           } else {
-            col = lerpColor(rock, scree, (t - 0.35) / 0.65);
+            col = lerpColor(cliff, rock, smoothstep(0.1, 0.42, elev));
           }
-          const grain = (fbm2(x * 0.08, y * 0.08, seed, 2) - 0.5) * 18;
-          col = [col[0] + grain, col[1] + grain * 0.9, col[2] + grain * 0.7];
+          col = [col[0] * shade, col[1] * shade, col[2] * shade];
+          // Stratified rock bands (painted, soft)
+          const band =
+            Math.sin(y * 0.09 + fbm2(x * 0.03, y * 0.03, seed, 2) * 4) * 0.5 + 0.5;
+          col = lerpColor(col, cliff, band * 0.12 * (1 - elev * 0.5));
+          const grain = (fbm2(x * 0.11, y * 0.11, seed, 3) - 0.5) * 14;
+          col = [col[0] + grain, col[1] + grain * 0.92, col[2] + grain * 0.75];
+          // Soft rim into soil so the mass doesn't look stamped
+          blend = 0.88 + elev * 0.12;
+          if (t > 0.86) {
+            const u = smoothstep(0.86, 1, t);
+            col = lerpColor(col, scree, u);
+            blend = 1 - u * 0.25;
+          }
         }
-        px[o] = Math.max(0, Math.min(255, col[0]));
-        px[o + 1] = Math.max(0, Math.min(255, col[1]));
-        px[o + 2] = Math.max(0, Math.min(255, col[2]));
+        px[o] = Math.max(0, Math.min(255, under[0] * (1 - blend) + col[0] * blend));
+        px[o + 1] = Math.max(0, Math.min(255, under[1] * (1 - blend) + col[1] * blend));
+        px[o + 2] = Math.max(0, Math.min(255, under[2] * (1 - blend) + col[2] * blend));
       }
     }
   }
@@ -3778,7 +4019,10 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.anisotropy = 8;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = 16;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
   return tex;
@@ -4081,106 +4325,112 @@ function scatterGroundDecor(scene, size) {
     flatShading: true,
   });
   const waterMat = new THREE.MeshStandardMaterial({
-    color: 0x2e8490,
-    roughness: 0.08,
-    metalness: 0.35,
+    color: 0x3a9aaa,
+    roughness: 0.14,
+    metalness: 0.22,
     transparent: true,
-    opacity: 0.68,
-    envMapIntensity: 1.3,
+    opacity: 0.72,
+    envMapIntensity: 1.2,
+    flatShading: false,
   });
   const waterDeep = new THREE.MeshStandardMaterial({
-    color: 0x143848,
-    roughness: 0.14,
-    metalness: 0.28,
+    color: 0x154858,
+    roughness: 0.2,
+    metalness: 0.18,
     transparent: true,
-    opacity: 0.86,
-    envMapIntensity: 1.0,
+    opacity: 0.88,
+    envMapIntensity: 0.95,
+    flatShading: false,
   });
   const waterShore = new THREE.MeshStandardMaterial({
-    color: 0x4a7060,
-    roughness: 0.5,
-    metalness: 0.15,
+    color: 0x5a8878,
+    roughness: 0.55,
+    metalness: 0.08,
     transparent: true,
-    opacity: 0.42,
+    opacity: 0.38,
+    flatShading: false,
   });
 
-  // Soft lake discs — slight oval stretch, soft shore ring (no hard circle edge).
+  // Organic lakes — irregular shoreline discs (not perfect circles).
   for (const pond of state.ponds || []) {
     const r = Math.max(1.4, Number(pond.r) || 3);
-    const stretch = 0.82 + ((Math.abs(pond.x * 13 + pond.y) * 0.01) % 1) * 0.32;
+    const seed = ((pond.x * 17) ^ (pond.y * 31) ^ (pond.r * 13)) | 0;
+    const stretch = 0.84 + ((Math.abs(pond.x * 13 + pond.y) * 0.01) % 1) * 0.28;
     const lake = new THREE.Group();
-    lake.position.set(pond.x, 0.028, pond.y);
+    lake.position.set(pond.x, 0.026, pond.y);
     lake.rotation.y = (pond.x + pond.y) * 0.15;
-    lake.scale.set(stretch, 1, 1 / stretch);
+    lake.scale.set(stretch, 1, 1 / Math.max(0.7, stretch));
 
-    const deep = new THREE.Mesh(new THREE.CircleGeometry(r * 0.62, 48), waterDeep);
-    deep.rotation.x = -Math.PI / 2;
+    const deep = new THREE.Mesh(makeOrganicDiscGeometry(r * 0.58, seed, 80), waterDeep);
     lake.add(deep);
-    const mid = new THREE.Mesh(new THREE.RingGeometry(r * 0.55, r * 0.92, 48), waterMat);
-    mid.rotation.x = -Math.PI / 2;
-    mid.position.y = 0.004;
+    const mid = new THREE.Mesh(makeOrganicDiscGeometry(r * 0.9, seed + 5, 80), waterMat);
+    mid.position.y = 0.005;
     lake.add(mid);
-    const shore = new THREE.Mesh(new THREE.RingGeometry(r * 0.88, r * 1.08, 48), waterShore);
-    shore.rotation.x = -Math.PI / 2;
-    shore.position.y = 0.006;
+    const shore = new THREE.Mesh(makeOrganicDiscGeometry(r * 1.06, seed + 11, 72), waterShore);
+    shore.position.y = 0.008;
     lake.add(shore);
     group.add(lake);
   }
 
   const rockMat = new THREE.MeshStandardMaterial({
-    color: 0x6a6458,
-    roughness: 0.88,
-    metalness: 0.08,
-    flatShading: true,
+    color: 0x6e685c,
+    roughness: 0.9,
+    metalness: 0.06,
+    flatShading: false,
   });
   const rockDark = new THREE.MeshStandardMaterial({
     color: 0x4a463c,
-    roughness: 0.92,
-    metalness: 0.06,
-    flatShading: true,
+    roughness: 0.94,
+    metalness: 0.05,
+    flatShading: false,
   });
   const rockLite = new THREE.MeshStandardMaterial({
-    color: 0x8a8270,
-    roughness: 0.85,
-    metalness: 0.05,
-    flatShading: true,
+    color: 0x8e8674,
+    roughness: 0.86,
+    metalness: 0.04,
+    flatShading: false,
   });
 
-  // Impassable mountain clusters — must path around.
+  // Soft rocky masses — noise-sculpted, smooth shaded (no faceted Lego cones).
   for (const mt of state.mountains || []) {
     const r = Math.max(2.2, Number(mt.r) || 4);
+    const seed = ((mt.x * 23) ^ (mt.y * 41) ^ (mt.r * 11)) | 0;
     const mass = new THREE.Group();
     mass.position.set(mt.x, 0, mt.y);
     mass.rotation.y = (mt.x * 0.21 + mt.y * 0.13) % (Math.PI * 2);
-    const peaks = 3 + Math.floor((Math.abs(mt.x * 7 + mt.y) * 0.1) % 3);
+
+    const core = new THREE.Mesh(
+      makeRockMassGeometry(r * 0.72, r * 0.95, seed),
+      rockLite,
+    );
+    core.castShadow = true;
+    core.receiveShadow = true;
+    mass.add(core);
+
+    const peaks = 2 + Math.floor((Math.abs(mt.x * 7 + mt.y) * 0.1) % 3);
     for (let i = 0; i < peaks; i++) {
       const ang = (i / peaks) * Math.PI * 2 + mt.r * 0.2;
-      const dist = r * (0.12 + (i % 3) * 0.12);
-      const h = r * (0.55 + (i % 2) * 0.28);
-      const rad = r * (0.38 + (i % 3) * 0.1);
+      const dist = r * (0.22 + (i % 3) * 0.1);
+      const h = r * (0.48 + (i % 2) * 0.22);
+      const rad = r * (0.28 + (i % 3) * 0.08);
       const peak = new THREE.Mesh(
-        new THREE.ConeGeometry(rad, h, 6),
+        makeRockMassGeometry(rad, h, seed + i * 17),
         i % 2 === 0 ? rockMat : rockDark,
       );
-      peak.position.set(Math.cos(ang) * dist, h * 0.48, Math.sin(ang) * dist);
-      peak.rotation.y = ang * 0.4;
+      peak.position.set(Math.cos(ang) * dist, 0, Math.sin(ang) * dist);
+      peak.rotation.y = ang * 0.35;
+      peak.scale.set(0.9 + (i % 2) * 0.15, 1, 0.85 + (i % 3) * 0.1);
       peak.castShadow = true;
       peak.receiveShadow = true;
       mass.add(peak);
     }
-    // Central bulk
-    const coreH = r * 0.85;
-    const core = new THREE.Mesh(new THREE.ConeGeometry(r * 0.55, coreH, 7), rockLite);
-    core.position.y = coreH * 0.45;
-    core.castShadow = true;
-    core.receiveShadow = true;
-    mass.add(core);
-    // Low skirt so the blocker reads on the ground
+
+    // Soft ground skirt (smooth, high segment count)
     const skirt = new THREE.Mesh(
-      new THREE.CylinderGeometry(r * 0.95, r * 1.05, r * 0.18, 10),
+      new THREE.CylinderGeometry(r * 0.92, r * 1.08, r * 0.14, 28),
       rockDark,
     );
-    skirt.position.y = r * 0.08;
+    skirt.position.y = r * 0.05;
     skirt.receiveShadow = true;
     mass.add(skirt);
     group.add(mass);
@@ -9579,13 +9829,7 @@ $("#scoreboard-body")?.addEventListener("pointerdown", (event) => {
   event.stopPropagation();
   const owner = row.dataset.owner;
   if (!owner) return;
-  const hx = row.getAttribute("data-hq-x");
-  const hy = row.getAttribute("data-hq-y");
-  centerCameraOnOwner(
-    owner,
-    hx === null || hx === "" ? null : hx,
-    hy === null || hy === "" ? null : hy,
-  );
+  centerCameraOnOwner(owner);
 });
 
 // Capture clicks even if a child remounts mid-frame; keep Tab held usable.
@@ -9598,13 +9842,7 @@ $("#scoreboard")?.addEventListener(
     event.stopPropagation();
     const owner = row.dataset.owner;
     if (!owner) return;
-    const hx = row.getAttribute("data-hq-x");
-    const hy = row.getAttribute("data-hq-y");
-    centerCameraOnOwner(
-      owner,
-      hx === null || hx === "" ? null : hx,
-      hy === null || hy === "" ? null : hy,
-    );
+    centerCameraOnOwner(owner);
   },
   true,
 );
