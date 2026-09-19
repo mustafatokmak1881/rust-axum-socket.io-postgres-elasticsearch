@@ -8,7 +8,7 @@ use redis::AsyncCommands;
 use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
-use super::match_sim::{self, MatchSim, MAX_PLAYERS, map_size_for_players};
+use super::match_sim::{self, MatchSim, map_size_for_players};
 use super::protocol::{
     ClientMsg, OpenMatchView, ServerMsg, default_catalog, normalize_faction,
 };
@@ -43,7 +43,7 @@ struct MatchRuntime {
     sim: MatchSim,
     /// subscribers in this match
     members: HashMap<Uuid, ()>,
-    max_players: u8,
+    max_players: u16,
     /// Still accepting drop-in joiners.
     open: bool,
 }
@@ -294,7 +294,7 @@ impl MatchHub {
     async fn create_and_enter_match(
         &self,
         user_id: Uuid,
-        max_players: u8,
+        max_players: u16,
         _map_size: u16,
         ffa: bool,
         faction: String,
@@ -305,8 +305,8 @@ impl MatchHub {
             return Err("Already in a match".into());
         }
 
-        let max_players = max_players.clamp(2, MAX_PLAYERS);
-        // Area fully automatic from commander count — roomy between bases.
+        // No upper cap — host chooses lobby size (min 2). Map edge still saturates at MAX_MAP_SIZE.
+        let max_players = max_players.max(2);
         let map_size = map_size_for_players(max_players);
         let user = users::load_user(&self.inner.redis, user_id)
             .await
@@ -406,13 +406,14 @@ impl MatchHub {
             if rt.sim.ended || !rt.open {
                 return Err("Match is closed".into());
             }
-            if rt.sim.human_count() as u8 >= rt.max_players {
+            if rt.sim.bot_count() == 0 {
                 return Err("Match is full".into());
             }
 
             let faction = normalize_faction(&faction);
+            // Replace a bot slot — commander count stays fixed.
             rt.sim
-                .add_player(
+                .take_over_bot(
                     user_id,
                     user.display_name.clone(),
                     faction,
@@ -785,7 +786,7 @@ impl MatchHub {
             }
             out.push(OpenMatchView {
                 id: *entry.key(),
-                players: rt.sim.player_count() as u8,
+                players: rt.sim.human_count() as u16,
                 max_players: rt.max_players,
                 map_size: rt.sim.map_size,
                 ffa: rt.sim.ffa,

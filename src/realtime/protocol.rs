@@ -15,7 +15,7 @@ pub fn normalize_faction(_faction: &str) -> String {
 pub enum ClientMsg {
     Hello,
     CreateLobby {
-        max_players: u8,
+        max_players: u16,
         map_size: u16,
         #[serde(default)]
         ffa: bool,
@@ -163,8 +163,8 @@ pub enum ServerMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenMatchView {
     pub id: Uuid,
-    pub players: u8,
-    pub max_players: u8,
+    pub players: u16,
+    pub max_players: u16,
     pub map_size: u16,
     pub ffa: bool,
 }
@@ -192,7 +192,7 @@ pub struct LobbySlot {
 pub struct LobbyView {
     pub id: Uuid,
     pub host_id: Uuid,
-    pub max_players: u8,
+    pub max_players: u16,
     pub map_size: u16,
     pub ffa: bool,
     pub phase: String,

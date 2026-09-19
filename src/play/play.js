@@ -279,9 +279,9 @@ function renderOpenMatches(matches) {
     .map(
       (m) => `
       <button type="button" class="store-item" data-join="${escapeHtml(m.id)}">
-        <strong>${m.players}/${m.max_players} live</strong>
+        <strong>${m.players}/${m.max_players} players</strong>
         <small>${escapeHtml(m.id)}</small>
-        <span>Map ${m.map_size}${m.ffa ? " · Alone" : " · Ally"} · click to join</span>
+        <span>Map ${m.map_size}${m.ffa ? " · Alone" : " · Ally"} · join takes a bot slot</span>
       </button>`,
     )
     .join("");
@@ -12682,8 +12682,8 @@ function animate() {
 
 /** Auto edge from commander count — mirrors server `map_size_for_players` (roomy). */
 function mapSizeForCommanders(n) {
-  const c = Math.max(2, Math.min(100, Number(n) || 2));
-  let size = Math.round(96 * Math.sqrt(c) + 40);
+  const c = Math.max(2, Math.floor(Number(n) || 2));
+  let size = Math.round(112 * Math.sqrt(c) + 48);
   size = Math.round(size / 2) * 2;
   return Math.max(96, Math.min(2048, size));
 }

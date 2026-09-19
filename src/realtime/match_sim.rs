@@ -14,16 +14,15 @@ use super::protocol::{
 
 pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
-pub const MAX_PLAYERS: u8 = 100;
 /// Smallest playable edge (2 commanders).
 pub const MIN_MAP_SIZE: u16 = 96;
 /// Cap for auto-scaled arenas.
 pub const MAX_MAP_SIZE: u16 = 2048;
 
 /// Auto map edge from commander count — large gaps between bases.
-/// ~112 wu cell spacing on a √n grid → longer marches, slower snowballs.
-pub fn map_size_for_players(max_players: u8) -> u16 {
-    let n = max_players.clamp(2, MAX_PLAYERS) as f32;
+/// Map size still clamps to MAX_MAP_SIZE; commander count itself is uncapped.
+pub fn map_size_for_players(max_players: u16) -> u16 {
+    let n = max_players.max(2) as f32;
     let spacing = 112.0;
     let size = (spacing * n.sqrt() + 48.0).round() as i32;
     let size = ((size + 1) / 2) * 2; // even
@@ -937,7 +936,7 @@ impl MatchSim {
         map_size: u16,
         ffa: bool,
         roster: Vec<(Uuid, String, String, u8, Option<String>)>,
-        target_players: u8,
+        target_players: u16,
     ) -> Self {
         let map_size = map_size.clamp(MIN_MAP_SIZE, MAX_MAP_SIZE);
         let ponds = generate_ponds(id, map_size);
@@ -972,7 +971,7 @@ impl MatchSim {
             );
         }
 
-        let target = (target_players as usize).clamp(2, MAX_PLAYERS as usize);
+        let target = (target_players as usize).max(2);
         bots::seed_opening_bots(&mut sim, target);
         if !sim.ffa {
             sim.rebalance_allied_teams();
@@ -1198,8 +1197,9 @@ impl MatchSim {
         (bx, by)
     }
 
-    /// Mid-match join: spawn HQ on the same wide ring as the opening cities.
-    pub fn add_player(
+    /// Drop-in join: a human replaces an existing bot commander (army + base stay).
+    /// Keeps match size fixed — no new HQ is spawned.
+    pub fn take_over_bot(
         &mut self,
         user_id: Uuid,
         name: String,
@@ -1213,19 +1213,56 @@ impl MatchSim {
             return Err("Already in match");
         }
 
-        let index = self.players.len();
-        let team = if self.ffa {
-            index as u8
-        } else {
-            self.pick_allied_team()
-        };
+        // Prefer living bots so the joiner inherits a playable base.
+        let bot_id = self
+            .players
+            .values()
+            .filter(|p| p.is_bot())
+            .max_by_key(|p| (p.alive as u8, p.colonies, p.resources.gold))
+            .map(|p| p.user_id)
+            .ok_or("No bot slot available")?;
 
-        self.spawn_commander(user_id, name, faction, team, flag, true, None);
+        let mut state = self
+            .players
+            .remove(&bot_id)
+            .ok_or("No bot slot available")?;
+        state.user_id = user_id;
+        state.name = name;
+        state.faction = faction;
+        state.flag = flag.clone();
+        state.bot = None;
+        state.connected = true;
+        state.aoi_known.clear();
+        // Keep team, colors, resources, explored, home_hq, colonies, stats, focus, alive.
+
+        for entity in self.entities.values_mut() {
+            if entity.owner == bot_id {
+                entity.owner = user_id;
+                if flag.is_some() {
+                    entity.flag = flag.clone();
+                }
+                entity.dirty = true;
+            }
+            if entity.last_hit_by == Some(bot_id) {
+                entity.last_hit_by = Some(user_id);
+            }
+        }
+
+        for player in self.players.values_mut() {
+            if let Some(mind) = player.bot.as_mut() {
+                if mind.war_owner == Some(bot_id) {
+                    mind.war_owner = Some(user_id);
+                }
+            }
+        }
+
+        self.players.insert(user_id, state);
+        self.reveal_vision_for(user_id);
         Ok(())
     }
 
-    pub fn player_count(&self) -> usize {
-        self.players.len()
+    pub fn bot_count(&self) -> usize {
+        self.players.values().filter(|p| p.is_bot()).count()
     }
 
     pub fn human_count(&self) -> usize {

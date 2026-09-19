@@ -5,10 +5,7 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use super::grid::MAX_ENTITY_RADIUS;
-use super::match_sim::{building_radius, MatchSim, MAX_PLAYERS};
-
-/// Seed bots up toward a full lobby (human already seated when MatchSim::new runs).
-pub const OPENING_BOT_TARGET: usize = 100;
+use super::match_sim::{building_radius, MatchSim};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BotStyle {
@@ -242,7 +239,7 @@ impl BotStyle {
 }
 
 pub fn seed_opening_bots(sim: &mut MatchSim, target_players: usize) {
-    let target = target_players.clamp(2, OPENING_BOT_TARGET.min(MAX_PLAYERS as usize));
+    let target = target_players.max(2);
     let mut n = 0usize;
     while sim.players.len() < target {
         let profile = &PROFILES[n % PROFILES.len()];
@@ -276,9 +273,6 @@ pub fn seed_opening_bots(sim: &mut MatchSim, target_players: usize) {
             }),
         );
         n += 1;
-        if n > 200 {
-            break;
-        }
     }
 }
 
