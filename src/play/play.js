@@ -2233,19 +2233,19 @@ const BUILDING_VISUAL = {
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 11;
+const BUILDING_FIT_VERSION = 12;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
 const PATRIOT_RIG_VERSION = 6;
 /** China Gattling Cannon mesh revision. */
-const GATLING_DEF_VERSION = 2;
+const GATLING_DEF_VERSION = 3;
 /** Strategy Center / tech building mesh revision. */
 const STRATEGY_RIG_VERSION = 2;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
-const TANK_RIG_VERSION = 16;
+const TANK_RIG_VERSION = 17;
 /** Infantry mesh revision. */
-const INFANTRY_RIG_VERSION = 10;
+const INFANTRY_RIG_VERSION = 11;
 /** MLRS mesh revision. */
-const MLRS_RIG_VERSION = 4;
+const MLRS_RIG_VERSION = 5;
 
 function mixHex(a, b, t) {
   const A = a >>> 0;
@@ -2377,23 +2377,24 @@ function milPalette(accentOrColors) {
   const asColors = Array.isArray(accentOrColors) ? resolveOwnerColors(accentOrColors) : null;
   if (asColors) {
     const [c0, c1, c2] = asColors;
+    // Keep military texture, but let flag colors dominate at a glance.
     return {
       accent: c2,
-      olive: mixHex(c0, 0x3e4634, 0.32),
-      oliveDark: mixHex(c0, 0x2a3024, 0.4),
-      oliveLight: mixHex(c1, 0x525a42, 0.35),
-      concrete: mixHex(c1, 0x5c5a52, 0.72),
-      concreteDark: mixHex(c0, 0x3e3c36, 0.78),
-      concreteLight: mixHex(c1, 0x6e6a60, 0.68),
-      metal: mixHex(c1, 0x5a6068, 0.62),
-      metalBright: mixHex(c2, 0x8a929c, 0.48),
-      rust: mixHex(c0, 0x5a4030, 0.7),
+      olive: mixHex(c0, 0x3e4634, 0.18),
+      oliveDark: mixHex(c0, 0x2a3024, 0.22),
+      oliveLight: mixHex(c1, 0x525a42, 0.2),
+      concrete: mixHex(c1, 0x5c5a52, 0.45),
+      concreteDark: mixHex(c0, 0x3e3c36, 0.5),
+      concreteLight: mixHex(c1, 0x6e6a60, 0.42),
+      metal: mixHex(c1, 0x5a6068, 0.4),
+      metalBright: mixHex(c2, 0x8a929c, 0.32),
+      rust: mixHex(c0, 0x5a4030, 0.45),
       glass: 0x152028,
-      sand: mixHex(c1, 0x6b6550, 0.75),
+      sand: mixHex(c1, 0x6b6550, 0.48),
       warning: c2,
       black: 0x101214,
-      steel: mixHex(c1, 0x6a727a, 0.55),
-      panel: mixHex(c0, 0x484e54, 0.5),
+      steel: mixHex(c1, 0x6a727a, 0.35),
+      panel: mixHex(c0, 0x484e54, 0.28),
     };
   }
   const accent = accentOrColors ?? 0x556b2f;
@@ -3028,11 +3029,12 @@ function createBuildingMesh(kind, fallbackMat, ownerColors) {
 /** China Gattling Cannon — twin spinning barrels on a pedestal (not a Patriot clone). */
 function createGattlingCannonMesh(fallbackMat, ownerColors) {
   const cols = ownerColorsFromMat(fallbackMat, ownerColors);
-  const accent = cols[0] ?? 0x8a3030;
-  const ochre = 0x6a5030;
-  const ochreDark = 0x4a3820;
-  const metal = 0x3a3e42;
-  const metalBright = 0x6a7278;
+  const [c0, c1, c2] = cols;
+  const accent = c2;
+  const ochre = mixHex(c0, 0x6a5030, 0.22);
+  const ochreDark = mixHex(c0, 0x4a3820, 0.28);
+  const metal = mixHex(c1, 0x3a3e42, 0.4);
+  const metalBright = mixHex(c1, 0x6a7278, 0.35);
   const barrel = 0x1a1c1e;
 
   const root = new THREE.Group();
@@ -3044,6 +3046,7 @@ function createGattlingCannonMesh(fallbackMat, ownerColors) {
   root.userData.isFallback = false;
   root.userData.keepMtlColors = true;
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.ownerColors = cols;
   root.userData.unitHeight = 0.42;
   root.userData.turretTurnRate = 2.2;
   root.userData.scanRate = 1.1;
@@ -3139,12 +3142,13 @@ function createGattlingCannonMesh(fallbackMat, ownerColors) {
     [-0.22, -0.2],
     [0.22, -0.2],
   ]) {
-    add(root, new THREE.BoxGeometry(0.1, 0.06, 0.08), 0x6b6550, x, 0.05, z, 0, 0, 0, {
+    add(root, new THREE.BoxGeometry(0.1, 0.06, 0.08), mixHex(c1, 0x6b6550, 0.45), x, 0.05, z, 0, 0, 0, {
       metalness: 0.05,
       roughness: 0.95,
       cast: false,
     });
   }
+  attachOwnerTricolor(root, cols, { y: 0.34, z: 0.32, w: 0.24, h: 0.07 });
   return root;
 }
 
@@ -3911,28 +3915,30 @@ function createRadarStationMesh(fallbackMat) {
 /** USA Fire Base — howitzer pit + sandbags (not a radar dish). */
 function createFirebaseMesh(fallbackMat, ownerColors) {
   const cols = ownerColorsFromMat(fallbackMat, ownerColors);
-  const accent = cols[0] ?? 0x556b2f;
-  const olive = 0x4a5538;
-  const oliveDark = 0x343c2c;
-  const oliveLight = 0x5a6648;
-  const concrete = 0x5a5848;
-  const concreteDark = 0x3e3c34;
+  const [c0, c1, c2] = cols;
+  const accent = c2;
+  const olive = mixHex(c0, 0x4a5538, 0.2);
+  const oliveDark = mixHex(c0, 0x343c2c, 0.26);
+  const oliveLight = mixHex(c1, 0x5a6648, 0.22);
+  const concrete = mixHex(c1, 0x5a5848, 0.45);
+  const concreteDark = mixHex(c0, 0x3e3c34, 0.5);
   const metal = 0x2a2c28;
-  const metalBright = 0x4a4e48;
+  const metalBright = mixHex(c1, 0x4a4e48, 0.4);
   const barrel = 0x3a3e38;
-  const sand = 0x7a7058;
-  const sandDark = 0x5a5240;
-  const crate = 0x5a4830;
+  const sand = mixHex(c1, 0x7a7058, 0.48);
+  const sandDark = mixHex(c0, 0x5a5240, 0.5);
+  const crate = mixHex(c0, 0x5a4830, 0.4);
 
   const root = new THREE.Group();
   root.userData.building = true;
   root.userData.isFirebase = true;
   root.userData.isBunker = true; // reuse aim/slew path
-  root.userData.firebaseRigVersion = 1;
+  root.userData.firebaseRigVersion = 2;
   root.userData.modelKind = "firebase";
   root.userData.isFallback = false;
   root.userData.keepMtlColors = true;
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
+  root.userData.ownerColors = cols;
   root.userData.unitHeight = 0.55;
   root.userData.scanRate = 0.45;
   root.userData.turretTurnRate = 0.85;
@@ -4131,6 +4137,7 @@ function createFirebaseMesh(fallbackMat, ownerColors) {
     roughness: 0.55,
   });
 
+  attachOwnerTricolor(root, cols, { y: 0.36, z: 0.4, w: 0.26, h: 0.07 });
   return root;
 }
 
@@ -6090,8 +6097,9 @@ function ensureGhost(kind) {
     metalness: 0.05,
     roughness: 0.8,
   });
+  mat.userData = { ownerColors: colors };
 
-  const mesh = createBuildingMesh(kind, mat);
+  const mesh = createBuildingMesh(kind, mat, colors);
   setBuildingOpacity(mesh, 0.38);
   // Materials were detached for this ghost — safe to dispose on clear.
   mesh.userData.disposeMaterials = true;
@@ -7146,6 +7154,7 @@ function matSatin(color, opts = {}) {
 
 function createRangerMesh(teamColor, opts = {}) {
   const style = opts.style || "usa";
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isInfantry = true;
@@ -7154,6 +7163,7 @@ function createRangerMesh(teamColor, opts = {}) {
   g.userData.walkPhase = Math.random() * Math.PI * 2;
   g.userData.moving = false;
   g.userData.factionStyle = style;
+  g.userData.ownerColors = [c0, c1, c2];
   g.rotation.order = "YXZ";
 
   let camo = 0x5a6e4c;
@@ -7168,13 +7178,17 @@ function createRangerMesh(teamColor, opts = {}) {
     camoDark = 0x5a4a30;
     vest = 0x4a3a28;
   }
+  // Owner tricolor dominates the silhouette.
+  camo = mixHex(c0, camo, 0.2);
+  camoDark = mixHex(c0, camoDark, 0.26);
+  vest = mixHex(c1, vest, 0.22);
   const boot = 0x2a2620;
   const leather = 0x3b2a1c;
   const skin = 0xc9a882;
   const gun = 0x3a3a38;
   const gunMetal = 0x6a6e68;
   const plastic = 0x2c2c2a;
-  const accent = teamColor >>> 0;
+  const accent = c2;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
     const m = new THREE.Mesh(geo, mat);
@@ -7182,7 +7196,10 @@ function createRangerMesh(teamColor, opts = {}) {
     m.rotation.set(rx, ry, rz);
     m.castShadow = true;
     m.receiveShadow = true;
-    if (tint) g.userData.tintParts.push(m);
+    if (tint) {
+      m.userData.tintRole = tint === true ? "trim" : tint;
+      g.userData.tintParts.push(m);
+    }
     parent.add(m);
     return m;
   };
@@ -7406,6 +7423,7 @@ function createRangerMesh(teamColor, opts = {}) {
  */
 function createSpecialistMesh(kind, teamColor, opts = {}) {
   void opts;
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isInfantry = true;
@@ -7414,21 +7432,22 @@ function createSpecialistMesh(kind, teamColor, opts = {}) {
   g.userData.tintParts = [];
   g.userData.walkPhase = Math.random() * Math.PI * 2;
   g.userData.moving = false;
+  g.userData.ownerColors = [c0, c1, c2];
   g.rotation.order = "YXZ";
 
-  const accent = (teamColor >>> 0) || 0x88aa66;
+  const accent = c2 || 0x88aa66;
   const skin = 0xc4a882;
-  let cloth = 0x1a1e24;
-  let clothDark = 0x12151a;
-  let trim = 0x2a3038;
+  let cloth = mixHex(c0, 0x1a1e24, 0.22);
+  let clothDark = mixHex(c0, 0x12151a, 0.28);
+  let trim = mixHex(c1, 0x2a3038, 0.25);
   if (kind === "hacker") {
-    cloth = 0x2a2438;
-    clothDark = 0x1a1628;
-    trim = 0x3a3450;
+    cloth = mixHex(c0, 0x2a2438, 0.28);
+    clothDark = mixHex(c0, 0x1a1628, 0.32);
+    trim = mixHex(c1, 0x3a3450, 0.3);
   } else if (kind === "terrorist") {
-    cloth = 0x4a4030;
-    clothDark = 0x2e2818;
-    trim = 0x5a1010;
+    cloth = mixHex(c0, 0x4a4030, 0.28);
+    clothDark = mixHex(c0, 0x2e2818, 0.32);
+    trim = mixHex(c2, 0x5a1010, 0.35);
   }
 
   const soft = (color, optsM = {}) =>
@@ -7804,6 +7823,7 @@ function isVehicleDriveKind(kind) {
 function createTankMesh(teamColor, opts = {}) {
   const variant = opts.variant || "crusader";
   const style = opts.style || "usa";
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
   const heavy =
     !!opts.heavy ||
     variant === "abrams" ||
@@ -7818,6 +7838,7 @@ function createTankMesh(teamColor, opts = {}) {
   g.userData.tankVariant = variant;
   g.userData.isAbrams = heavy;
   g.userData.factionStyle = style;
+  g.userData.ownerColors = [c0, c1, c2];
   g.rotation.order = "YXZ";
 
   // USA steel-olive · China ochre · GLA desert scrap — close tones (softer silhouette edges)
@@ -7838,12 +7859,15 @@ function createTankMesh(teamColor, opts = {}) {
     hullDark = 0x3e4638;
     hullLight = 0x5e6858;
   }
+  hull = mixHex(c0, hull, 0.18);
+  hullDark = mixHex(c0, hullDark, 0.24);
+  hullLight = mixHex(c1, hullLight, 0.22);
   const track = 0x1c1a16;
   const rubber = 0x12110f;
   const metal = 0x5a5e58;
   const metalHi = 0x8a9088;
   const rust = style === "gla" ? 0x6a4030 : 0x4a4238;
-  const accent = teamColor >>> 0;
+  const accent = c2;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
     const m = new THREE.Mesh(geo, mat);
@@ -7851,7 +7875,10 @@ function createTankMesh(teamColor, opts = {}) {
     m.rotation.set(rx, ry, rz);
     m.castShadow = true;
     m.receiveShadow = true;
-    if (tint) g.userData.tintParts.push(m);
+    if (tint) {
+      m.userData.tintRole = tint === true ? "trim" : tint;
+      g.userData.tintParts.push(m);
+    }
     parent.add(m);
     return m;
   };
@@ -7907,6 +7934,7 @@ function createTankMesh(teamColor, opts = {}) {
     const barrel = g.getObjectByName("tankBarrel");
     if (barrel) g.userData.barrelRestZ = barrel.position.z;
     g.scale.setScalar(scale);
+    attachOwnerTricolor(g, [c0, c1, c2], { y: unitH * 0.55, z: 0.22, w: 0.2, h: 0.06 });
     return g;
   };
 
@@ -8177,11 +8205,11 @@ function createTankMesh(teamColor, opts = {}) {
     matStd(c, { metalness: 0.18, roughness: rough, envMapIntensity: 0.45 });
   const carcSteel = (c) => matStd(c, { metalness: 0.55, roughness: 0.42, envMapIntensity: 0.7 });
 
-  // FS34094 / Green 383 family — matte NATO CARC (not chrome).
-  const abramsGreen = 0x4e5638;
-  const abramsGreenDk = 0x3a422c;
-  const abramsGreenLt = 0x5e6648;
-  const abramsMetal = 0x3a3c36;
+  // FS34094 / Green 383 family — matte NATO CARC washed with owner colors.
+  const abramsGreen = hull;
+  const abramsGreenDk = hullDark;
+  const abramsGreenLt = hullLight;
+  const abramsMetal = mixHex(c1, 0x3a3c36, 0.35);
 
   // 7 road wheels (Abrams layout), rear drive sprocket.
   addTracks(0.155, 0.56, 7, 0.038);
@@ -8277,6 +8305,7 @@ function createTankMesh(teamColor, opts = {}) {
 function createWheeledVehicleMesh(teamColor, opts = {}) {
   const style = opts.style || "usa";
   const kind = String(opts.kind || "humvee");
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isTank = true;
@@ -8285,6 +8314,7 @@ function createWheeledVehicleMesh(teamColor, opts = {}) {
   g.userData.tankRigVersion = TANK_RIG_VERSION;
   g.userData.tankVariant = "wheeled";
   g.userData.factionStyle = style;
+  g.userData.ownerColors = [c0, c1, c2];
   g.rotation.order = "YXZ";
 
   let body = 0x3a4530;
@@ -8296,9 +8326,11 @@ function createWheeledVehicleMesh(teamColor, opts = {}) {
     body = 0x7a6a48;
     bodyDark = 0x4a3e28;
   }
+  body = mixHex(c0, body, 0.18);
+  bodyDark = mixHex(c0, bodyDark, 0.24);
   const metal = 0x2a2c28;
   const rubber = 0x11100e;
-  const accent = teamColor >>> 0;
+  const accent = c2;
 
   const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
     const m = new THREE.Mesh(geo, mat);
@@ -8373,15 +8405,15 @@ function createWheeledVehicleMesh(teamColor, opts = {}) {
   g.userData.barrelRecoil = 0;
   g.userData.barrelRestZ = barrelGroup.position.z;
   g.scale.setScalar(style === "gla" ? 0.7 : 0.75);
+  attachOwnerTricolor(g, [c0, c1, c2], { y: 0.2, z: 0.18, w: 0.16, h: 0.05 });
   return g;
 }
-
-function createLightVehicleMesh(teamColor, opts = {}) {
   return createWheeledVehicleMesh(teamColor, opts);
 }
 
 /** M270 MLRS — M993 carrier + M269 LLM + dual 6-tube LPCs (piece-built to real layout). */
 function createMlrsMesh(teamColor) {
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isTank = true; // hull drive + pod yaw reuse tank motion path
@@ -8389,11 +8421,12 @@ function createMlrsMesh(teamColor) {
   g.userData.tintParts = [];
   g.userData.mlrsRigVersion = MLRS_RIG_VERSION;
   g.userData.tankRigVersion = TANK_RIG_VERSION;
+  g.userData.ownerColors = [c0, c1, c2];
 
-  // CARC olive / Forest Green — matte aluminum & steel (not chrome).
-  const olive = 0x4a5438;
-  const oliveDk = 0x3a422c;
-  const oliveLt = 0x5a6448;
+  // CARC olive / Forest Green — washed with commander colors.
+  const olive = mixHex(c0, 0x4a5438, 0.18);
+  const oliveDk = mixHex(c0, 0x3a422c, 0.24);
+  const oliveLt = mixHex(c1, 0x5a6448, 0.22);
   const llm = 0x2c3026;
   const llmDk = 0x1e221a;
   const podBox = 0x3e4630;
@@ -8403,7 +8436,7 @@ function createMlrsMesh(teamColor) {
   const ironDk = 0x2e2c28;
   const rubber = 0x0e0e0c;
   const stencil = 0xc8b040;
-  const accent = teamColor >>> 0;
+  const accent = c2;
 
   const carc = (c, rough = 0.68) =>
     matStd(c, { metalness: 0.16, roughness: rough, envMapIntensity: 0.4 });
@@ -8572,10 +8605,9 @@ function createMlrsMesh(teamColor) {
   g.userData.barrelRecoil = 0;
   g.userData.barrelRestZ = dummyBarrel.position.z;
   g.scale.setScalar(0.52);
+  attachOwnerTricolor(g, [c0, c1, c2], { y: 0.28, z: 0.2, w: 0.18, h: 0.055 });
   return g;
 }
-
-const AIR_RIG_VERSION = 6;
 
 function isAirUnitKind(kind) {
   const k = String(kind || "");
@@ -8604,6 +8636,7 @@ function isF16Kind(kind) {
  * cropped-delta wings, ventral intake, single nozzle, tanks + GBU).
  */
 function createF16Mesh(teamColor) {
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
   const g = new THREE.Group();
   g.userData.isUnitRig = true;
   g.userData.isAir = true;
@@ -8618,14 +8651,15 @@ function createF16Mesh(teamColor) {
   g.userData.kind = "f16";
   g.userData.bank = 0;
   g.userData.prevFaceYaw = 0;
+  g.userData.ownerColors = [c0, c1, c2];
   g.rotation.order = "YXZ";
 
-  // USAF Ghost Gray (FS-inspired) — matte, not glossy toy plastic.
-  const gunship = 0x4a5258; // upper / FS36118-ish
-  const ghost = 0x8a9298; // lower / FS36375-ish
-  const radome = 0x3a4046;
+  // Ghost Gray washed with commander body/stripe; trim = accent band.
+  const gunship = mixHex(c0, 0x4a5258, 0.22);
+  const ghost = mixHex(c1, 0x8a9298, 0.28);
+  const radome = mixHex(c0, 0x3a4046, 0.32);
   const panelLine = 0x2e3438;
-  const accent = (teamColor >>> 0) || 0x3a5a7a;
+  const accent = c2 || 0x3a5a7a;
   const goldCanopy = 0xc9a24a;
   const oliveBomb = 0x3a4228;
   const seeker = 0xc8c4b8;
@@ -9025,10 +9059,15 @@ function createAirMesh(teamColor, kind = "") {
   g.userData.prevFaceYaw = 0;
   g.rotation.order = "YXZ";
 
-  const accent = teamColor >>> 0;
-  const hull = china ? 0x5a6068 : 0x6a7078;
-  const hullDark = china ? 0x2e343c : 0x3a4048;
-  const panel = 0x8a929a;
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
+  g.userData.ownerColors = [c0, c1, c2];
+  const accent = c2;
+  let hull = china ? 0x5a6068 : 0x6a7078;
+  let hullDark = china ? 0x2e343c : 0x3a4048;
+  let panel = 0x8a929a;
+  hull = mixHex(c0, hull, 0.22);
+  hullDark = mixHex(c0, hullDark, 0.28);
+  panel = mixHex(c1, panel, 0.3);
   const glass = 0x152028;
 
   const metal = (color, m = 0.82, r = 0.28) => matStd(color, { metalness: m, roughness: r });
@@ -9407,12 +9446,26 @@ function createUnitMesh(kind, teamColor) {
 
 
 function tintUnitMesh(mesh, colors) {
+  const [c0, c1, c2] = resolveOwnerColors(colors);
   const parts = mesh.userData.tintParts;
-  if (!parts?.length) return;
-  const c = colors[0] >>> 0;
-  for (const p of parts) {
-    if (p.material?.color) p.material.color.setHex(c);
+  if (parts?.length) {
+    for (const p of parts) {
+      const m = p?.isMesh ? p : p?.mesh || p;
+      if (!m?.material?.color) continue;
+      const role = p?.role || m.userData?.tintRole || "trim";
+      const hex = role === "band" || role === "body" ? c0 : role === "stripe" ? c1 : c2;
+      // Keep a hint of the baked paint so it doesn't look like flat plastic.
+      const cur = m.material.color.getHex();
+      m.material.color.setHex(mixHex(hex, cur, 0.22));
+    }
   }
+  const badge = mesh.getObjectByName("ownerTricolor");
+  if (badge) {
+    badge.children.forEach((ch, i) => {
+      if (i < 3 && ch.material?.color) ch.material.color.setHex([c0, c1, c2][i]);
+    });
+  }
+  mesh.userData.ownerColors = [c0, c1, c2];
 }
 
 function colorFor(entity) {
@@ -9609,11 +9662,12 @@ function upsertMesh(entity) {
       metalness: 0.15,
       roughness: 0.72,
     });
+    mat.userData = { ownerColors: colors };
 
     if (entity.building) {
-      mesh = createBuildingMesh(entity.kind, mat);
+      mesh = createBuildingMesh(entity.kind, mat, colors);
     } else {
-      mesh = createUnitMesh(entity.kind, colors[0]);
+      mesh = createUnitMesh(entity.kind, colors);
     }
 
     mesh.userData.id = entity.id;
@@ -9667,9 +9721,16 @@ function upsertMesh(entity) {
         snap: true,
       });
     }
-    if (mesh.userData.lastTint !== colors[0]) {
+    if (mesh.userData.lastTint !== colors.join(",")) {
       tintUnitMesh(mesh, colors);
-      mesh.userData.lastTint = colors[0];
+      const uh = mesh.userData.unitHeight || 0.2;
+      attachOwnerTricolor(mesh, colors, {
+        y: mesh.userData.building || mesh.userData.procBuilding ? Math.max(0.45, uh * 0.55) : Math.max(0.12, uh * 0.9),
+        z: mesh.userData.building || mesh.userData.procBuilding ? 0.7 : mesh.userData.isAir ? 0.12 : 0.22,
+        w: mesh.userData.building ? 0.36 : 0.18,
+        h: mesh.userData.building ? 0.11 : 0.055,
+      });
+      mesh.userData.lastTint = colors.join(",");
     }
   } else {
     const h = sampleTerrainHeight(entity.x, entity.y);
@@ -9680,7 +9741,7 @@ function upsertMesh(entity) {
     Math.round(entity.hp || 0),
     entity.progress == null ? "-" : Math.round(entity.progress * 100),
     entity.train_progress == null ? "-" : Math.round(entity.train_progress * 100),
-    colors[0],
+    colors.join(","),
   ].join("|");
   if (mesh.userData.syncKey === syncKey) return;
   mesh.userData.syncKey = syncKey;
