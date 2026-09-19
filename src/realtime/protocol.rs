@@ -64,6 +64,10 @@ pub enum ClientMsg {
     },
     /// Dev only: toggle personal full-map vision (does not affect other players).
     ToggleDebugVision,
+    /// Ally-mode team chat (ignored in Alone / FFA).
+    AllyChat {
+        text: String,
+    },
     Ping {
         n: u64,
     },
@@ -133,6 +137,22 @@ pub enum ServerMsg {
     },
     StoreOk {
         entitlements: Vec<String>,
+    },
+    /// Ally team chat, or Alone whisper (`@name message`).
+    AllyChat {
+        from: Uuid,
+        name: String,
+        team: u8,
+        text: String,
+        /// Unix ms for client ordering / display.
+        ts: u64,
+        /// Alone mode private message.
+        #[serde(default)]
+        whisper: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<Uuid>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_name: Option<String>,
     },
 }
 

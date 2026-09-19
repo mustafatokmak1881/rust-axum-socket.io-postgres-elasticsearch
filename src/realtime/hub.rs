@@ -277,6 +277,9 @@ impl MatchHub {
                     },
                 );
             }
+            ClientMsg::AllyChat { text } => {
+                self.broadcast_ally_chat(user_id, text).await?;
+            }
         }
         Ok(())
     }
@@ -660,6 +663,86 @@ impl MatchHub {
         }
     }
 
+    /// Match chat: Ally → team broadcast; Alone → `@name message` whisper.
+    async fn broadcast_ally_chat(&self, user_id: Uuid, raw: String) -> Result<(), String> {
+        let cleaned = sanitize_ally_chat(&raw).ok_or("Empty chat")?;
+        let match_id = *self
+            .inner
+            .user_match
+            .get(&user_id)
+            .ok_or("Not in a match")?;
+        let runtime = self
+            .inner
+            .matches
+            .get(&match_id)
+            .map(|e| e.clone())
+            .ok_or("Match missing")?;
+        let (recipients, payload) = {
+            let rt = runtime.read().await;
+            let player = rt
+                .sim
+                .players
+                .get(&user_id)
+                .ok_or("Not in match")?;
+            let team = player.team;
+            let name = player.label();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+
+            if rt.sim.ffa {
+                let (target_query, body) = parse_whisper_target(&cleaned)
+                    .ok_or("Alone: @isim mesaj — örn. @Ali saldırıya hazır")?;
+                if body.is_empty() {
+                    return Err("Alone: @isim sonrası mesaj yaz".into());
+                }
+                let target = resolve_chat_target(&rt.sim, user_id, &target_query)?;
+                let to_name = target.label();
+                let to_id = target.user_id;
+                let msg = ServerMsg::AllyChat {
+                    from: user_id,
+                    name,
+                    team,
+                    text: body,
+                    ts,
+                    whisper: true,
+                    to: Some(to_id),
+                    to_name: Some(to_name),
+                };
+                let mut recipients = vec![user_id];
+                if to_id != user_id && target.connected {
+                    recipients.push(to_id);
+                }
+                (recipients, msg)
+            } else {
+                let msg = ServerMsg::AllyChat {
+                    from: user_id,
+                    name,
+                    team,
+                    text: cleaned,
+                    ts,
+                    whisper: false,
+                    to: None,
+                    to_name: None,
+                };
+                let mut recipients = Vec::new();
+                for uid in rt.members.keys().copied() {
+                    if let Some(p) = rt.sim.players.get(&uid) {
+                        if p.team == team && p.connected {
+                            recipients.push(uid);
+                        }
+                    }
+                }
+                (recipients, msg)
+            }
+        };
+        for uid in recipients {
+            self.send(uid, payload.clone());
+        }
+        Ok(())
+    }
+
     pub async fn list_open_matches(&self) -> Vec<OpenMatchView> {
         let mut out = Vec::new();
         for entry in self.inner.matches.iter() {
@@ -677,4 +760,88 @@ impl MatchHub {
         }
         out
     }
+}
+
+fn sanitize_ally_chat(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    const MAX: usize = 180;
+    let mut out = String::new();
+    for (i, ch) in trimmed.chars().enumerate() {
+        if i >= MAX {
+            break;
+        }
+        out.push(ch);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// `@Name rest of message` → (name, body). Name may include spaces if quoted later; for now one token.
+fn parse_whisper_target(raw: &str) -> Option<(String, String)> {
+    let s = raw.trim();
+    if !s.starts_with('@') {
+        return None;
+    }
+    let rest = s[1..].trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let target = parts.next()?.trim().trim_matches(|c| c == ':' || c == ',');
+    if target.is_empty() {
+        return None;
+    }
+    let body = parts.next().unwrap_or("").trim().to_string();
+    Some((target.to_string(), body))
+}
+
+fn resolve_chat_target<'a>(
+    sim: &'a match_sim::MatchSim,
+    from: Uuid,
+    query: &str,
+) -> Result<&'a match_sim::PlayerState, String> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Err("Alone: @isim gerekli".into());
+    }
+    let mut exact: Vec<&match_sim::PlayerState> = Vec::new();
+    let mut prefix: Vec<&match_sim::PlayerState> = Vec::new();
+    for p in sim.players.values() {
+        if p.user_id == from {
+            continue;
+        }
+        let bare = p.name.to_lowercase();
+        let label = p.label().to_lowercase();
+        if bare == q || label == q {
+            exact.push(p);
+        } else if bare.starts_with(&q) || label.starts_with(&q) {
+            prefix.push(p);
+        }
+    }
+    if exact.len() == 1 {
+        return Ok(exact[0]);
+    }
+    if exact.len() > 1 {
+        return Err("Alone: isim belirsiz — daha uzun yaz".into());
+    }
+    if prefix.len() == 1 {
+        return Ok(prefix[0]);
+    }
+    if prefix.len() > 1 {
+        return Err("Alone: birden fazla eşleşme — tam isim kullan".into());
+    }
+    Err(format!("Alone: @{query} bulunamadı"))
 }

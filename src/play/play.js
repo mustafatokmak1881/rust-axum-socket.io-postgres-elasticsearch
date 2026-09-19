@@ -157,6 +157,9 @@ function onServer(msg) {
       renderStore();
       toast("Entitlement updated");
       break;
+    case "ally_chat":
+      appendAllyChat(msg);
+      break;
     case "error":
       toast(msg.message);
       break;
@@ -487,6 +490,59 @@ function setScoreboardOpen(open) {
   if (open) renderScoreboard();
 }
 
+function syncAllyChatPanel() {
+  const panel = $("#ally-chat");
+  if (!panel) return;
+  const ally = Boolean(state.match && !state.match.ffa);
+  panel.hidden = !ally;
+  const teamEl = $("#ally-chat-team");
+  if (teamEl) {
+    teamEl.textContent = ally
+      ? `Team ${Number(state.match.team) + 1}`
+      : "";
+  }
+  if (!ally) {
+    const log = $("#ally-chat-log");
+    if (log) log.innerHTML = "";
+  }
+}
+
+function appendAllyChat(msg) {
+  const log = $("#ally-chat-log");
+  const panel = $("#ally-chat");
+  if (!log || !panel || panel.hidden) return;
+  const me = String(msg.from) === String(state.match?.you || state.user?.id || "");
+  const line = document.createElement("p");
+  line.className = `line${me ? " me" : ""}`;
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = msg.name || "Komutan";
+  const body = document.createElement("span");
+  body.textContent = msg.text || "";
+  line.append(who, body);
+  log.appendChild(line);
+  while (log.children.length > 80) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+function sendAllyChat() {
+  if (!state.match || state.match.ffa) return;
+  const input = $("#ally-chat-input");
+  if (!input) return;
+  const text = String(input.value || "").trim();
+  if (!text) return;
+  send({ t: "ally_chat", text });
+  input.value = "";
+}
+
+function focusAllyChat() {
+  if (!state.match || state.match.ffa) return;
+  const panel = $("#ally-chat");
+  const input = $("#ally-chat-input");
+  if (!panel || panel.hidden || !input) return;
+  input.focus();
+}
+
 function clearWorldMeshes() {
   if (!state.meshes.size) {
     for (const id of [...(Sfx.engines?.keys?.() || [])]) Sfx.stopEngine(id);
@@ -531,6 +587,7 @@ function enterMatch(snapshot) {
   } else {
     toast(`${fac} · Ally — Team ${Number(snapshot.team) + 1} (yarı / yarı)`);
   }
+  syncAllyChatPanel();
   // Fullscreen only from click handlers (create/join/pointer) — browsers block gesture-less FS.
   void setupMatchScene(snapshot);
 }
@@ -10891,6 +10948,17 @@ window.addEventListener("keydown", (event) => {
   // Ignore shortcuts while typing in inputs.
   const tag = event.target?.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || event.target?.isContentEditable) {
+    if (event.key === "Escape" && event.target?.id === "ally-chat-input") {
+      event.target.blur();
+      event.preventDefault();
+    }
+    return;
+  }
+
+  if (event.key === "Enter") {
+    if (!state.match || state.match.ffa || $("#match-screen")?.hidden) return;
+    event.preventDefault();
+    focusAllyChat();
     return;
   }
 
@@ -11028,6 +11096,11 @@ $("#btn-logout").addEventListener("click", async () => {
 });
 
 $("#viewport")?.addEventListener("contextmenu", (e) => e.preventDefault());
+
+$("#ally-chat-form")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendAllyChat();
+});
 
 connect();
 

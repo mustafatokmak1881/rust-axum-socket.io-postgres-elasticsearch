@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a2614'/%3E%3Cpath d='M8 22 V10 h4 l4 8 4-8 h4 v12 h-3.2 V14.5 L16.5 22 h-1L11.2 14.5 V22z' fill='%237cfc00'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/play.css?v=allyAloneMode">
+  <link rel="stylesheet" href="/assets/play.css?v=allyChat1">
   <script type="importmap">
   {
     "imports": {
@@ -113,8 +113,20 @@
         </div>
       </aside>
 
-      <div class="match-caption" id="match-caption">Edge-scroll · Drag-select · RMB move/attack · Tab skor</div>
+      <div class="match-caption" id="match-caption">Edge-scroll · Drag-select · RMB move/attack · Tab skor · Enter ally chat</div>
       <div class="status-toast" id="toast" hidden></div>
+
+      <aside id="ally-chat" class="ally-chat" hidden aria-label="Ally team chat">
+        <header>
+          <span>Ally Chat</span>
+          <small id="ally-chat-team">Team</small>
+        </header>
+        <div id="ally-chat-log" class="ally-chat-log"></div>
+        <form id="ally-chat-form" class="ally-chat-form" autocomplete="off">
+          <input id="ally-chat-input" type="text" maxlength="180" placeholder="Enter · takım sohbeti…" spellcheck="false">
+          <button type="submit" class="primary">Gönder</button>
+        </form>
+      </aside>
 
       <div id="scoreboard" class="scoreboard" hidden>
         <header>
@@ -182,6 +194,6 @@
     </section>
   </div>
 
-  <script type="module" src="/assets/play.js?v=endstats1"></script>
+  <script type="module" src="/assets/play.js?v=allyChat1"></script>
 </body>
 </html>
