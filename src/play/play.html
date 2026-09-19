@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Koalisyon — Realtime Generals</title>
+  <title>Koalisyon — Gerçek Zamanlı Strateji</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a2614'/%3E%3Cpath d='M8 22 V10 h4 l4 8 4-8 h4 v12 h-3.2 V14.5 L16.5 22 h-1L11.2 14.5 V22z' fill='%237cfc00'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
@@ -22,54 +22,54 @@
     <header class="top-hud">
       <div class="brand">KOALİSYON</div>
       <div class="resources" id="resources">
-        <span>GOLD <b id="res-gold">—</b></span>
-        <span>PWR <b id="res-power">—</b></span>
-        <span title="Army slots · +half per captured HQ">ARMY <b id="res-army">—</b></span>
-        <span title="Building slots · +half per captured HQ">BASE <b id="res-base">—</b></span>
+        <span>ALTIN <b id="res-gold">—</b></span>
+        <span>GÜÇ <b id="res-power">—</b></span>
+        <span title="Ordu slotları · ele geçirilen üs başına +yarım">ORDU <b id="res-army">—</b></span>
+        <span title="Bina slotları · ele geçirilen üs başına +yarım">ÜS <b id="res-base">—</b></span>
       </div>
       <div class="user-chip">
-        <span id="user-name">Commander</span>
+        <span id="user-name">Komutan</span>
         <span id="user-xp">0 XP</span>
-        <button type="button" id="btn-logout" class="ghost">Logout</button>
+        <button type="button" id="btn-logout" class="ghost">Çıkış</button>
       </div>
     </header>
 
     <section id="lobby-screen" class="screen">
       <div class="lobby-panel">
-        <h1>Command Lobby</h1>
-        <p class="blurb">Match-based Generals · drop-in join · istediğin komutan sayısı · fair cosmetics only</p>
+        <h1>Komuta Lobisi</h1>
+        <p class="blurb">Maç tabanlı strateji · anında katıl · istediğin komutan sayısı · adil kozmetik</p>
 
         <div class="faction-row" id="faction-row" hidden>
-          <button type="button" data-faction="usa" class="faction on">USA</button>
+          <button type="button" data-faction="usa" class="faction on">Türkiye</button>
         </div>
 
         <div class="lobby-actions">
           <label>Komutan
             <input id="max-players" type="number" min="2" value="8">
           </label>
-          <label>Mode
+          <label>Mod
             <select id="match-mode">
-              <option value="ally" selected>Ally</option>
-              <option value="alone">Alone</option>
+              <option value="ally" selected>Müttefik</option>
+              <option value="alone">Tek başına</option>
             </select>
           </label>
-          <button type="button" id="btn-create" class="primary">Start Match</button>
+          <button type="button" id="btn-create" class="primary">Maç Başlat</button>
         </div>
 
         <div class="lobby-join">
-          <input id="lobby-id" placeholder="Match UUID to join">
-          <button type="button" id="btn-join" class="primary">Join Match</button>
-          <button type="button" id="btn-refresh-lobbies" class="ghost">Refresh list</button>
+          <input id="lobby-id" placeholder="Katılmak için maç UUID">
+          <button type="button" id="btn-join" class="primary">Maça Katıl</button>
+          <button type="button" id="btn-refresh-lobbies" class="ghost">Listeyi yenile</button>
         </div>
 
         <div id="open-lobbies" class="open-lobbies"></div>
 
         <p class="muted" id="match-hint">
-          Start opens a live match instantly. Others Join and drop in immediately — no ready wait.
+          Başlat hemen canlı maç açar. Diğerleri Katıl ile anında düşer — hazır bekleme yok.
         </p>
 
         <div class="store-panel">
-          <h3>Officer Store <small>(no P2W)</small></h3>
+          <h3>Subay Mağazası <small>(ödünç güç yok)</small></h3>
           <div id="store-items" class="store-items"></div>
           <p id="store-status" class="muted"></p>
         </div>
@@ -80,7 +80,7 @@
       <canvas id="viewport"></canvas>
       <div id="select-box" hidden></div>
 
-      <div class="army-hud" id="army-hud" aria-label="Own army">
+      <div class="army-hud" id="army-hud" aria-label="Kendi ordun">
         <span class="army-stat">ASK <b id="army-inf">0</b></span>
         <span class="army-stat">TANK <b id="army-tank">0</b></span>
         <span class="army-stat total">BİRİM <b id="army-total">0/36</b></span>
@@ -90,9 +90,9 @@
 
       <div class="match-dock">
         <aside class="build-rail" id="build-rail">
-          <header>Structures <span class="hint">1–9</span></header>
+          <header>Yapılar <span class="hint">1–9</span></header>
           <div id="build-list"></div>
-          <footer id="build-detail">Select, then click map</footer>
+          <footer id="build-detail">Seç, sonra haritaya tıkla</footer>
           <div id="build-actions" class="build-actions" hidden>
             <button type="button" id="btn-demolish" class="demolish-btn" title="Seçili binayı yık (Delete)">
               Yık · Delete
@@ -101,32 +101,32 @@
         </aside>
 
         <aside class="unit-rail" id="unit-rail">
-          <header>Production</header>
+          <header>Üretim</header>
           <div id="unit-list"></div>
         </aside>
       </div>
 
-      <aside class="radar" id="radar" aria-label="Battlefield radar">
+      <aside class="radar" id="radar" aria-label="Savaş alanı radarı">
         <header>Radar</header>
         <canvas id="radar-canvas" width="220" height="220"></canvas>
         <div class="radar-legend">
-          <span class="own">You</span>
-          <span class="ally">Ally</span>
-          <span class="enemy">Enemy</span>
-          <span class="hq">HQ</span>
-          <span class="fight">Fight</span>
+          <span class="own">Sen</span>
+          <span class="ally">Dost</span>
+          <span class="enemy">Düşman</span>
+          <span class="hq">Üs</span>
+          <span class="fight">Çatışma</span>
         </div>
       </aside>
 
-      <div class="match-caption" id="match-caption">Edge-scroll · Drag-select · RMB · Bina: Delete=yık · Tab skor · Enter chat</div>
+      <div class="match-caption" id="match-caption">Kenar kaydır · Sürükle-seç · Sağ tık · Bina: Delete=yık · Tab skor · Enter sohbet</div>
       <div class="status-toast" id="toast" hidden></div>
       <div id="entity-tip" class="entity-tip" hidden role="tooltip"></div>
 
-      <aside id="ally-chat" class="ally-chat" hidden aria-label="Match chat">
+      <aside id="ally-chat" class="ally-chat" hidden aria-label="Maç sohbeti">
         <header>
-          <span id="ally-chat-title">Chat</span>
+          <span id="ally-chat-title">Sohbet</span>
           <span id="ally-chat-badge" class="ally-chat-badge" hidden>0</span>
-          <small id="ally-chat-team">Team</small>
+          <small id="ally-chat-team">Takım</small>
         </header>
         <div id="ally-chat-log" class="ally-chat-log"></div>
         <form id="ally-chat-form" class="ally-chat-form" autocomplete="off">
@@ -157,8 +157,8 @@
                 <th>ASK</th>
                 <th>TANK</th>
                 <th>BINA</th>
-                <th>GOLD</th>
-                <th>PWR</th>
+                <th>ALTIN</th>
+                <th>GÜÇ</th>
               </tr>
             </thead>
             <tbody id="scoreboard-body"></tbody>
@@ -187,7 +187,7 @@
                   <th>Hava↓</th>
                   <th>Üret</th>
                   <th>Kayıp</th>
-                  <th>Gold</th>
+                  <th>Altın</th>
                   <th>Üs+</th>
                 </tr>
               </thead>
@@ -201,7 +201,6 @@
       </div>
     </section>
   </div>
-
-  <script type="module" src="/assets/play.js?v=stealthunarmed1"></script>
+  <script type="module" src="/assets/play.js?v=demolish1"></script>
 </body>
 </html>

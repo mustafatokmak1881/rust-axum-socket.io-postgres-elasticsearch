@@ -6255,7 +6255,7 @@ impl MatchSim {
         if self.players.len() >= 2 && hq_teams.len() <= 1 {
             self.ended = true;
             self.winner_team = hq_teams.into_keys().next();
-            self.end_reason = "Last Command Center".into();
+            self.end_reason = "Son komuta merkezi".into();
         }
     }
 

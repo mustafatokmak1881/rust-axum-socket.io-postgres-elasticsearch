@@ -141,7 +141,7 @@ function onServer(msg) {
       if (wasInMatch || midGame) {
         toast("Maça devam — kaldığın yerden");
       } else {
-        toast("Match live — move mouse to screen edges to pan");
+        toast("Maç canlı — kenarlara fare götürerek kaydır");
       }
       break;
     }
@@ -158,7 +158,7 @@ function onServer(msg) {
     case "store_ok":
       state.entitlements = msg.entitlements || [];
       renderStore();
-      toast("Entitlement updated");
+      toast("Yetki güncellendi");
       break;
     case "ally_chat":
       appendAllyChat(msg);
@@ -184,7 +184,7 @@ function renderLobby() {}
 function showMatchEndScreen(msg) {
   const root = $("#match-end");
   if (!root) {
-    toast(`Match over: ${msg.reason} · +${msg.xp_gained} XP`);
+    toast(`Maç bitti: ${msg.reason} · +${msg.xp_gained} XP`);
     return;
   }
   setScoreboardOpen(false);
@@ -275,7 +275,7 @@ function renderOpenMatches(matches) {
   const root = $("#open-lobbies");
   if (!root) return;
   if (!matches.length) {
-    root.innerHTML = "<p class='muted'>No open matches — Start Match to host one.</p>";
+    root.innerHTML = "<p class='muted'>Açık maç yok — Maç Başlat ile oluştur.</p>";
     return;
   }
   root.innerHTML = matches
@@ -293,17 +293,17 @@ function renderOpenMatches(matches) {
 function joinMatchId(raw) {
   const lobby_id = String(raw || "").trim();
   if (!lobby_id) {
-    toast("Enter a match UUID or pick one from the list");
+    toast("Maç UUID gir veya listeden seç");
     return;
   }
   // UUID shape check (lenient)
   if (!/^[0-9a-fA-F-]{36}$/.test(lobby_id)) {
-    toast("Invalid match UUID");
+    toast("Geçersiz maç UUID");
     return;
   }
   $("#lobby-id").value = lobby_id;
   send({ t: "join_lobby", lobby_id, faction: "usa" });
-  toast("Joining match…");
+  toast("Maça katılıyor…");
 }
 
 function renderStore() {
