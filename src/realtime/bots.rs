@@ -271,6 +271,7 @@ pub fn seed_opening_bots(sim: &mut MatchSim, target_players: usize) {
                 seen_counts: HashMap::new(),
                 rebuild_hold: HashMap::new(),
             }),
+            false,
         );
         n += 1;
     }

@@ -989,6 +989,7 @@ impl MatchSim {
                 flag,
                 true,
                 None,
+                false,
             );
         }
 
@@ -1069,8 +1070,13 @@ impl MatchSim {
         flag: Option<String>,
         connected: bool,
         bot: Option<BotMind>,
+        cluster_with_humans: bool,
     ) {
-        let (x, y) = self.allocate_spawn_xy(team);
+        let (x, y) = if cluster_with_humans {
+            self.allocate_spawn_near_humans()
+        } else {
+            self.allocate_spawn_xy(team)
+        };
         let used: Vec<[u32; 3]> = self.players.values().map(|p| p.colors).collect();
         let colors = pick_color_scheme(&used);
 
@@ -1218,8 +1224,153 @@ impl MatchSim {
         (bx, by)
     }
 
+    fn player_hq_xy(&self, user_id: Uuid) -> Option<(f32, f32)> {
+        let hq = self.players.get(&user_id)?.home_hq?;
+        self.entities.get(&hq).filter(|e| e.hp > 0.0).map(|e| (e.x, e.y))
+    }
+
+    fn human_hq_positions(&self) -> Vec<(f32, f32)> {
+        self.players
+            .values()
+            .filter(|p| !p.is_bot() && p.alive)
+            .filter_map(|p| self.player_hq_xy(p.user_id))
+            .collect()
+    }
+
+    fn dist2_to_nearest(px: f32, py: f32, points: &[(f32, f32)]) -> f32 {
+        points
+            .iter()
+            .map(|(hx, hy)| {
+                let dx = px - hx;
+                let dy = py - hy;
+                dx * dx + dy * dy
+            })
+            .fold(f32::MAX, f32::min)
+    }
+
+    /// Pick a bot HQ closest to the living human cluster (online players stay nearby).
+    fn pick_bot_near_humans(&self) -> Option<Uuid> {
+        let humans = self.human_hq_positions();
+        let bots: Vec<&PlayerState> = self.players.values().filter(|p| p.is_bot()).collect();
+        if bots.is_empty() {
+            return None;
+        }
+
+        // First human in: any living bot, prefer healthier economy.
+        if humans.is_empty() {
+            return bots
+                .iter()
+                .max_by_key(|p| (p.alive as u8, p.colonies, p.resources.gold))
+                .map(|p| p.user_id);
+        }
+
+        let score = |p: &PlayerState| -> (u8, i64, i32) {
+            let alive = p.alive as u8;
+            let near = match self.player_hq_xy(p.user_id) {
+                Some((bx, by)) => {
+                    -(Self::dist2_to_nearest(bx, by, &humans).sqrt() * 100.0) as i64
+                }
+                None => i64::MIN / 4,
+            };
+            (alive, near, p.resources.gold)
+        };
+
+        bots.into_iter()
+            .max_by_key(|p| score(p))
+            .map(|p| p.user_id)
+    }
+
+    /// Overflow human: plant near the online cluster, still clear of other HQs.
+    fn allocate_spawn_near_humans(&self) -> (f32, f32) {
+        let humans = self.human_hq_positions();
+        if humans.is_empty() {
+            return self.allocate_spawn_xy(0);
+        }
+
+        let map = self.map_size as f32;
+        let margin = (map * 0.07).clamp(14.0, 36.0);
+        let hq_positions: Vec<(f32, f32)> = self
+            .entities
+            .values()
+            .filter(|e| e.kind == "hq" && e.hp > 0.0)
+            .map(|e| (e.x, e.y))
+            .collect();
+        let hq_r = building_radius("hq") + 0.5;
+        let n = humans.len() as f32;
+        let cx = humans.iter().map(|h| h.0).sum::<f32>() / n;
+        let cy = humans.iter().map(|h| h.1).sum::<f32>() / n;
+
+        // Soft clearance — closer than full FFA spread, still not stacked.
+        let commanders = (self.players.len() + 1) as u16;
+        let need = (min_spawn_clearance(commanders) * 0.55).clamp(22.0, 56.0);
+        let usable = (map - 2.0 * margin).max(8.0);
+        let steps = ((map / 9.0).clamp(18.0, 64.0)) as i32;
+
+        let mut best: Option<(f32, f32, f32)> = None; // x, y, dist_to_cluster
+        for iy in 0..=steps {
+            for ix in 0..=steps {
+                let x = margin + usable * (ix as f32 / steps as f32);
+                let y = margin + usable * (iy as f32 / steps as f32);
+                let fx = x.clamp(margin, map - margin).floor() + 0.5;
+                let fy = y.clamp(margin, map - margin).floor() + 0.5;
+                if self.ground_blocks(fx, fy, hq_r) {
+                    continue;
+                }
+                let nearest_hq = Self::dist2_to_nearest(fx, fy, &hq_positions).sqrt();
+                if nearest_hq < need {
+                    continue;
+                }
+                let d_cluster = {
+                    let dx = fx - cx;
+                    let dy = fy - cy;
+                    (dx * dx + dy * dy).sqrt()
+                };
+                if best.map_or(true, |(_, _, d)| d_cluster < d) {
+                    best = Some((fx, fy, d_cluster));
+                }
+            }
+        }
+
+        if let Some((x, y, _)) = best {
+            return (x, y);
+        }
+
+        // Relax clearance and try again closer to the cluster.
+        let soft = (need * 0.7).max(16.0);
+        let mut best: Option<(f32, f32, f32)> = None;
+        for iy in 0..=steps {
+            for ix in 0..=steps {
+                let x = margin + usable * (ix as f32 / steps as f32);
+                let y = margin + usable * (iy as f32 / steps as f32);
+                let fx = x.clamp(margin, map - margin).floor() + 0.5;
+                let fy = y.clamp(margin, map - margin).floor() + 0.5;
+                if self.ground_blocks(fx, fy, hq_r) {
+                    continue;
+                }
+                let nearest_hq = Self::dist2_to_nearest(fx, fy, &hq_positions).sqrt();
+                if nearest_hq < soft {
+                    continue;
+                }
+                let d_cluster = {
+                    let dx = fx - cx;
+                    let dy = fy - cy;
+                    (dx * dx + dy * dy).sqrt()
+                };
+                if best.map_or(true, |(_, _, d)| d_cluster < d) {
+                    best = Some((fx, fy, d_cluster));
+                }
+            }
+        }
+        if let Some((x, y, _)) = best {
+            return (x, y);
+        }
+
+        self.allocate_spawn_xy(0)
+    }
+
     /// Drop-in join: a human replaces an existing bot commander (army + base stay).
     /// Keeps match size fixed — no new HQ is spawned.
+    /// Prefers the bot nearest to other online players so humans cluster together.
     pub fn take_over_bot(
         &mut self,
         user_id: Uuid,
@@ -1234,13 +1385,8 @@ impl MatchSim {
             return Err("Already in match");
         }
 
-        // Prefer living bots so the joiner inherits a playable base.
         let bot_id = self
-            .players
-            .values()
-            .filter(|p| p.is_bot())
-            .max_by_key(|p| (p.alive as u8, p.colonies, p.resources.gold))
-            .map(|p| p.user_id)
+            .pick_bot_near_humans()
             .ok_or("No bot slot available")?;
 
         let mut state = self
@@ -1310,7 +1456,7 @@ impl MatchSim {
             self.pick_allied_team()
         };
 
-        self.spawn_commander(user_id, name, faction, team, flag, true, None);
+        self.spawn_commander(user_id, name, faction, team, flag, true, None, true);
         Ok(grew)
     }
 

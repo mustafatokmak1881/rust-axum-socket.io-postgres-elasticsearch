@@ -2101,16 +2101,45 @@ const Radar = {
       const cx = controls.target.x;
       const cz = controls.target.z;
       const dist = controls.getDistance?.() || CAMERA_DIST;
-      const halfW = Math.max(6, dist * 0.7 * (camera?.aspect || 1.6));
-      const halfH = Math.max(5, dist * 0.5);
-      ctx.strokeStyle = "rgba(255, 244, 180, 0.9)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(
-        ((cx - halfW) / mapSize) * w,
-        ((cz - halfH) / mapSize) * h,
-        (halfW * 2 / mapSize) * w,
-        (halfH * 2 / mapSize) * h,
-      );
+      const aspect = camera?.aspect || 1.6;
+      const vFov = (((camera?.fov || CAMERA_FOV) * Math.PI) / 180);
+      // Ground footprint under the angled RTS cam (approx).
+      let halfH = Math.tan(vFov * 0.5) * dist * 2.35;
+      let halfW = halfH * aspect;
+      // Keep a readable radar box even on huge maps / tight zoom.
+      const minHalf = Math.max(8, mapSize * 0.05);
+      halfH = Math.max(halfH, minHalf);
+      halfW = Math.max(halfW, minHalf * aspect * 0.92);
+
+      const px = (cx / mapSize) * w;
+      const py = (cz / mapSize) * h;
+      let rw = (halfW * 2 / mapSize) * w;
+      let rh = (halfH * 2 / mapSize) * h;
+      rw = Math.max(22, Math.min(w * 0.42, rw));
+      rh = Math.max(16, Math.min(h * 0.42, rh));
+      const rx = px - rw * 0.5;
+      const ry = py - rh * 0.5;
+
+      ctx.save();
+      // Dark rim so the box pops on fog / live-vision green.
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.75)";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.strokeStyle = "rgba(255, 248, 160, 1)";
+      ctx.lineWidth = 1.75;
+      ctx.strokeRect(rx, ry, rw, rh);
+      // Center cross — always shows where the camera is aimed.
+      ctx.strokeStyle = "rgba(255, 244, 180, 0.95)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px - 6, py);
+      ctx.lineTo(px + 6, py);
+      ctx.moveTo(px, py - 6);
+      ctx.lineTo(px, py + 6);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 248, 160, 0.95)";
+      ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+      ctx.restore();
     }
 
     // Keep Tab "görünen üs" counts fresh while the board is open.
@@ -2189,6 +2218,12 @@ function applyDirectionalShadows(root) {
     }
     // Water discs sit under lake group — never cast onto the shore.
     if (obj.parent?.name === "lake") {
+      obj.castShadow = false;
+      obj.receiveShadow = true;
+      return;
+    }
+    // Soft hills — casting made them read as pitch-black blobs.
+    if (obj.parent?.name === "hill" || name === "hill") {
       obj.castShadow = false;
       obj.receiveShadow = true;
       return;
@@ -5749,12 +5784,6 @@ function scatterGroundDecor(scene, size) {
   const group = new THREE.Group();
   group.name = "groundDecor";
 
-  const desertRock = new THREE.MeshStandardMaterial({
-    color: 0x6a5240,
-    roughness: 0.96,
-    metalness: 0.04,
-    flatShading: false,
-  });
   const scrubBush = new THREE.MeshStandardMaterial({
     color: 0x4e6234,
     roughness: 0.9,
@@ -5836,41 +5865,30 @@ function scatterGroundDecor(scene, size) {
   }
 
   const hillSoil = new THREE.MeshStandardMaterial({
-    color: 0x7a6a48,
-    roughness: 0.96,
-    metalness: 0.02,
+    color: 0x9a8460,
+    roughness: 0.92,
+    metalness: 0,
     flatShading: false,
   });
   const hillGrass = new THREE.MeshStandardMaterial({
-    color: 0x5a6840,
-    roughness: 0.94,
+    color: 0x6e8048,
+    roughness: 0.9,
     metalness: 0,
     flatShading: false,
   });
   const hillCrest = new THREE.MeshStandardMaterial({
-    color: 0x8a7858,
-    roughness: 0.92,
-    metalness: 0.03,
-    flatShading: false,
-  });
-  const rockMat = new THREE.MeshStandardMaterial({
-    color: 0x6e685c,
-    roughness: 0.9,
-    metalness: 0.06,
-    flatShading: false,
-  });
-  const rockDark = new THREE.MeshStandardMaterial({
-    color: 0x4a463c,
-    roughness: 0.94,
-    metalness: 0.05,
+    color: 0xa89870,
+    roughness: 0.88,
+    metalness: 0,
     flatShading: false,
   });
 
-  // Low rolling hills — soft mounds with a few rock outcrops (not tall peaks).
+  // Low rolling hills — soft earthen knolls (no dark rock blobs).
   for (const mt of state.mountains || []) {
     const r = Math.max(2.2, Number(mt.r) || 4);
     const seed = ((mt.x * 23) ^ (mt.y * 41) ^ (mt.r * 11)) | 0;
     const mass = new THREE.Group();
+    mass.name = "hill";
     mass.position.set(mt.x, sampleTerrainHeight(mt.x, mt.y), mt.y);
     mass.rotation.y = (mt.x * 0.21 + mt.y * 0.13) % (Math.PI * 2);
 
@@ -5880,7 +5898,8 @@ function scatterGroundDecor(scene, size) {
       makeHillMoundGeometry(r * 1.02, hMain, seed, 16, 56),
       hillSoil,
     );
-    core.castShadow = true;
+    // Receive only — self-shadow was reading as pitch-black blobs.
+    core.castShadow = false;
     core.receiveShadow = true;
     mass.add(core);
 
@@ -5892,7 +5911,7 @@ function scatterGroundDecor(scene, size) {
     );
     shoulder.position.set(Math.cos(ang0) * r * 0.38, 0, Math.sin(ang0) * r * 0.38);
     shoulder.rotation.y = ang0 * 0.4;
-    shoulder.castShadow = true;
+    shoulder.castShadow = false;
     shoulder.receiveShadow = true;
     mass.add(shoulder);
 
@@ -5902,31 +5921,9 @@ function scatterGroundDecor(scene, size) {
       hillCrest,
     );
     cap.position.y = hMain * 0.55;
+    cap.castShadow = false;
     cap.receiveShadow = true;
     mass.add(cap);
-
-    // A few low rock outcrops — weathered stones, not summit spikes
-    const rocks = 1 + Math.floor((Math.abs(mt.x * 7 + mt.y) * 0.1) % 3);
-    for (let i = 0; i < rocks; i++) {
-      const ang = (i / rocks) * Math.PI * 2 + mt.r * 0.15;
-      const dist = r * (0.18 + (i % 3) * 0.12);
-      const rh = r * (0.08 + (i % 2) * 0.05);
-      const rad = r * (0.1 + (i % 3) * 0.04);
-      const rock = new THREE.Mesh(
-        makeRockMassGeometry(rad, rh, seed + i * 17),
-        i % 2 === 0 ? rockMat : rockDark,
-      );
-      rock.position.set(
-        Math.cos(ang) * dist,
-        hMain * (0.35 + (i % 2) * 0.12),
-        Math.sin(ang) * dist,
-      );
-      rock.rotation.y = ang * 0.35;
-      rock.scale.set(1.1, 0.75, 1.05);
-      rock.castShadow = true;
-      rock.receiveShadow = true;
-      mass.add(rock);
-    }
 
     group.add(mass);
   }
@@ -5948,11 +5945,9 @@ function scatterGroundDecor(scene, size) {
   };
 
   const maxTrees = Math.min(110, Math.floor(size * 0.48));
-  const maxRocks = Math.min(36, Math.floor(size * 0.16));
   const maxBushes = Math.min(90, Math.floor(size * 0.42));
   const tries = Math.min(1100, Math.floor(size * 3.2));
   let trees = 0;
-  let rocks = 0;
   let bushes = 0;
   const rnd = () => Math.random();
   for (let i = 0; i < tries; i++) {
@@ -5969,19 +5964,6 @@ function scatterGroundDecor(scene, size) {
       tree.scale.setScalar(s);
       group.add(tree);
       trees += 1;
-      continue;
-    }
-
-    if (biome < 0.36 && rocks < maxRocks) {
-      const s = 0.16 + Math.random() * 0.42;
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 1), desertRock);
-      rock.position.set(x, sampleTerrainHeight(x, z) + s * 0.22, z);
-      rock.rotation.set(Math.random() * 0.4, Math.random() * Math.PI, Math.random() * 0.35);
-      rock.scale.set(1 + Math.random() * 0.35, 0.5 + Math.random() * 0.32, 1 + Math.random() * 0.3);
-      rock.castShadow = true;
-      rock.receiveShadow = true;
-      group.add(rock);
-      rocks += 1;
       continue;
     }
 
