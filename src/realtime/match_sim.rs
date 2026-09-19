@@ -1261,6 +1261,33 @@ impl MatchSim {
         Ok(())
     }
 
+    /// Overflow join when every bot slot is already human: new HQ at the
+    /// farthest free ground from existing bases (`allocate_spawn_xy`).
+    pub fn add_player(
+        &mut self,
+        user_id: Uuid,
+        name: String,
+        faction: String,
+        flag: Option<String>,
+    ) -> Result<(), &'static str> {
+        if self.ended {
+            return Err("Match already ended");
+        }
+        if self.players.contains_key(&user_id) {
+            return Err("Already in match");
+        }
+
+        let index = self.players.len();
+        let team = if self.ffa {
+            (index.min(u8::MAX as usize)) as u8
+        } else {
+            self.pick_allied_team()
+        };
+
+        self.spawn_commander(user_id, name, faction, team, flag, true, None);
+        Ok(())
+    }
+
     pub fn bot_count(&self) -> usize {
         self.players.values().filter(|p| p.is_bot()).count()
     }

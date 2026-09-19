@@ -281,7 +281,7 @@ function renderOpenMatches(matches) {
       <button type="button" class="store-item" data-join="${escapeHtml(m.id)}">
         <strong>${m.players}/${m.max_players} players</strong>
         <small>${escapeHtml(m.id)}</small>
-        <span>Map ${m.map_size}${m.ffa ? " · Alone" : " · Ally"} · join takes a bot slot</span>
+        <span>Map ${m.map_size}${m.ffa ? " · Alone" : " · Ally"} · bot slot or new base</span>
       </button>`,
     )
     .join("");

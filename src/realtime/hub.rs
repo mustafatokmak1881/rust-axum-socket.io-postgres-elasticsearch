@@ -406,20 +406,33 @@ impl MatchHub {
             if rt.sim.ended || !rt.open {
                 return Err("Match is closed".into());
             }
-            if rt.sim.bot_count() == 0 {
-                return Err("Match is full".into());
-            }
 
             let faction = normalize_faction(&faction);
-            // Replace a bot slot — commander count stays fixed.
-            rt.sim
-                .take_over_bot(
-                    user_id,
-                    user.display_name.clone(),
-                    faction,
-                    user.equipped_flag.clone(),
-                )
-                .map_err(|e| e.to_string())?;
+            if rt.sim.bot_count() > 0 {
+                // Prefer stealing a bot slot — keeps commander count fixed.
+                rt.sim
+                    .take_over_bot(
+                        user_id,
+                        user.display_name.clone(),
+                        faction,
+                        user.equipped_flag.clone(),
+                    )
+                    .map_err(|e| e.to_string())?;
+            } else {
+                // All slots already human: carve a new base farthest from living HQs.
+                rt.sim
+                    .add_player(
+                        user_id,
+                        user.display_name.clone(),
+                        faction,
+                        user.equipped_flag.clone(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                let humans = rt.sim.human_count() as u16;
+                if humans > rt.max_players {
+                    rt.max_players = humans;
+                }
+            }
             rt.members.insert(user_id, ());
         }
 
