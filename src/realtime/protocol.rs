@@ -96,6 +96,14 @@ pub enum ServerMsg {
         match_id: Uuid,
         snapshot: MatchSnapshot,
     },
+    /// Playable edge grew mid-match (overflow join). Clients resize FOW / ground.
+    MapExpand {
+        map_size: u16,
+        /// Packed little-endian u64 words for this viewer's explored shroud.
+        explored: Vec<u8>,
+        ponds: Vec<PondView>,
+        mountains: Vec<MountainView>,
+    },
     Delta {
         tick: u64,
         entities: Vec<EntityView>,

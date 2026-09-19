@@ -1393,7 +1393,7 @@ impl MatchSim {
             if overlap {
                 continue;
             }
-            self.ponds.push(super::protocol::PondView { x, y, r });
+            self.ponds.push(PondView { x, y, r });
             added_ponds += 1;
         }
 
@@ -1437,8 +1437,7 @@ impl MatchSim {
             if overlap {
                 continue;
             }
-            self.mountains
-                .push(super::protocol::MountainView { x, y, r });
+            self.mountains.push(MountainView { x, y, r });
             added_mt += 1;
         }
     }
