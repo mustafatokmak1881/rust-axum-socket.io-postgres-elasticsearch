@@ -29,6 +29,13 @@ pub fn map_size_for_players(max_players: u16) -> u16 {
     (size as u16).clamp(MIN_MAP_SIZE, MAX_MAP_SIZE)
 }
 
+/// Minimum nearest-HQ clearance we want when carving an overflow base.
+fn min_spawn_clearance(commander_count: u16) -> f32 {
+    let n = commander_count.max(2) as f32;
+    // Softer than the design 112 spacing — still roomy enough for a starter ring.
+    (112.0 * (2.0 / n.sqrt()).sqrt()).clamp(48.0, 96.0)
+}
+
 /// Total living+queued units with a single home HQ — room to grow over a long match.
 pub const HOME_UNIT_BUDGET: usize = 36;
 /// Extra units per captured colony HQ (= half of home → x + x/2 + x/2 …).
@@ -1261,21 +1268,26 @@ impl MatchSim {
         Ok(())
     }
 
-    /// Overflow join when every bot slot is already human: new HQ at the
-    /// farthest free ground from existing bases (`allocate_spawn_xy`).
+    /// Overflow join when every bot slot is already human: grow the map if the
+    /// design curve / clearance needs it, then plant a new HQ at the farthest
+    /// free ground from existing bases (`allocate_spawn_xy`).
+    /// Returns `Ok(true)` when the playable edge grew.
     pub fn add_player(
         &mut self,
         user_id: Uuid,
         name: String,
         faction: String,
         flag: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<bool, &'static str> {
         if self.ended {
             return Err("Match already ended");
         }
         if self.players.contains_key(&user_id) {
             return Err("Already in match");
         }
+
+        let next_count = (self.players.len() + 1) as u16;
+        let grew = self.ensure_map_for_commanders(next_count);
 
         let index = self.players.len();
         let team = if self.ffa {
@@ -1285,7 +1297,192 @@ impl MatchSim {
         };
 
         self.spawn_commander(user_id, name, faction, team, flag, true, None);
-        Ok(())
+        Ok(grew)
+    }
+
+    /// Expand playable edge so `commander_count` fits the spacing curve (and
+    /// a usable spawn clearance). No-op at `MAX_MAP_SIZE`. Returns whether size grew.
+    pub fn ensure_map_for_commanders(&mut self, commander_count: u16) -> bool {
+        let need = min_spawn_clearance(commander_count);
+        let curve = map_size_for_players(commander_count);
+        let mut grew = false;
+
+        // First: match the design curve for this commander count.
+        if curve > self.map_size {
+            self.grow_map_to(curve);
+            grew = true;
+        }
+
+        // Then: if the best pocket is still too tight, keep stepping out.
+        while self.best_spawn_clearance() < need && self.map_size < MAX_MAP_SIZE {
+            let next = ((self.map_size as u32 + 48).min(MAX_MAP_SIZE as u32) as u16 + 1) / 2 * 2;
+            if next <= self.map_size {
+                break;
+            }
+            self.grow_map_to(next);
+            grew = true;
+        }
+        grew
+    }
+
+    fn grow_map_to(&mut self, new_size: u16) {
+        let new_size = new_size.clamp(MIN_MAP_SIZE, MAX_MAP_SIZE);
+        if new_size <= self.map_size {
+            return;
+        }
+        let old = self.map_size;
+        self.map_size = new_size;
+        for player in self.players.values_mut() {
+            player.explored.expand_to(new_size);
+        }
+        self.extend_terrain_rim(old, new_size);
+    }
+
+    /// Sprinkle a few lakes/rocks into the new L-shaped border so the rim isn't empty.
+    fn extend_terrain_rim(&mut self, old_size: u16, new_size: u16) {
+        if new_size <= old_size {
+            return;
+        }
+        let old = old_size as f32;
+        let map = new_size as f32;
+        let mut seed = self.id.as_u128() as u64
+            ^ ((old_size as u64) << 17)
+            ^ ((new_size as u64) << 3);
+        if seed == 0 {
+            seed = 0xBEE5_F00Du64;
+        }
+        let extras = 2 + (seed % 3) as usize;
+        let mut added_ponds = 0usize;
+        let mut attempts = 0usize;
+        while added_ponds < extras && attempts < extras * 40 {
+            attempts += 1;
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(attempts as u64 + 3);
+            let x = 12.0 + ((seed % 10_000) as f32 / 10_000.0) * (map - 24.0).max(8.0);
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(11);
+            let y = 12.0 + ((seed % 10_000) as f32 / 10_000.0) * (map - 24.0).max(8.0);
+            // Only place in the newly added rim.
+            if x < old - 2.0 && y < old - 2.0 {
+                continue;
+            }
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(23);
+            let r = 3.2 + ((seed % 70) as f32) * 0.07;
+            let mut overlap = false;
+            for p in &self.ponds {
+                let dx = p.x - x;
+                let dy = p.y - y;
+                let min = p.r + r + 4.0;
+                if dx * dx + dy * dy < min * min {
+                    overlap = true;
+                    break;
+                }
+            }
+            if overlap {
+                continue;
+            }
+            for m in &self.mountains {
+                let dx = m.x - x;
+                let dy = m.y - y;
+                let min = m.r + r + 4.5;
+                if dx * dx + dy * dy < min * min {
+                    overlap = true;
+                    break;
+                }
+            }
+            if overlap {
+                continue;
+            }
+            self.ponds.push(super::protocol::PondView { x, y, r });
+            added_ponds += 1;
+        }
+
+        let mut added_mt = 0usize;
+        attempts = 0;
+        while added_mt < extras && attempts < extras * 40 {
+            attempts += 1;
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(attempts as u64 + 41);
+            let x = 14.0 + ((seed % 10_000) as f32 / 10_000.0) * (map - 28.0).max(8.0);
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(19);
+            let y = 14.0 + ((seed % 10_000) as f32 / 10_000.0) * (map - 28.0).max(8.0);
+            if x < old - 2.0 && y < old - 2.0 {
+                continue;
+            }
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(37);
+            let r = 4.2 + ((seed % 60) as f32) * 0.07;
+            let mut overlap = false;
+            for p in &self.ponds {
+                let dx = p.x - x;
+                let dy = p.y - y;
+                let min = p.r + r + 5.0;
+                if dx * dx + dy * dy < min * min {
+                    overlap = true;
+                    break;
+                }
+            }
+            if overlap {
+                continue;
+            }
+            for m in &self.mountains {
+                let dx = m.x - x;
+                let dy = m.y - y;
+                let min = m.r + r + 3.5;
+                if dx * dx + dy * dy < min * min {
+                    overlap = true;
+                    break;
+                }
+            }
+            if overlap {
+                continue;
+            }
+            self.mountains
+                .push(super::protocol::MountainView { x, y, r });
+            added_mt += 1;
+        }
+    }
+
+    /// Nearest-HQ distance of the best empty lattice cell (same scoring as spawn).
+    fn best_spawn_clearance(&self) -> f32 {
+        let map = self.map_size as f32;
+        let margin = (map * 0.07).clamp(14.0, 36.0);
+        let hq_positions: Vec<(f32, f32)> = self
+            .entities
+            .values()
+            .filter(|e| e.kind == "hq" && e.hp > 0.0)
+            .map(|e| (e.x, e.y))
+            .collect();
+        if hq_positions.is_empty() {
+            return map;
+        }
+        let hq_r = building_radius("hq") + 0.5;
+        let usable = (map - 2.0 * margin).max(8.0);
+        let steps = ((map / 10.0).clamp(16.0, 56.0)) as i32;
+        let mut best_score = 0.0f32;
+        for iy in 0..=steps {
+            for ix in 0..=steps {
+                let x = margin + usable * (ix as f32 / steps as f32);
+                let y = margin + usable * (iy as f32 / steps as f32);
+                let fx = x.clamp(margin, map - margin).floor() + 0.5;
+                let fy = y.clamp(margin, map - margin).floor() + 0.5;
+                if self.ground_blocks(fx, fy, hq_r) {
+                    continue;
+                }
+                let score = hq_positions
+                    .iter()
+                    .map(|(hx, hy)| {
+                        let dx = fx - hx;
+                        let dy = fy - hy;
+                        (dx * dx + dy * dy).sqrt()
+                    })
+                    .fold(f32::MAX, f32::min);
+                if score > best_score {
+                    best_score = score;
+                }
+            }
+        }
+        best_score
     }
 
     pub fn bot_count(&self) -> usize {

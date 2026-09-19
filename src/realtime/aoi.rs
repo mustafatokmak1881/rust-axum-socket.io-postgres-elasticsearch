@@ -124,4 +124,32 @@ impl ExploredMap {
             .flat_map(|word| word.to_le_bytes())
             .collect()
     }
+
+    /// Grow the shroud grid in-place, keeping explored cells at the same (x, y).
+    /// New rim cells (x >= old or y >= old) start unexplored.
+    pub fn expand_to(&mut self, new_size: u16) {
+        if new_size <= self.size {
+            return;
+        }
+        let old = self.size;
+        let mut next = ExploredMap::new(new_size);
+        let old_stride = old as usize;
+        let new_stride = new_size as usize;
+        for y in 0..old_stride {
+            for x in 0..old_stride {
+                let old_i = y * old_stride + x;
+                let old_word = old_i / 64;
+                let old_bit = old_i % 64;
+                if self.bits.get(old_word).is_some_and(|w| w & (1u64 << old_bit) != 0) {
+                    let new_i = y * new_stride + x;
+                    let new_word = new_i / 64;
+                    let new_bit = new_i % 64;
+                    if let Some(w) = next.bits.get_mut(new_word) {
+                        *w |= 1u64 << new_bit;
+                    }
+                }
+            }
+        }
+        *self = next;
+    }
 }
