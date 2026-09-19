@@ -51,6 +51,8 @@ pub struct PlayerState {
     pub debug_omniscient: bool,
     /// Captured colony count (extra HQs beyond the first). Drives army budget.
     pub colonies: u32,
+    /// Original Command Center — H-key / scoreboard prefer this over later colonies.
+    pub home_hq: Option<Uuid>,
 }
 
 impl PlayerState {
@@ -964,6 +966,7 @@ impl MatchSim {
                 bot,
                 debug_omniscient: false,
                 colonies: 0,
+                home_hq: None,
             },
         );
 
@@ -1000,6 +1003,9 @@ impl MatchSim {
             mg_cooldown_ms: 0,
             last_hit_by: None,
         });
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.home_hq = Some(hq_id);
+        }
         self.spawn_starting_force(user_id, team, x, y);
         self.reveal_vision_for(user_id);
     }
@@ -1407,13 +1413,17 @@ impl MatchSim {
                 let mut buildings = 0u32;
                 let mut bases = 0u32;
                 let mut hq_pos: Option<(f32, f32)> = None;
+                let home_hq = p.home_hq;
                 for e in self.entities.values() {
                     if e.owner != p.user_id || e.hp <= 0.0 {
                         continue;
                     }
                     if e.kind == "hq" {
                         bases += 1;
-                        if hq_pos.is_none() {
+                        // Prefer the original home CC so H / Tab don't jump to a colony.
+                        if home_hq == Some(e.id) {
+                            hq_pos = Some((e.x, e.y));
+                        } else if hq_pos.is_none() {
                             hq_pos = Some((e.x, e.y));
                         }
                     }
@@ -2752,14 +2762,15 @@ impl MatchSim {
         self.check_victory();
     }
 
-    /// HQ falls → wipe local garrison buildings, grant site to the killer as a colony HQ.
+    /// HQ falls → transfer local garrison to the conqueror (or wipe if none), spawn colony HQ.
     fn on_hq_destroyed(&mut self, hq: Entity) {
         let hx = hq.x;
         let hy = hq.y;
         let former = hq.owner;
         let claim_r2 = CITY_CLAIM_RADIUS * CITY_CLAIM_RADIUS;
+        let conqueror = self.resolve_conqueror(&hq);
 
-        let wipe: Vec<Uuid> = self
+        let site_buildings: Vec<Uuid> = self
             .entities
             .values()
             .filter(|e| {
@@ -2775,10 +2786,40 @@ impl MatchSim {
             })
             .map(|e| e.id)
             .collect();
-        for wid in wipe {
-            if let Some(e) = self.take_entity(wid) {
-                self.refund_building_economy(&e);
-                self.removed.push(wid);
+
+        if let Some(cid) = conqueror {
+            // Real capture: keep the base footprint under the new owner (not a scorched empty pad).
+            let (team, flag) = self
+                .players
+                .get(&cid)
+                .map(|p| (p.team, p.flag.clone()))
+                .unwrap_or((hq.team, None));
+            for bid in site_buildings {
+                self.reassign_building(bid, cid, team, flag.clone());
+            }
+            self.grant_colony_hq(cid, hx, hy);
+            self.enforce_budgets_for(cid);
+        } else {
+            for wid in site_buildings {
+                if let Some(e) = self.take_entity(wid) {
+                    self.refund_building_economy(&e);
+                    self.removed.push(wid);
+                }
+            }
+        }
+
+        if self.players.get(&former).and_then(|p| p.home_hq) == Some(hq.id) {
+            if let Some(player) = self.players.get_mut(&former) {
+                player.home_hq = None;
+            }
+            // Promote another living HQ to "home" so H-key still works.
+            let fallback = self
+                .entities
+                .values()
+                .find(|e| e.owner == former && e.kind == "hq" && e.hp > 0.0)
+                .map(|e| e.id);
+            if let Some(player) = self.players.get_mut(&former) {
+                player.home_hq = fallback;
             }
         }
 
@@ -2791,6 +2832,7 @@ impl MatchSim {
             if let Some(player) = self.players.get_mut(&former) {
                 player.alive = false;
                 player.colonies = 0;
+                player.home_hq = None;
             }
         } else if let Some(player) = self.players.get_mut(&former) {
             player.colonies = remaining_hq.saturating_sub(1) as u32;
@@ -2798,9 +2840,45 @@ impl MatchSim {
 
         // Cap shrinks with lost HQs — drop queued trains / builds that no longer fit.
         self.enforce_budgets_for(former);
+    }
 
-        if let Some(conqueror) = self.resolve_conqueror(&hq) {
-            self.grant_colony_hq(conqueror, hx, hy);
+    /// Move a finished / constructing building to a new commander (colony capture).
+    fn reassign_building(
+        &mut self,
+        id: Uuid,
+        new_owner: Uuid,
+        new_team: u8,
+        flag: Option<String>,
+    ) {
+        let Some(entity) = self.entities.get(&id).cloned() else {
+            return;
+        };
+        if entity.owner == new_owner {
+            return;
+        }
+        self.refund_building_economy(&entity);
+        if let Some(e) = self.entities.get_mut(&id) {
+            e.owner = new_owner;
+            e.team = new_team;
+            e.flag = flag;
+            e.train_queue.clear();
+            e.target = None;
+            e.last_hit_by = None;
+            e.dirty = true;
+        }
+        // Credit power economy to the new owner for finished structures.
+        if entity.build_remaining_ms == 0 {
+            if let Some(def) = buildables().iter().find(|b| b.kind == entity.kind) {
+                if let Some(player) = self.players.get_mut(&new_owner) {
+                    if def.power > 0 {
+                        player.resources.power =
+                            player.resources.power.saturating_add(def.power);
+                    } else if def.power < 0 {
+                        player.resources.power_used =
+                            player.resources.power_used.saturating_add(-def.power);
+                    }
+                }
+            }
         }
     }
 
@@ -2901,7 +2979,8 @@ impl MatchSim {
             .count();
         if let Some(player) = self.players.get_mut(&owner) {
             player.colonies = hqs.saturating_sub(1) as u32;
-            player.focus = [fx, fy];
+            // Keep the commander's camera / focus where they were fighting —
+            // snapping to the colony made the home base feel like it vanished.
             // Captured HQ brings its own base power online.
             player.resources.power = player.resources.power.saturating_add(40);
         }

@@ -419,10 +419,20 @@ async function setupMatchScene(snapshot) {
 
 function findOwnHome(snapshot) {
   const you = snapshot.you;
-  const hq = (snapshot.entities || []).find(
-    (e) => e.owner === you && e.kind === "hq",
+  const hqs = (snapshot.entities || []).filter(
+    (e) => e.owner === you && e.kind === "hq" && (e.hp ?? 1) > 0,
   );
-  if (hq) return { x: hq.x, z: hq.y };
+  // Prefer HQ nearest the server focus (home), else first.
+  if (hqs.length && snapshot.focus) {
+    const fx = snapshot.focus[0];
+    const fy = snapshot.focus[1];
+    hqs.sort((a, b) => {
+      const da = (a.x - fx) ** 2 + (a.y - fy) ** 2;
+      const db = (b.x - fx) ** 2 + (b.y - fy) ** 2;
+      return da - db;
+    });
+  }
+  if (hqs[0]) return { x: hqs[0].x, z: hqs[0].y };
   const any = (snapshot.entities || []).find((e) => e.owner === you);
   if (any) return { x: any.x, z: any.y };
   return { x: snapshot.map_size / 2, z: snapshot.map_size / 2 };
@@ -448,6 +458,7 @@ function panCameraTo(lookX, lookZ, quiet) {
 
 function updateResources(res) {
   if (!res) return;
+  const prevBases = state.resources?.bases;
   state.resources = res;
   $("#res-gold").textContent = res.gold;
   const pwrEl = $("#res-power");
@@ -477,6 +488,11 @@ function updateResources(res) {
   const basesEl = $("#army-bases");
   if (basesEl && res.bases != null) {
     basesEl.textContent = String(res.bases);
+    if (prevBases != null && res.bases > prevBases) {
+      toast(`Üs ele geçirildi · toplam ${res.bases} komuta merkezi`);
+    } else if (prevBases != null && res.bases < prevBases) {
+      toast(`Komuta merkezi kaybedildi · kalan ${res.bases}`);
+    }
   }
 }
 
