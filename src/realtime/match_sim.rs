@@ -1466,43 +1466,102 @@ impl MatchSim {
         })
     }
 
-    /// Tab scoreboard: every commander, army size, and economy.
+    /// Tab scoreboard: every commander, army size, and economy (FOW-independent).
+    /// Single entity pass — O(entities + players), not O(players × entities).
     pub fn scoreboard_for(&self, viewer: Uuid) -> Vec<ScoreboardRow> {
         let viewer_team = self.players.get(&viewer).map(|p| p.team);
         let ffa = self.ffa;
+
+        struct Acc {
+            infantry: u32,
+            tanks: u32,
+            buildings: u32,
+            bases: u32,
+            hq_pos: Option<(f32, f32)>,
+        }
+        let mut acc: HashMap<Uuid, Acc> = HashMap::with_capacity(self.players.len());
+        for p in self.players.values() {
+            acc.insert(
+                p.user_id,
+                Acc {
+                    infantry: 0,
+                    tanks: 0,
+                    buildings: 0,
+                    bases: 0,
+                    hq_pos: None,
+                },
+            );
+        }
+        for e in self.entities.values() {
+            if e.hp <= 0.0 {
+                continue;
+            }
+            let Some(a) = acc.get_mut(&e.owner) else {
+                continue;
+            };
+            if e.kind == "hq" {
+                a.bases += 1;
+                let home = self
+                    .players
+                    .get(&e.owner)
+                    .and_then(|p| p.home_hq);
+                if home == Some(e.id) {
+                    a.hq_pos = Some((e.x, e.y));
+                } else if a.hq_pos.is_none() {
+                    a.hq_pos = Some((e.x, e.y));
+                }
+            }
+            if e.building {
+                a.buildings += 1;
+            } else if e.unit {
+                let k = e.kind.as_str();
+                if k.contains("tank")
+                    || k.contains("mlrs")
+                    || k.contains("humvee")
+                    || k.contains("technical")
+                    || k.contains("buggy")
+                    || k.contains("scorpion")
+                    || k.contains("marauder")
+                    || k.contains("paladin")
+                    || k.contains("overlord")
+                    || k.contains("battlemaster")
+                    || k.contains("tomahawk")
+                    || k.contains("inferno")
+                    || k.contains("scud")
+                    || k.contains("quad")
+                    || k.contains("microwave")
+                    || k.contains("crawler")
+                    || k.contains("battle_bus")
+                    || k.contains("bomb_truck")
+                    || k.contains("radar_van")
+                    || k.contains("outpost")
+                    || k.contains("ecm")
+                    || k.contains("gatling")
+                {
+                    a.tanks += 1;
+                } else if k.contains("raptor")
+                    || k.contains("mig")
+                    || k.contains("comanche")
+                    || k.contains("helix")
+                    || k.contains("chinook")
+                {
+                    // aircraft counted with tanks column as "vehicles" budget — keep infantry clean
+                    a.tanks += 1;
+                } else {
+                    a.infantry += 1;
+                }
+            }
+        }
+
         let mut rows: Vec<ScoreboardRow> = self
             .players
             .values()
             .map(|p| {
-                let mut infantry = 0u32;
-                let mut tanks = 0u32;
-                let mut buildings = 0u32;
-                let mut bases = 0u32;
-                let mut hq_pos: Option<(f32, f32)> = None;
-                let home_hq = p.home_hq;
-                for e in self.entities.values() {
-                    if e.owner != p.user_id || e.hp <= 0.0 {
-                        continue;
-                    }
-                    if e.kind == "hq" {
-                        bases += 1;
-                        // Prefer the original home CC so H / Tab don't jump to a colony.
-                        if home_hq == Some(e.id) {
-                            hq_pos = Some((e.x, e.y));
-                        } else if hq_pos.is_none() {
-                            hq_pos = Some((e.x, e.y));
-                        }
-                    }
-                    if e.building {
-                        buildings += 1;
-                    } else if e.unit {
-                        if e.kind.contains("tank") || e.kind.contains("mlrs") {
-                            tanks += 1;
-                        } else {
-                            infantry += 1;
-                        }
-                    }
-                }
+                let a = acc.get(&p.user_id);
+                let (infantry, tanks, buildings, bases, hq_pos) = match a {
+                    Some(a) => (a.infantry, a.tanks, a.buildings, a.bases, a.hq_pos),
+                    None => (0, 0, 0, 0, None),
+                };
                 ScoreboardRow {
                     id: p.user_id,
                     name: p.label(),
@@ -3046,9 +3105,8 @@ impl MatchSim {
         let Some(ap) = self.players.get(&attacker) else {
             return false;
         };
-        if !ap.alive {
-            return false;
-        }
+        // Eliminated commanders may still hold a field army — they must be able
+        // to reclaim a Command Center and return to the match.
         if self.ffa {
             return true;
         }
@@ -3084,15 +3142,14 @@ impl MatchSim {
     }
 
     /// Spawn a ready HQ for the conqueror on the captured site (colony / forward base).
+    /// If the conqueror was eliminated but still has an army, reclaiming an HQ revives them.
     fn grant_colony_hq(&mut self, owner: Uuid, x: f32, y: f32) {
         let Some(player) = self.players.get(&owner) else {
             return;
         };
-        if !player.alive {
-            return;
-        }
         let team = player.team;
         let flag = player.flag.clone();
+        let was_eliminated = !player.alive;
         let map = self.map_size as f32;
         let fx = x.clamp(1.5, map - 1.5);
         let fy = y.clamp(1.5, map - 1.5);
@@ -3135,10 +3192,12 @@ impl MatchSim {
             .filter(|e| e.owner == owner && e.kind == "hq" && e.hp > 0.0)
             .count();
         if let Some(player) = self.players.get_mut(&owner) {
+            player.alive = true;
             player.colonies = hqs.saturating_sub(1) as u32;
             player.stats.bases_captured = player.stats.bases_captured.saturating_add(1);
-            // Keep the commander's camera / focus where they were fighting —
-            // snapping to the colony made the home base feel like it vanished.
+            if player.home_hq.is_none() || was_eliminated {
+                player.home_hq = Some(hq_id);
+            }
             // Captured HQ brings its own base power online.
             player.resources.power = player.resources.power.saturating_add(40);
         }

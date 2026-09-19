@@ -366,13 +366,24 @@ function renderScoreboard() {
   if (legend) legend.hidden = !allyMode;
   if (hint) {
     hint.textContent = allyMode
-      ? "Tab · yeşil=sen · mavi=dost · kırmızı=düşman · tıkla=üs"
-      : "Tab · tıkla → görünür üs (sis) · tekrar = sonraki";
+      ? "Tab · canlı istatistik (sis yok) · yeşil=sen · mavi=dost · kırmızı=düşman · tıkla=üs"
+      : "Tab · canlı istatistik (sis yok) · tıkla=üs (tekrar = sonraki)";
   }
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="10" class="muted">Veri yok</td></tr>`;
+    body.dataset.sbKey = "";
     return;
   }
+  // Skip DOM rebuild when nothing meaningful changed (perf while Tab held).
+  const sbKey = rows
+    .map(
+      (r) =>
+        `${r.id}:${r.alive | 0}:${r.bases}:${r.infantry}:${r.tanks}:${r.buildings}:${r.gold}:${r.power_used}:${r.power}`,
+    )
+    .join("|");
+  if (body.dataset.sbKey === sbKey) return;
+  body.dataset.sbKey = sbKey;
+
   body.innerHTML = rows
     .map((r) => {
       const [c0, c1, c2] = r.colors || [0x888888, 0x555555, 0x333333];
@@ -398,33 +409,24 @@ function renderScoreboard() {
             : allyMode
               ? "DÜŞMAN"
               : "OYUNCU";
-      const teamLabel = state.match?.ffa
-        ? "—"
-        : `T${Number(r.team) + 1}`;
+      const teamLabel = state.match?.ffa ? "—" : `T${Number(r.team) + 1}`;
       const status = r.alive
         ? `<span class="status on">ACTIVE</span>`
         : `<span class="status off">DEAD</span>`;
-      const seen = visibleHqsForOwner(r.id).length;
+      // Stats are always full server truth — independent of fog of war.
       const bases = r.bases ?? 0;
-      const basesLabel =
-        globalVision || r.you || ally
-          ? String(bases)
-          : seen > 0
-            ? `${seen}/${bases || seen}`
-            : bases > 0
-              ? "?"
-              : "0";
+      const seen = visibleHqsForOwner(r.id).length;
       const title =
         seen > 0
-          ? `Görünen üs: ${seen}${bases > seen ? ` / ${bases}` : ""} · tıkla (tekrar = sonraki)`
-          : bases > 0 && !(r.you || ally || globalVision)
-            ? "Üsler sis altında"
-            : "Command Center'a git";
+          ? `Üs: ${bases} · görünen: ${seen} · tıkla (tekrar = sonraki)`
+          : bases > 0
+            ? `Üs: ${bases} · haritada sis altında olabilir · tıkla`
+            : "Command Center yok";
       return `<tr class="${cls}" data-owner="${escapeHtml(String(r.id || ""))}" title="${escapeHtml(title)}">
         <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
         <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag} · ${teamLabel}</small></div></td>
         <td>${status}</td>
-        <td>${basesLabel}</td>
+        <td>${bases}</td>
         <td>${r.infantry ?? 0}</td>
         <td>${r.tanks ?? 0}</td>
         <td>${r.buildings ?? 0}</td>

@@ -485,8 +485,8 @@ impl MatchHub {
                             }
                             let (entities, removed, died, resources, explored_new, shots) =
                                 rt.sim.delta_for(uid);
-                            // Scoreboard is Tab-only chrome — every 2s is enough.
-                            let scoreboard = if tick % (match_sim::TICK_HZ as u64 * 2) == 0 {
+                            // Tab scoreboard — FOW-independent roster; ~1 Hz is enough & cheap.
+                            let scoreboard = if tick % (match_sim::TICK_HZ as u64) == 0 {
                                 Some(rt.sim.scoreboard_for(uid))
                             } else {
                                 None

@@ -103,7 +103,7 @@ pub enum ServerMsg {
         /// Attacks that happened since the last broadcast (muzzle / tracer FX).
         #[serde(default)]
         shots: Vec<ShotEvent>,
-        /// Full commander roster — sent about once per second for Tab scoreboard.
+        /// Full commander roster — FOW-independent, ~1 Hz for Tab scoreboard.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scoreboard: Option<Vec<ScoreboardRow>>,
         /// Dev: this client has personal full-map vision (M key). Never match-wide.
