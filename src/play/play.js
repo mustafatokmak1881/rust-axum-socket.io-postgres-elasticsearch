@@ -6198,6 +6198,18 @@ function worldToClient(x, y, z = 0.08) {
   };
 }
 
+/** Visual height used for screen picking / box select (matches air cruise / hangar). */
+function pickAltitudeForEntity(entity) {
+  if (!entity) return 0.12;
+  if (entity.building) return 0.35;
+  if (!isAirUnitKind(entity.kind)) return 0.12;
+  const mesh = state.meshes.get(entity.id);
+  if (mesh?.userData?.isF16 && (mesh.userData.hangared || !entity.airborne)) {
+    return mesh.userData.hangarAltitude ?? 0.13;
+  }
+  return mesh?.userData?.airAltitude ?? (isF16Kind(entity.kind) ? 2.95 : 2.65);
+}
+
 function unitsInScreenBox(x0, y0, x1, y1) {
   const left = Math.min(x0, x1);
   const right = Math.max(x0, x1);
@@ -6207,13 +6219,17 @@ function unitsInScreenBox(x0, y0, x1, y1) {
   const ids = [];
   for (const entity of state.entities.values()) {
     if (!entity.unit || entity.owner !== you) continue;
-    const p = worldToClient(
-      entity.x,
-      entity.y,
-      isAirUnitKind(entity.kind) ? 0.85 : 0.12,
-    );
+    if (entity.hp != null && entity.hp <= 0) continue;
+    const p = worldToClient(entity.x, entity.y, pickAltitudeForEntity(entity));
     if (!p) continue;
-    if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
+    // Generous air footprint so thin jets aren't missed at box edges.
+    const pad = isAirUnitKind(entity.kind) ? 28 : 4;
+    if (
+      p.x >= left - pad &&
+      p.x <= right + pad &&
+      p.y >= top - pad &&
+      p.y <= bottom + pad
+    ) {
       ids.push(entity.id);
     }
   }
@@ -6276,15 +6292,105 @@ function pickOwnAtPoint(point) {
   let bestDist = 1.4;
   for (const entity of state.entities.values()) {
     if (entity.owner !== state.match?.you) continue;
+    if (entity.hp != null && entity.hp <= 0) continue;
     const dx = entity.x - point.x;
     const dy = entity.y - point.z;
     const d = Math.hypot(dx, dy);
-    if (d < bestDist) {
+    // Air: larger ground footprint (shadow / parallax). Prefer ground units when tied.
+    const reach = entity.building
+      ? 0.7
+      : isAirUnitKind(entity.kind)
+        ? 1.35
+        : String(entity.kind || "").includes("tank") ||
+            String(entity.kind || "").includes("mlrs")
+          ? 0.45
+          : 0.22;
+    if (d > reach) continue;
+    const score = isAirUnitKind(entity.kind) ? d + 0.15 : d;
+    if (!best || score < bestDist) {
       best = entity;
-      bestDist = d;
+      bestDist = score;
     }
   }
   return best;
+}
+
+/**
+ * Click pick: mesh raycast first (fixes air parallax), then screen proximity,
+ * then ground footprint. Jets are thin at altitude — screen radius is generous.
+ */
+function pickOwnUnderPointer(event, groundPoint) {
+  const you = state.match?.you;
+  if (!you) return null;
+
+  if (raycaster && camera && state.meshes.size) {
+    const canvas = $("#viewport");
+    const rect = canvas.getBoundingClientRect();
+    pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const roots = [];
+    for (const mesh of state.meshes.values()) {
+      const ent = state.entities.get(mesh.userData.id);
+      if (!ent || ent.owner !== you) continue;
+      if (ent.hp != null && ent.hp <= 0) continue;
+      if (mesh.userData.wreck || mesh.userData.corpse) continue;
+      roots.push(mesh);
+    }
+    if (roots.length) {
+      const hits = raycaster.intersectObjects(roots, true);
+      for (const hit of hits) {
+        // Skip pure UI chrome / soft shadows
+        if (
+          hit.object?.name === "airShadow" ||
+          hit.object?.name === "selRing" ||
+          hit.object?.name === "ownerLabel" ||
+          hit.object?.name === "hpBar" ||
+          hit.object?.name === "fogOfWar"
+        ) {
+          continue;
+        }
+        let obj = hit.object;
+        while (obj) {
+          const id = obj.userData?.id;
+          if (id && state.entities.has(id)) {
+            const ent = state.entities.get(id);
+            if (ent && ent.owner === you) return ent;
+          }
+          obj = obj.parent;
+        }
+      }
+    }
+
+    // Screen-space proximity — click the silhouette, not the ground under it.
+    let bestScreen = null;
+    let bestPx = Infinity;
+    for (const entity of state.entities.values()) {
+      if (entity.owner !== you) continue;
+      if (!entity.unit && !entity.building) continue;
+      if (entity.hp != null && entity.hp <= 0) continue;
+      const p = worldToClient(entity.x, entity.y, pickAltitudeForEntity(entity));
+      if (!p) continue;
+      const dx = p.x - event.clientX;
+      const dy = p.y - event.clientY;
+      const d = Math.hypot(dx, dy);
+      const maxPx = entity.building
+        ? 36
+        : isAirUnitKind(entity.kind)
+          ? 52
+          : String(entity.kind || "").includes("tank") ||
+              String(entity.kind || "").includes("mlrs")
+            ? 28
+            : 18;
+      if (d <= maxPx && d < bestPx) {
+        bestScreen = entity;
+        bestPx = d;
+      }
+    }
+    if (bestScreen) return bestScreen;
+  }
+
+  return groundPoint ? pickOwnAtPoint(groundPoint) : null;
 }
 
 function finishBoxSelect(event) {
@@ -6302,8 +6408,7 @@ function finishBoxSelect(event) {
   // Small drag = click select
   if (dragDist < 6) {
     const point = worldFromEvent(event);
-    if (!point) return;
-    const best = pickOwnAtPoint(point);
+    const best = pickOwnUnderPointer(event, point);
     if (best?.unit) {
       if (boxSelect.additive) {
         const set = new Set(state.selectedUnits);
@@ -6325,14 +6430,18 @@ function finishBoxSelect(event) {
         if (econ && !state.selectedBuild) {
           $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}`;
         }
-        toast(econ ? `${name}: ${econ}` : `Selected ${name}`);
+        toast(
+          econ
+            ? `${name}: ${econ} · Delete=yık`
+            : `Selected ${name} · Delete=yık`,
+        );
       }
     } else if (!boxSelect.additive) {
       clearUnitSelection();
       state.selectedBuilding = null;
       syncSelectionMarkers();
       refreshTrainablePanel();
-      send({ t: "set_focus", x: point.x, y: point.z });
+      if (point) send({ t: "set_focus", x: point.x, y: point.z });
     }
     return;
   }
@@ -6443,6 +6552,16 @@ function onPointerDown(event) {
           : `Attacking ${enemy.kind} (${state.selectedUnits.length})`,
       );
     } else {
+      const onlyHangaredF16 =
+        state.selectedUnits.length > 0 &&
+        state.selectedUnits.every((id) => {
+          const e = state.entities.get(id);
+          return e && String(e.kind || "").includes("f16") && !e.airborne;
+        });
+      if (onlyHangaredF16) {
+        toast("F-16 hangarda — saldırı emri ver (kalkış 6500g)");
+        return;
+      }
       send({ t: "move_units", ids: state.selectedUnits, x: point.x, y: point.z });
       toast(`Moving ${state.selectedUnits.length}`);
     }
@@ -6865,6 +6984,9 @@ function matStd(color, opts = {}) {
     emissive: opts.emissive ?? 0x000000,
     emissiveIntensity: opts.emissiveIntensity ?? 0,
     envMapIntensity: opts.envMapIntensity ?? 1,
+    transparent: opts.transparent ?? false,
+    opacity: opts.opacity ?? 1,
+    depthWrite: opts.transparent ? false : true,
   });
 }
 
@@ -8321,7 +8443,7 @@ function createMlrsMesh(teamColor) {
   return g;
 }
 
-const AIR_RIG_VERSION = 4;
+const AIR_RIG_VERSION = 6;
 
 function isAirUnitKind(kind) {
   const k = String(kind || "");
@@ -8340,20 +8462,418 @@ function isJetKind(kind) {
   return k.includes("raptor") || k.includes("mig") || k.includes("f16");
 }
 
-function isHeavyTankKind(kind) {
-  const k = String(kind || "");
-  // Exact "tank" = USA M1A1 (not tank_hunter / etc).
-  return (
-    k === "tank" ||
-    k.includes("abrams") ||
-    k.includes("paladin") ||
-    k.includes("marauder") ||
-    k.includes("overlord")
+function isF16Kind(kind) {
+  return String(kind || "").includes("f16");
+}
+
+/**
+ * F-16 Fighting Falcon — Ghost Gray strike loadout.
+ * Built part-by-part from planform + 3/4 refs (radome, gold canopy, LERX,
+ * cropped-delta wings, ventral intake, single nozzle, tanks + GBU).
+ */
+function createF16Mesh(teamColor) {
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
+  g.userData.isAir = true;
+  g.userData.isHeli = false;
+  g.userData.isJet = true;
+  g.userData.isF16 = true;
+  g.userData.airAltitude = 2.95;
+  g.userData.hangarAltitude = 0.13;
+  g.userData.airRigVersion = AIR_RIG_VERSION;
+  g.userData.tintParts = [];
+  g.userData.unitHeight = 3.05;
+  g.userData.kind = "f16";
+  g.userData.bank = 0;
+  g.userData.prevFaceYaw = 0;
+  g.rotation.order = "YXZ";
+
+  // USAF Ghost Gray (FS-inspired) — matte, not glossy toy plastic.
+  const gunship = 0x4a5258; // upper / FS36118-ish
+  const ghost = 0x8a9298; // lower / FS36375-ish
+  const radome = 0x3a4046;
+  const panelLine = 0x2e3438;
+  const accent = (teamColor >>> 0) || 0x3a5a7a;
+  const goldCanopy = 0xc9a24a;
+  const oliveBomb = 0x3a4228;
+  const seeker = 0xc8c4b8;
+  const missile = 0xd8dce0;
+  const burnt = 0x1a1612;
+  const intakeLip = 0x1c2024;
+
+  const matUpper = () =>
+    matStd(gunship, { metalness: 0.42, roughness: 0.58 });
+  const matLower = () =>
+    matStd(ghost, { metalness: 0.38, roughness: 0.62 });
+  const matRadome = () =>
+    matStd(radome, { metalness: 0.15, roughness: 0.82 });
+  const matLine = () =>
+    matStd(panelLine, { metalness: 0.2, roughness: 0.75 });
+  const matGold = () =>
+    matStd(goldCanopy, {
+      metalness: 0.85,
+      roughness: 0.12,
+      transparent: true,
+      opacity: 0.72,
+    });
+
+  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = opts.cast !== false;
+    m.receiveShadow = true;
+    if (opts.name) m.name = opts.name;
+    parent.add(m);
+    if (opts.tint) g.userData.tintParts.push(m);
+    return m;
+  };
+
+  // —— Nose / radome ——
+  add(g, new THREE.ConeGeometry(0.034, 0.16, 14), matRadome(), 0, 0.045, 0.34, -Math.PI / 2);
+  // Pitot
+  add(g, new THREE.CylinderGeometry(0.0025, 0.0025, 0.06, 5), matLine(), 0, 0.048, 0.44, Math.PI / 2);
+
+  // —— Forward fuselage (blended body) ——
+  add(g, new THREE.CylinderGeometry(0.038, 0.048, 0.2, 12), matUpper(), 0, 0.05, 0.2, Math.PI / 2);
+  add(g, new THREE.CylinderGeometry(0.048, 0.055, 0.22, 12), matUpper(), 0, 0.052, 0.02, Math.PI / 2);
+  // Lower belly lighter ghost gray
+  add(
+    g,
+    new THREE.CylinderGeometry(0.036, 0.05, 0.38, 10, 1, false, 0, Math.PI),
+    matLower(),
+    0,
+    0.028,
+    0.06,
+    Math.PI / 2,
+    0,
+    Math.PI,
   );
+
+  // Dorsal spine / panel strip
+  add(g, new THREE.BoxGeometry(0.028, 0.012, 0.42), matUpper(), 0, 0.078, -0.02);
+  // Fine panel seams (thin dark strips — anti-aliased geometry, not pixels)
+  for (const z of [0.18, 0.08, -0.02, -0.12, -0.22]) {
+    add(g, new THREE.BoxGeometry(0.052, 0.0015, 0.004), matLine(), 0, 0.086, z, 0, 0, 0, {
+      cast: false,
+    });
+  }
+  for (const z of [0.12, 0.0, -0.14]) {
+    add(g, new THREE.BoxGeometry(0.0018, 0.0015, 0.08), matLine(), 0.022, 0.086, z, 0, 0, 0, {
+      cast: false,
+    });
+    add(g, new THREE.BoxGeometry(0.0018, 0.0015, 0.08), matLine(), -0.022, 0.086, z, 0, 0, 0, {
+      cast: false,
+    });
+  }
+
+  // —— Bubble canopy (gold / amber) ——
+  const canopy = add(
+    g,
+    new THREE.SphereGeometry(0.042, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    matGold(),
+    0,
+    0.078,
+    0.14,
+  );
+  canopy.scale.set(1.05, 0.72, 1.35);
+  // Pilot hint
+  add(g, new THREE.SphereGeometry(0.012, 8, 6), matStd(0x1a2218, { metalness: 0.2, roughness: 0.7 }), 0, 0.07, 0.15);
+  add(g, new THREE.SphereGeometry(0.009, 6, 5), matStd(0x111418, { metalness: 0.3, roughness: 0.5 }), 0, 0.082, 0.155);
+
+  // Low-vis accent band (team color, subtle)
+  add(g, new THREE.BoxGeometry(0.01, 0.008, 0.2), matStd(accent, { metalness: 0.5, roughness: 0.4 }), 0.04, 0.06, 0.02, 0, 0, 0, {
+    tint: true,
+  });
+
+  // —— LERX (leading-edge root extensions) ——
+  const lerxShape = new THREE.Shape();
+  lerxShape.moveTo(0, 0.12);
+  lerxShape.lineTo(0.11, 0.02);
+  lerxShape.lineTo(0.1, -0.02);
+  lerxShape.lineTo(0, 0.04);
+  lerxShape.closePath();
+  const lerxGeo = new THREE.ExtrudeGeometry(lerxShape, { depth: 0.01, bevelEnabled: false });
+  const lerxL = new THREE.Mesh(lerxGeo, matUpper());
+  lerxL.rotation.x = -Math.PI / 2;
+  lerxL.position.set(0, 0.048, 0.1);
+  g.add(lerxL);
+  const lerxR = lerxL.clone();
+  lerxR.scale.x = -1;
+  g.add(lerxR);
+
+  // —— Main cropped-delta wings ——
+  const wingShape = new THREE.Shape();
+  wingShape.moveTo(0.02, 0.1);
+  wingShape.lineTo(0.38, -0.02);
+  wingShape.lineTo(0.36, -0.14);
+  wingShape.lineTo(0.02, -0.08);
+  wingShape.closePath();
+  const wingGeo = new THREE.ExtrudeGeometry(wingShape, { depth: 0.014, bevelEnabled: false });
+  const wingL = new THREE.Mesh(wingGeo, matUpper());
+  wingL.rotation.x = -Math.PI / 2;
+  wingL.position.set(0, 0.042, 0.0);
+  g.add(wingL);
+  const wingR = wingL.clone();
+  wingR.scale.x = -1;
+  g.add(wingR);
+  // Lower wing surfaces
+  const wingLoL = wingL.clone();
+  wingLoL.material = matLower();
+  wingLoL.position.y = 0.036;
+  g.add(wingLoL);
+  const wingLoR = wingR.clone();
+  wingLoR.material = matLower();
+  wingLoR.position.y = 0.036;
+  g.add(wingLoR);
+
+  // Wing panel lines
+  for (const side of [-1, 1]) {
+    for (const t of [0.35, 0.55, 0.75]) {
+      add(
+        g,
+        new THREE.BoxGeometry(0.12, 0.0012, 0.003),
+        matLine(),
+        side * (0.08 + t * 0.28),
+        0.05,
+        0.02 - t * 0.08,
+        0,
+        side * 0.15,
+        0,
+        { cast: false },
+      );
+    }
+    // Flap hinge line
+    add(
+      g,
+      new THREE.BoxGeometry(0.22, 0.0012, 0.003),
+      matLine(),
+      side * 0.18,
+      0.049,
+      -0.1,
+      0,
+      0,
+      0,
+      { cast: false },
+    );
+  }
+
+  // —— Wingtip rails + AIM-9 ——
+  for (const side of [-1, 1]) {
+    add(g, new THREE.BoxGeometry(0.012, 0.014, 0.08), matLine(), side * 0.39, 0.042, -0.04);
+    const aim = add(
+      g,
+      new THREE.CapsuleGeometry(0.008, 0.1, 4, 8),
+      matStd(missile, { metalness: 0.55, roughness: 0.35 }),
+      side * 0.39,
+      0.042,
+      -0.02,
+      Math.PI / 2,
+    );
+    add(g, new THREE.ConeGeometry(0.008, 0.03, 6), matStd(0xb0b4b8, { metalness: 0.6, roughness: 0.3 }), side * 0.39, 0.042, 0.08, -Math.PI / 2);
+    // Fins
+    for (const a of [0, Math.PI / 2]) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.0015, 0.018), matLine());
+      fin.position.set(side * 0.39, 0.042, -0.06);
+      fin.rotation.z = a;
+      g.add(fin);
+    }
+    void aim;
+  }
+
+  // —— Ventral intake (single engine) ——
+  add(g, new THREE.BoxGeometry(0.09, 0.055, 0.16), matLower(), 0, 0.005, 0.1);
+  add(g, new THREE.BoxGeometry(0.078, 0.04, 0.02), matStd(intakeLip, { metalness: 0.7, roughness: 0.3 }), 0, 0.0, 0.185);
+  // Intake tunnel dark
+  add(g, new THREE.BoxGeometry(0.06, 0.03, 0.08), matStd(0x0a0c0e, { metalness: 0.4, roughness: 0.6 }), 0, -0.005, 0.12, 0, 0, 0, {
+    cast: false,
+  });
+
+  // Targeting pod under intake (right)
+  add(g, new THREE.CapsuleGeometry(0.012, 0.06, 3, 6), matStd(0x2a3034, { metalness: 0.65, roughness: 0.35 }), 0.055, -0.01, 0.08, Math.PI / 2);
+
+  // —— Underwing pylons: drop tanks (inner) + GBU (outer) ——
+  for (const side of [-1, 1]) {
+    // Inner pylon + drop tank
+    add(g, new THREE.BoxGeometry(0.012, 0.045, 0.05), matLine(), side * 0.16, 0.015, 0.0);
+    add(
+      g,
+      new THREE.CapsuleGeometry(0.022, 0.14, 4, 8),
+      matLower(),
+      side * 0.16,
+      -0.012,
+      0.02,
+      Math.PI / 2,
+    );
+    // Outer pylon + GBU bomb
+    add(g, new THREE.BoxGeometry(0.01, 0.04, 0.04), matLine(), side * 0.26, 0.018, -0.02);
+    const bomb = add(
+      g,
+      new THREE.CapsuleGeometry(0.014, 0.08, 3, 6),
+      matStd(oliveBomb, { metalness: 0.35, roughness: 0.55 }),
+      side * 0.26,
+      -0.01,
+      -0.02,
+      Math.PI / 2,
+      0,
+      0,
+      { name: "airBombStore" },
+    );
+    add(
+      g,
+      new THREE.ConeGeometry(0.012, 0.028, 6),
+      matStd(seeker, { metalness: 0.7, roughness: 0.25 }),
+      side * 0.26,
+      -0.01,
+      0.05,
+      -Math.PI / 2,
+    );
+    // Bomb fins
+    for (const a of [0, Math.PI / 2]) {
+      const bf = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.0015, 0.022), matLine());
+      bf.position.set(side * 0.26, -0.01, -0.07);
+      bf.rotation.z = a;
+      g.add(bf);
+    }
+    void bomb;
+  }
+
+  // —— Aft fuselage + single nozzle ——
+  add(g, new THREE.CylinderGeometry(0.05, 0.042, 0.2, 12), matUpper(), 0, 0.05, -0.2, Math.PI / 2);
+  // Turkey-feather nozzle
+  const nozzle = add(
+    g,
+    new THREE.CylinderGeometry(0.028, 0.036, 0.055, 12),
+    matStd(burnt, {
+      metalness: 0.55,
+      roughness: 0.4,
+      emissive: 0xff5520,
+      emissiveIntensity: 0.25,
+    }),
+    0,
+    0.048,
+    -0.32,
+    Math.PI / 2,
+    0,
+    0,
+    { name: "airAfterburner" },
+  );
+  void nozzle;
+  // Nozzle petals hint
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    add(
+      g,
+      new THREE.BoxGeometry(0.008, 0.0015, 0.03),
+      matStd(0x2a2418, { metalness: 0.6, roughness: 0.45 }),
+      Math.cos(a) * 0.03,
+      0.048 + Math.sin(a) * 0.03,
+      -0.335,
+      0,
+      0,
+      a,
+      { cast: false },
+    );
+  }
+
+  // —— Vertical stabilizer ——
+  const vShape = new THREE.Shape();
+  vShape.moveTo(0, 0);
+  vShape.lineTo(0.02, 0.16);
+  vShape.lineTo(-0.08, 0.15);
+  vShape.lineTo(-0.1, 0);
+  vShape.closePath();
+  const vGeo = new THREE.ExtrudeGeometry(vShape, { depth: 0.012, bevelEnabled: false });
+  const vStab = new THREE.Mesh(vGeo, matUpper());
+  vStab.rotation.y = Math.PI / 2;
+  vStab.position.set(0.006, 0.07, -0.2);
+  g.add(vStab);
+  // Tail tip stripe (low-vis unit mark)
+  add(g, new THREE.BoxGeometry(0.01, 0.02, 0.04), matStd(accent, { metalness: 0.45, roughness: 0.4 }), 0, 0.21, -0.22, 0, 0, 0, {
+    tint: true,
+  });
+  // Rudder seam
+  add(g, new THREE.BoxGeometry(0.0015, 0.1, 0.003), matLine(), 0, 0.13, -0.24, 0, 0, 0, { cast: false });
+
+  // —— All-moving horizontal stabilators ——
+  const hShape = new THREE.Shape();
+  hShape.moveTo(0, 0.04);
+  hShape.lineTo(0.16, -0.02);
+  hShape.lineTo(0.14, -0.08);
+  hShape.lineTo(0, -0.02);
+  hShape.closePath();
+  const hGeo = new THREE.ExtrudeGeometry(hShape, { depth: 0.01, bevelEnabled: false });
+  const hL = new THREE.Mesh(hGeo, matUpper());
+  hL.rotation.x = -Math.PI / 2;
+  hL.position.set(0, 0.048, -0.26);
+  g.add(hL);
+  const hR = hL.clone();
+  hR.scale.x = -1;
+  g.add(hR);
+
+  // Ventral fins
+  for (const side of [-1, 1]) {
+    add(g, new THREE.BoxGeometry(0.008, 0.04, 0.06), matLower(), side * 0.035, 0.01, -0.22, 0, 0, side * 0.35);
+  }
+
+  // —— Landing gear (visible when hangared) ——
+  const gear = new THREE.Group();
+  gear.name = "f16Gear";
+  g.add(gear);
+  const strut = (x, z, tall) => {
+    add(gear, new THREE.CylinderGeometry(0.004, 0.005, tall, 5), matStd(0xd0d4d8, { metalness: 0.7, roughness: 0.3 }), x, -tall * 0.35, z);
+    add(gear, new THREE.TorusGeometry(0.014, 0.005, 6, 10), matStd(0x1a1a1a, { metalness: 0.3, roughness: 0.7 }), x, -tall * 0.7, z, Math.PI / 2);
+  };
+  strut(0, 0.16, 0.08); // nose
+  strut(-0.05, -0.02, 0.09);
+  strut(0.05, -0.02, 0.09);
+
+  // Invisible pick volume — thin jet silhouettes are hard to click otherwise.
+  const pickVol = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.14, 0.42, 4, 8),
+    new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    }),
+  );
+  pickVol.name = "airPickVolume";
+  pickVol.rotation.x = Math.PI / 2;
+  pickVol.position.set(0, 0.05, 0.02);
+  pickVol.castShadow = false;
+  pickVol.receiveShadow = false;
+  g.add(pickVol);
+
+  // Muzzle / bomb release point under belly
+  const muzzle = new THREE.Object3D();
+  muzzle.name = "muzzle";
+  muzzle.position.set(0, -0.04, 0.05);
+  g.add(muzzle);
+
+  // Soft ground blob
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.32, 20),
+    new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+    }),
+  );
+  shadow.name = "airShadow";
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = -2.95;
+  shadow.castShadow = false;
+  g.add(shadow);
+
+  g.scale.setScalar(1.05);
+  return applyDirectionalShadows(g);
 }
 
 function createAirMesh(teamColor, kind = "") {
   const k = String(kind || "");
+  if (isF16Kind(k)) return createF16Mesh(teamColor);
+
   const heli =
     k.includes("comanche") ||
     k.includes("helix") ||
@@ -8492,7 +9012,7 @@ function createAirMesh(teamColor, kind = "") {
       g.add(rear);
     }
   } else {
-    // Jet fighter — swept delta, metallic skin, underwing bombs
+    // Generic jet (raptor / mig) — swept delta
     const fuse = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.038, 0.36, 4, 10),
       metal(hull, 0.88, 0.22),
@@ -8515,7 +9035,6 @@ function createAirMesh(teamColor, kind = "") {
     canopy.scale.set(1, 0.7, 1.3);
     g.add(canopy);
 
-    // Swept wings
     const wingShape = new THREE.Shape();
     wingShape.moveTo(0, 0.08);
     wingShape.lineTo(0.32, -0.06);
@@ -8537,7 +9056,6 @@ function createAirMesh(teamColor, kind = "") {
     g.add(wingR);
     g.userData.tintParts.push(wingL, wingR);
 
-    // Accent leading-edge strip
     const ledge = new THREE.Mesh(
       new THREE.BoxGeometry(0.5, 0.006, 0.018),
       gloss(accent),
@@ -8547,7 +9065,6 @@ function createAirMesh(teamColor, kind = "") {
     g.add(ledge);
     g.userData.tintParts.push(ledge);
 
-    // Twin intakes / engines
     for (const side of [-1, 1]) {
       const intake = new THREE.Mesh(
         new THREE.CylinderGeometry(0.016, 0.02, 0.1, 8),
@@ -8571,7 +9088,6 @@ function createAirMesh(teamColor, kind = "") {
       g.add(nozzle);
     }
 
-    // Vertical + horizontal stabilizers
     const vStab = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.11, 0.1), metal(hull, 0.85, 0.25));
     vStab.position.set(0, 0.1, -0.18);
     vStab.rotation.x = -0.15;
@@ -8580,7 +9096,6 @@ function createAirMesh(teamColor, kind = "") {
     hStab.position.set(0, 0.05, -0.2);
     g.add(hStab);
 
-    // Underwing bombs / pylons
     for (const side of [-1, 1]) {
       const pylon = new THREE.Mesh(
         new THREE.BoxGeometry(0.012, 0.04, 0.04),
@@ -8599,12 +9114,27 @@ function createAirMesh(teamColor, kind = "") {
     }
   }
 
+  // Invisible pick volume for jets / helis.
+  const pickVol = new THREE.Mesh(
+    new THREE.CapsuleGeometry(heli ? 0.12 : 0.14, heli ? 0.32 : 0.4, 4, 8),
+    new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    }),
+  );
+  pickVol.name = "airPickVolume";
+  pickVol.rotation.x = Math.PI / 2;
+  pickVol.position.set(0, heli ? 0.06 : 0.04, 0);
+  pickVol.castShadow = false;
+  pickVol.receiveShadow = false;
+  g.add(pickVol);
+
   const muzzle = new THREE.Object3D();
   muzzle.name = "muzzle";
   muzzle.position.set(0, heli ? 0.02 : -0.02, heli ? 0.18 : 0.05);
   g.add(muzzle);
 
-  // Soft contact hint under aircraft (real sun shadow does the heavy lifting)
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(heli ? 0.22 : 0.28, 16),
     new THREE.MeshBasicMaterial({
@@ -8622,6 +9152,18 @@ function createAirMesh(teamColor, kind = "") {
   g.add(shadow);
 
   return applyDirectionalShadows(g);
+}
+
+function isHeavyTankKind(kind) {
+  const k = String(kind || "");
+  // Exact "tank" = USA M1A1 (not tank_hunter / etc).
+  return (
+    k === "tank" ||
+    k.includes("abrams") ||
+    k.includes("paladin") ||
+    k.includes("marauder") ||
+    k.includes("overlord")
+  );
 }
 
 function createUnitMesh(kind, teamColor) {
@@ -8972,10 +9514,20 @@ function upsertMesh(entity) {
   } else if (mesh.userData.isUnitRig) {
     applyUnitMotion(mesh, entity);
     if (mesh.userData.isAir || isAirUnitKind(entity.kind)) {
+      if (mesh.userData.isF16) {
+        mesh.userData.hangared = !entity.airborne;
+      }
       const groundY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
-      mesh.position.y = groundY + (mesh.userData.airAltitude || 2.4);
+      const hangared = !!mesh.userData.isF16 && mesh.userData.hangared;
+      const alt = hangared
+        ? mesh.userData.hangarAltitude ?? 0.13
+        : mesh.userData.airAltitude || 2.4;
+      mesh.userData.currentAlt = alt;
+      mesh.position.y = groundY + alt;
       const shadow = mesh.getObjectByName("airShadow");
       if (shadow) shadow.position.y = groundY + 0.02 - mesh.position.y;
+      const gear = mesh.getObjectByName("f16Gear");
+      if (gear) gear.visible = hangared;
     } else {
       applyGroundPose(mesh, 1 / 20, {
         tilt: true,
@@ -9613,9 +10165,18 @@ function updateInfantryDrive(mesh, dt) {
 
 function updateAirDrive(mesh, dt) {
   if (!mesh?.userData?.isAir || mesh.userData.knock) return;
-  const alt = mesh.userData.airAltitude || 2.4;
-  const bob = Math.sin(performance.now() * 0.002 + (mesh.userData.id || "").length) * 0.04;
-  if (mesh.userData.destX != null && mesh.userData.destZ != null) {
+  const hangared = !!mesh.userData.isF16 && mesh.userData.hangared;
+  const cruise = mesh.userData.airAltitude || 2.4;
+  const pad = mesh.userData.hangarAltitude ?? 0.13;
+  const wantAlt = hangared ? pad : cruise;
+  const curAlt = mesh.userData.currentAlt ?? wantAlt;
+  mesh.userData.currentAlt =
+    curAlt + (wantAlt - curAlt) * Math.min(1, dt * (hangared ? 2.2 : 1.4));
+  const alt = mesh.userData.currentAlt;
+  const bob = hangared
+    ? 0
+    : Math.sin(performance.now() * 0.002 + (mesh.userData.id || "").length) * 0.04;
+  if (mesh.userData.destX != null && mesh.userData.destZ != null && !hangared) {
     slideToward(mesh, dt);
   }
   mesh.position.y = sampleTerrainHeight(mesh.position.x, mesh.position.z) + alt + bob;
@@ -9624,47 +10185,53 @@ function updateAirDrive(mesh, dt) {
   if (shadow) {
     const gy = sampleTerrainHeight(mesh.position.x, mesh.position.z);
     shadow.position.y = gy + 0.02 - mesh.position.y;
+    if (shadow.material) shadow.material.opacity = hangared ? 0.22 : 0.12;
   }
 
+  const gear = mesh.getObjectByName("f16Gear");
+  if (gear) gear.visible = hangared;
+
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
-  if (speed > 0.05) {
+  if (!hangared && speed > 0.05) {
     const yaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
     mesh.userData.faceYaw = yaw;
     mesh.userData.moving = true;
-    // Bank into turns
     let dyaw = yaw - (mesh.userData.prevFaceYaw || yaw);
     while (dyaw > Math.PI) dyaw -= Math.PI * 2;
     while (dyaw < -Math.PI) dyaw += Math.PI * 2;
     const wantBank = THREE.MathUtils.clamp(-dyaw * 4.5, -0.55, 0.55);
     mesh.userData.bank = (mesh.userData.bank || 0) * 0.85 + wantBank * 0.15;
     mesh.userData.prevFaceYaw = yaw;
-  } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 280) {
+  } else if (hangared || performance.now() - (mesh.userData.moveSeenAt || 0) > 280) {
     mesh.userData.moving = false;
     mesh.userData.bank = (mesh.userData.bank || 0) * 0.9;
   }
 
   mesh.rotation.order = "YXZ";
-  mesh.rotation.z = mesh.userData.bank || 0;
-  mesh.rotation.x = mesh.userData.isJet
-    ? mesh.userData.moving
-      ? -0.12
-      : -0.04
-    : mesh.userData.moving
-      ? 0.06
-      : 0.02;
+  mesh.rotation.z = hangared ? 0 : mesh.userData.bank || 0;
+  mesh.rotation.x = hangared
+    ? 0
+    : mesh.userData.isJet
+      ? mesh.userData.moving
+        ? -0.12
+        : -0.04
+      : mesh.userData.moving
+        ? 0.06
+        : 0.02;
 
-  // Afterburner flicker for jets
   if (mesh.userData.isJet) {
     mesh.traverse((obj) => {
       if (obj.name === "airAfterburner" && obj.material) {
-        obj.material.emissiveIntensity =
-          (mesh.userData.moving ? 0.55 : 0.2) + Math.sin(performance.now() * 0.02) * 0.12;
+        const on = !hangared && !!mesh.userData.moving;
+        obj.material.emissiveIntensity = on
+          ? 0.45 + Math.sin(performance.now() * 0.03) * 0.18
+          : 0.05;
       }
     });
   }
 
   // Spin rotors
-  const spin = (mesh.userData.moving ? 22 : 14) * dt;
+  const spin = hangared ? 0 : (mesh.userData.moving ? 22 : 14) * dt;
   mesh.traverse((obj) => {
     if (obj.name === "airRotor") obj.rotation.y += spin;
     if (obj.name === "airTailRotor") obj.rotation.x += spin * 1.8;
@@ -10927,7 +11494,42 @@ function buildingWreckScale(kind) {
   return 1.1;
 }
 
-/** Building death: collapse boom, rubble settle, burn ~10s, then remove. */
+/** Burst of soft dust for building collapse — billboard sprites, not hard spheres. */
+function emitBuildingCollapseDust(x, z, scale = 1, bursts = 28) {
+  if (!scene) return;
+  ensureTankDustAssets();
+  const gy = sampleTerrainHeight(x, z);
+  for (let i = 0; i < bursts; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = (0.15 + Math.random() * 0.85) * scale;
+    const spr = new THREE.Sprite(tankDustMat.clone());
+    spr.material.opacity = 0.35 + Math.random() * 0.35;
+    spr.userData.baseOpacity = spr.material.opacity;
+    const sz = (0.45 + Math.random() * 0.9) * scale;
+    spr.scale.set(sz, sz, 1);
+    spr.userData.baseScale = sz;
+    spr.position.set(
+      x + Math.cos(ang) * dist * 0.35,
+      gy + 0.08 + Math.random() * 0.25 * scale,
+      z + Math.sin(ang) * dist * 0.35,
+    );
+    spr.userData.vx = Math.cos(ang) * (0.35 + Math.random() * 0.9) * scale;
+    spr.userData.vy = 0.55 + Math.random() * 1.1;
+    spr.userData.vz = Math.sin(ang) * (0.35 + Math.random() * 0.9) * scale;
+    spr.userData.life = 900 + Math.random() * 1100;
+    spr.userData.born = performance.now();
+    spr.userData.grow = 1.8 + Math.random();
+    scene.add(spr);
+    tankDustPuffs.push(spr);
+    while (tankDustPuffs.length > TANK_DUST_MAX) {
+      const old = tankDustPuffs.shift();
+      scene.remove(old);
+      old.material?.dispose?.();
+    }
+  }
+}
+
+/** Building death: collapse boom, rubble settle, heavy dust, burn, then remove. */
 function beginBuildingWreck(mesh, x, z, kind) {
   if (!mesh || mesh.userData.wreck) return;
   const px = x ?? mesh.position.x;
@@ -10936,19 +11538,29 @@ function beginBuildingWreck(mesh, x, z, kind) {
   clearDamageFire(mesh);
   Sfx.buildingCollapse(px, pz);
   spawnBuildingExplosion(new THREE.Vector3(px, 0.35 * scale, pz), scale);
+  emitBuildingCollapseDust(px, pz, scale, 32);
+  // Secondary dust clouds as the structure settles.
   setTimeout(() => {
-    if (!mesh.userData?.wreck || !scene) return;
+    if (!scene) return;
+    emitBuildingCollapseDust(px, pz, scale * 1.15, 22);
     spawnBuildingExplosion(
-      new THREE.Vector3(mesh.position.x + (Math.random() - 0.5) * 0.2, 0.25 * scale, mesh.position.z),
-      scale * 0.7,
+      new THREE.Vector3(px + (Math.random() - 0.5) * 0.25, 0.2 * scale, pz),
+      scale * 0.65,
     );
-  }, 320 + Math.random() * 280);
+  }, 280 + Math.random() * 200);
+  setTimeout(() => {
+    if (!scene) return;
+    emitBuildingCollapseDust(px + (Math.random() - 0.4), pz + (Math.random() - 0.4), scale * 0.9, 16);
+  }, 700 + Math.random() * 400);
 
   mesh.userData.wreck = true;
   mesh.userData.wreckKind = "building";
   mesh.userData.wreckAt = performance.now();
   mesh.userData.wreckLife = BUILDING_WRECK_MS;
   mesh.userData.aimAt = null;
+  mesh.userData.collapseProgress = 0;
+  mesh.userData.collapseSide = Math.random() < 0.5 ? -1 : 1;
+  mesh.userData.collapseBaseY = sampleTerrainHeight(px, pz);
 
   mesh.traverse((obj) => {
     if (!obj.isMesh || !obj.material) return;
@@ -10965,11 +11577,11 @@ function beginBuildingWreck(mesh, x, z, kind) {
     obj.material = Array.isArray(obj.material) ? next : next[0];
   });
 
-  // Collapse / settle — heavier lean than a tank kill.
-  const side = Math.random() < 0.5 ? -1 : 1;
-  mesh.rotation.z += side * (0.12 + Math.random() * 0.18);
-  mesh.rotation.x += 0.04 + Math.random() * 0.1;
-  mesh.position.y = -0.02 * scale;
+  // Initial lean — animation continues in updateWreckFx.
+  const side = mesh.userData.collapseSide;
+  mesh.rotation.z += side * (0.08 + Math.random() * 0.1);
+  mesh.rotation.x += 0.03 + Math.random() * 0.06;
+  mesh.position.y = mesh.userData.collapseBaseY - 0.02 * scale;
 
   const fireRoot = new THREE.Group();
   fireRoot.name = "wreckFire";
@@ -11170,10 +11782,27 @@ function updateTankWreck(mesh, now, dt) {
   }
 
   // Hull / rubble sinks into ash near the end.
-  if (t > 0.75) {
-    const sink = isBuilding ? 0.35 * scale : 0.12;
+  if (isBuilding) {
+    const side = mesh.userData.collapseSide || 1;
+    const collapse = Math.min(1, age / 900);
+    mesh.rotation.z = side * (0.08 + collapse * 0.42);
+    mesh.rotation.x = 0.04 + collapse * 0.22;
+    const squash = 1 - collapse * 0.18;
+    mesh.scale.y = squash;
+    const baseY = mesh.userData.collapseBaseY ?? sampleTerrainHeight(mesh.position.x, mesh.position.z);
+    if (t > 0.75) {
+      mesh.position.y = baseY - 0.02 * scale - (t - 0.75) * 0.35 * scale;
+    } else {
+      mesh.position.y = baseY - 0.02 * scale - collapse * 0.12 * scale;
+    }
+    // Occasional dust while settling.
+    if (collapse < 1 && Math.random() < dt * 2.5) {
+      emitBuildingCollapseDust(mesh.position.x, mesh.position.z, scale * 0.55, 3);
+    }
+  } else if (t > 0.75) {
+    const sink = 0.12;
     const baseY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
-    mesh.position.y = baseY + (isBuilding ? -0.02 * scale : 0.02) - (t - 0.75) * sink;
+    mesh.position.y = baseY + 0.02 - (t - 0.75) * sink;
   } else {
     mesh.position.y = sampleTerrainHeight(mesh.position.x, mesh.position.z);
   }
@@ -11538,8 +12167,53 @@ window.addEventListener("keydown", (event) => {
     if (event.repeat) return;
     event.preventDefault();
     send({ t: "toggle_debug_vision" });
+    return;
+  }
+
+  // Delete / Backspace — demolish selected owned building (not HQ).
+  if (event.key === "Delete" || event.key === "Backspace") {
+    if (!state.match || $("#match-screen")?.hidden) return;
+    if (event.repeat) return;
+    event.preventDefault();
+    demolishSelectedBuilding();
   }
 });
+
+function demolishSelectedBuilding() {
+  const id = state.selectedBuilding;
+  if (!id) {
+    toast("Yıkmak için kendi binanı seç (Delete)");
+    return;
+  }
+  const ent = state.entities.get(id);
+  if (!ent?.building) {
+    toast("Bina seçili değil");
+    return;
+  }
+  if (String(ent.owner) !== String(state.match?.you)) {
+    toast("Sadece kendi binanı yıkabilirsin");
+    return;
+  }
+  if (ent.kind === "hq") {
+    toast("Komuta merkezi yıkılamaz");
+    return;
+  }
+  const def = (state.buildable || []).find((b) => b.kind === ent.kind);
+  const unfinished = ent.progress != null && ent.progress < 1;
+  const scrap = def
+    ? Math.floor((def.cost_gold || 0) / (unfinished ? 2 : 4))
+    : 0;
+  send({ t: "demolish_building", building_id: id });
+  toast(
+    scrap > 0
+      ? `Bina yıkılıyor · ~${scrap}g hurda`
+      : "Bina yıkılıyor",
+    3200,
+  );
+  state.selectedBuilding = null;
+  refreshTrainablePanel();
+  syncSelectionMarkers();
+}
 
 window.addEventListener("keyup", (event) => {
   if (event.key === "Tab") {

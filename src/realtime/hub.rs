@@ -217,6 +217,13 @@ impl MatchHub {
                 })
                 .await?;
             }
+            ClientMsg::DemolishBuilding { building_id } => {
+                self.with_match_mut(user_id, |sim| {
+                    sim.demolish_building(user_id, building_id)
+                        .map_err(|e| e.to_string())
+                })
+                .await?;
+            }
             ClientMsg::MoveUnits { ids, x, y } => {
                 self.with_match_mut(user_id, |sim| {
                     sim.move_units(user_id, &ids, x, y);

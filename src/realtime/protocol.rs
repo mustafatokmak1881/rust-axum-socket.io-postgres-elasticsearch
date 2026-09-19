@@ -45,6 +45,10 @@ pub enum ClientMsg {
         building_id: Uuid,
         unit: String,
     },
+    /// Scrap an owned non-HQ building (partial gold refund + wreck FX).
+    DemolishBuilding {
+        building_id: Uuid,
+    },
     MoveUnits {
         ids: Vec<Uuid>,
         x: f32,
@@ -316,6 +320,9 @@ pub struct EntityView {
     /// Launcher / turret yaw (radians). Sent for tanks and Patriot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim_yaw: Option<f32>,
+    /// F-16 (and similar): true while on a sortie / RTB; false while hangared on the pad.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub airborne: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

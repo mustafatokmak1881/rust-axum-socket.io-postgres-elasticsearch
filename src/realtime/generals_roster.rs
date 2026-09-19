@@ -162,7 +162,7 @@ pub fn trainables() -> &'static [UnitDef] {
         },
         UnitDef {
             // F-16C — hangared at Airfield. Each attack order burns a sortie fee
-            // (see F16_SORTIE_GOLD); jet RTBs after bombs and rearms slowly.
+            // (see F16_SORTIE_GOLD); one bomb then RTB + rearm on the pad.
             // Mk84-class blast sized to erase a tight tank column (~10 MBT seat).
             unit: "f16",
             name: "F-16 Fighting Falcon",

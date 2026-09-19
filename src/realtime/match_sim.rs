@@ -352,7 +352,8 @@ const BUNKER_AIM_ALIGN: f32 = 0.12;
 
 /// F-16 strike: gold per takeoff (not per bomb). Rare, decisive sorties.
 const F16_SORTIE_GOLD: i32 = 6_500;
-const F16_BOMBS: u8 = 2;
+/// One bomb per sortie — drop and RTB immediately.
+const F16_BOMBS: u8 = 1;
 const F16_REARM_MS: u32 = 80_000;
 
 #[inline]
@@ -425,6 +426,12 @@ fn is_rifle_infantry(kind: &str) -> bool {
             | "terrorist"
             | "black_lotus"
     )
+}
+
+/// Spy / hacker / terrorist — invisible to all enemy units (no FOW reveal, no auto-target).
+#[inline]
+fn is_stealth_specialist(kind: &str) -> bool {
+    matches!(kind, "spy" | "hacker" | "terrorist")
 }
 
 /// Match client `atan2(dx, dz)` — yaw 0 faces +Y / +Z.
@@ -2169,6 +2176,14 @@ impl MatchSim {
         for id in ids {
             if let Some(entity) = self.entities.get_mut(id) {
                 if entity.owner == user_id && entity.unit && entity.build_remaining_ms == 0 {
+                    // Hangared F-16 stays on the pad — only attack orders launch a sortie.
+                    if is_f16_kind(&entity.kind)
+                        && entity.mag_ammo == 0
+                        && entity.move_to.is_none()
+                        && entity.target.is_none()
+                    {
+                        continue;
+                    }
                     let (ox, oy) = formation_slot(slot, count, unit_radius(&entity.kind));
                     slot += 1;
                     let gx = (tx + ox).clamp(0.5, map - 0.5);
@@ -2199,6 +2214,10 @@ impl MatchSim {
                 .unwrap_or(255)
         {
             return Ok(());
+        }
+        // Stealth specialists cannot be ordered as attack targets.
+        if is_stealth_specialist(&target.kind) {
+            return Err("Hedef görünmez");
         }
         let mut sortie_err: Option<&'static str> = None;
         let mut armed_any = false;
@@ -2261,6 +2280,8 @@ impl MatchSim {
         player.resources.gold -= F16_SORTIE_GOLD;
         if let Some(e) = self.entities.get_mut(&unit_id) {
             e.mag_ammo = F16_BOMBS;
+            // Leave the pad toward the assigned target (attack() sets target next).
+            e.move_to = None;
             e.dirty = true;
         }
         Ok(())
@@ -2409,6 +2430,69 @@ impl MatchSim {
         }
     }
 
+    /// Player-ordered scrap — frees the slot, refunds scrap gold, plays wreck FX.
+    /// Command Centers cannot be demolished.
+    pub fn demolish_building(
+        &mut self,
+        user_id: Uuid,
+        building_id: Uuid,
+    ) -> Result<(), &'static str> {
+        if self.ended {
+            return Err("Match already ended");
+        }
+        let player = self.players.get(&user_id).ok_or("Not in match")?;
+        if !player.alive {
+            return Err("Eliminated");
+        }
+        let Some(entity) = self.entities.get(&building_id) else {
+            return Err("Building not found");
+        };
+        if entity.owner != user_id || !entity.building {
+            return Err("Bu bina senin değil");
+        }
+        if entity.kind == "hq" {
+            return Err("Komuta merkezi yıkılamaz");
+        }
+
+        let unfinished = entity.build_remaining_ms > 0;
+        let scrap_gold = buildables()
+            .iter()
+            .find(|b| b.kind == entity.kind)
+            .map(|def| {
+                if unfinished {
+                    // Cancel construction — half back.
+                    def.cost_gold / 2
+                } else {
+                    // Scrap finished structure — quarter salvage.
+                    def.cost_gold / 4
+                }
+            })
+            .unwrap_or(0);
+
+        let queue_refund: i32 = entity
+            .train_queue
+            .iter()
+            .filter_map(|job| {
+                trainables()
+                    .iter()
+                    .find(|u| u.unit == job.unit)
+                    .map(|u| u.cost_gold)
+            })
+            .sum();
+
+        let Some(entity) = self.take_entity(building_id) else {
+            return Err("Building not found");
+        };
+        self.refund_building_economy(&entity);
+        if let Some(p) = self.players.get_mut(&user_id) {
+            let back = scrap_gold.saturating_add(queue_refund);
+            p.resources.gold = p.resources.gold.saturating_add(back);
+        }
+        // Voluntary scrap — not a combat loss; still emit as death for wreck FX.
+        self.removed.push(building_id);
+        Ok(())
+    }
+
     pub fn tick_once(&mut self) {
         if self.ended {
             return;
@@ -2476,7 +2560,14 @@ impl MatchSim {
                             }
                         } else if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
                             let uid = Uuid::new_v4();
-                            let (sx, sy) = if is_air_kind(def.unit) {
+                            let (sx, sy) = if is_f16_kind(def.unit) {
+                                // Park on the airfield apron — hangared until a sortie.
+                                let map = self.map_size as f32;
+                                (
+                                    (entity.x + 0.15).clamp(0.5, map - 0.5),
+                                    entity.y.clamp(0.5, map - 0.5),
+                                )
+                            } else if is_air_kind(def.unit) {
                                 self.find_air_spawn_near(
                                     entity.x,
                                     entity.y,
@@ -2884,6 +2975,14 @@ impl MatchSim {
 
             // Shoot any acquired target in range — including while marching to a move order.
             if let Some(tid) = entity.target {
+                if self.entities.get(&tid).is_some_and(|t| {
+                    is_stealth_specialist(&t.kind) && t.team != entity.team
+                }) {
+                    entity.target = None;
+                    entity.dirty = true;
+                }
+            }
+            if let Some(tid) = entity.target {
                 if let Some(target) = self.entities.get(&tid) {
                     let dx = target.x - entity.x;
                     let dy = target.y - entity.y;
@@ -2967,7 +3066,8 @@ impl MatchSim {
                         let hit_p = shot_hit_chance(&kind, target, dist, entity.range, cover.exposure);
                         let mut rng = rand::thread_rng();
                         let hit = if is_f16_kind(&kind) {
-                            rng.gen_range(0.0..1.0) < hit_p.max(0.88)
+                            // Strike package — bomb leaves the jet; impact is the sortie.
+                            true
                         } else {
                             rng.gen_range(0.0..1.0) < hit_p
                         };
@@ -4408,6 +4508,9 @@ impl MatchSim {
             if other.team == team || other.hp <= 0.0 {
                 continue;
             }
+            if is_stealth_specialist(&other.kind) {
+                continue;
+            }
             let dx = other.x - x;
             let dy = other.y - y;
             let dist = (dx * dx + dy * dy).sqrt();
@@ -4460,6 +4563,9 @@ impl MatchSim {
                 continue;
             };
             if other.team == team || other.hp <= 0.0 || !other.unit {
+                continue;
+            }
+            if is_stealth_specialist(&other.kind) {
                 continue;
             }
             let dx = other.x - x;
@@ -5052,6 +5158,7 @@ impl MatchSim {
                     || other.hp <= 0.0
                     || other.team == team
                     || is_vehicle_kind(&other.kind)
+                    || is_stealth_specialist(&other.kind)
                 {
                     return false;
                 }
@@ -5229,6 +5336,10 @@ impl MatchSim {
                 let dx = entity.x - sx;
                 let dy = entity.y - sy;
                 if dx * dx + dy * dy <= radius * radius {
+                    // Enemy stealth specialists stay off FOW / client entirely.
+                    if is_stealth_specialist(&entity.kind) {
+                        return false;
+                    }
                     visible.insert(id);
                 }
                 false
@@ -5447,6 +5558,8 @@ impl MatchSim {
             } else {
                 None
             },
+            airborne: is_f16_kind(&entity.kind)
+                && (entity.mag_ammo > 0 || entity.move_to.is_some() || entity.target.is_some()),
         }
     }
 }
