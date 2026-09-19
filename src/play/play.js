@@ -2233,19 +2233,55 @@ const BUILDING_VISUAL = {
 };
 
 /** Bump when procedural building meshes change so live matches remesh. */
-const BUILDING_FIT_VERSION = 10;
+const BUILDING_FIT_VERSION = 11;
 /** Procedural Patriot mesh revision — forces remesh of old batteries. */
-const PATRIOT_RIG_VERSION = 5;
+const PATRIOT_RIG_VERSION = 6;
 /** China Gattling Cannon mesh revision. */
-const GATLING_DEF_VERSION = 1;
+const GATLING_DEF_VERSION = 2;
 /** Strategy Center / tech building mesh revision. */
-const STRATEGY_RIG_VERSION = 1;
+const STRATEGY_RIG_VERSION = 2;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
-const TANK_RIG_VERSION = 15;
+const TANK_RIG_VERSION = 16;
 /** Infantry mesh revision. */
-const INFANTRY_RIG_VERSION = 9;
+const INFANTRY_RIG_VERSION = 10;
 /** MLRS mesh revision. */
-const MLRS_RIG_VERSION = 3;
+const MLRS_RIG_VERSION = 4;
+
+function mixHex(a, b, t) {
+  const A = a >>> 0;
+  const B = b >>> 0;
+  const u = Math.max(0, Math.min(1, t));
+  const ar = (A >> 16) & 255;
+  const ag = (A >> 8) & 255;
+  const ab = A & 255;
+  const br = (B >> 16) & 255;
+  const bg = (B >> 8) & 255;
+  const bb = B & 255;
+  const r = Math.round(ar + (br - ar) * u);
+  const g = Math.round(ag + (bg - ag) * u);
+  const bl = Math.round(ab + (bb - ab) * u);
+  return (r << 16) | (g << 8) | bl;
+}
+
+/** Normalize entity / player tricolor (body · stripe · accent). */
+function resolveOwnerColors(input) {
+  if (Array.isArray(input) && input.length >= 3) {
+    return [input[0] >>> 0, input[1] >>> 0, input[2] >>> 0];
+  }
+  if (input && typeof input === "object" && Array.isArray(input.colors)) {
+    return resolveOwnerColors(input.colors);
+  }
+  const c = (Number(input) || 0x888888) >>> 0;
+  return [c, mixHex(c, 0xffffff, 0.25), mixHex(c, 0x000000, 0.35)];
+}
+
+
+function ownerColorsFromMat(fallbackMat, explicit) {
+  if (explicit) return resolveOwnerColors(explicit);
+  if (fallbackMat?.userData?.ownerColors) return resolveOwnerColors(fallbackMat.userData.ownerColors);
+  const hex = fallbackMat?.color?.getHex?.();
+  return resolveOwnerColors(hex);
+}
 
 function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) {
   const m = new THREE.Mesh(
@@ -2262,6 +2298,7 @@ function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}
     m.material.opacity = opts.opacity ?? 0.85;
     m.material.depthWrite = (opts.opacity ?? 0.85) >= 0.95;
   }
+  if (opts.livery) m.userData.livery = opts.livery;
   m.position.set(x, y, z);
   m.rotation.set(rx, ry, rz);
   m.castShadow = opts.cast !== false;
@@ -2270,7 +2307,45 @@ function bldgPart(parent, geo, color, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}
   return m;
 }
 
-function finishProcBuilding(root, kind, unitHeight) {
+/** Vertical tricolor identity plate — readable ownership at a glance. */
+function attachOwnerTricolor(root, colors, opts = {}) {
+  const [c0, c1, c2] = resolveOwnerColors(colors);
+  const existing = root.getObjectByName("ownerTricolor");
+  if (existing) {
+    existing.children.forEach((ch, i) => {
+      if (ch.material?.color) ch.material.color.setHex([c0, c1, c2][i]);
+    });
+    return existing;
+  }
+  const g = new THREE.Group();
+  g.name = "ownerTricolor";
+  const w = opts.w ?? 0.36;
+  const h = opts.h ?? 0.11;
+  const d = opts.d ?? 0.025;
+  const band = w / 3;
+  for (let i = 0; i < 3; i++) {
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(band * 0.96, h, d),
+      matStd([c0, c1, c2][i], { metalness: 0.25, roughness: 0.48 }),
+    );
+    m.position.set((i - 1) * band, 0, 0);
+    m.castShadow = false;
+    g.add(m);
+  }
+  // Thin frame
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.02, h + 0.02, d * 0.5),
+    matStd(0x1a1c18, { metalness: 0.4, roughness: 0.6 }),
+  );
+  frame.position.z = -d * 0.35;
+  frame.castShadow = false;
+  g.add(frame);
+  g.position.set(opts.x ?? 0, opts.y ?? 0.55, opts.z ?? 0.78);
+  root.add(g);
+  return g;
+}
+
+function finishProcBuilding(root, kind, unitHeight, ownerColors) {
   root.userData.building = true;
   root.userData.modelKind = kind;
   root.userData.isFallback = false;
@@ -2278,12 +2353,52 @@ function finishProcBuilding(root, kind, unitHeight) {
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
   root.userData.unitHeight = unitHeight;
   root.userData.procBuilding = true;
+  const cols = resolveOwnerColors(ownerColors);
+  root.userData.ownerColors = cols;
+  const badgeY =
+    kind === "hq"
+      ? 1.05
+      : kind === "war_factory" || kind === "airfield"
+        ? 0.72
+        : kind === "turret" || kind === "bunker"
+          ? 0.42
+          : 0.58;
+  const badgeZ =
+    kind === "hq" ? 0.95 : kind === "airfield" ? 0.55 : kind === "war_factory" ? 0.75 : 0.62;
+  attachOwnerTricolor(root, cols, { y: badgeY, z: badgeZ });
   return applyDirectionalShadows(root);
 }
 
-function milPalette(accent) {
+/**
+ * Military materials biased toward the commander's tricolor
+ * (c0 body · c1 stripe/concrete wash · c2 accent/warning).
+ */
+function milPalette(accentOrColors) {
+  const asColors = Array.isArray(accentOrColors) ? resolveOwnerColors(accentOrColors) : null;
+  if (asColors) {
+    const [c0, c1, c2] = asColors;
+    return {
+      accent: c2,
+      olive: mixHex(c0, 0x3e4634, 0.32),
+      oliveDark: mixHex(c0, 0x2a3024, 0.4),
+      oliveLight: mixHex(c1, 0x525a42, 0.35),
+      concrete: mixHex(c1, 0x5c5a52, 0.72),
+      concreteDark: mixHex(c0, 0x3e3c36, 0.78),
+      concreteLight: mixHex(c1, 0x6e6a60, 0.68),
+      metal: mixHex(c1, 0x5a6068, 0.62),
+      metalBright: mixHex(c2, 0x8a929c, 0.48),
+      rust: mixHex(c0, 0x5a4030, 0.7),
+      glass: 0x152028,
+      sand: mixHex(c1, 0x6b6550, 0.75),
+      warning: c2,
+      black: 0x101214,
+      steel: mixHex(c1, 0x6a727a, 0.55),
+      panel: mixHex(c0, 0x484e54, 0.5),
+    };
+  }
+  const accent = accentOrColors ?? 0x556b2f;
   return {
-    accent: accent ?? 0x556b2f,
+    accent,
     olive: 0x3e4634,
     oliveDark: 0x2a3024,
     oliveLight: 0x525a42,
@@ -2303,8 +2418,9 @@ function milPalette(accent) {
 }
 
 /** Command Center — fortified HQ blockhouse + comms tower. */
-function createCommandCenterMesh(fallbackMat) {
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+function createCommandCenterMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const p = milPalette(cols);
   const root = new THREE.Group();
 
   // Plinth / blast apron — Generals CC concrete pad
@@ -2454,12 +2570,13 @@ function createCommandCenterMesh(fallbackMat) {
     });
   }
 
-  return finishProcBuilding(root, "hq", 2.05);
+  return finishProcBuilding(root, "hq", 2.05, cols);
 }
 
 /** Barracks — Quonset hall + side annex. */
-function createBarracksMesh(fallbackMat) {
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+function createBarracksMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const p = milPalette(cols);
   const root = new THREE.Group();
 
   bldgPart(root, new THREE.BoxGeometry(1.25, 0.05, 0.85), p.concreteDark, 0, 0.025, 0, 0, 0, 0, {
@@ -2535,12 +2652,13 @@ function createBarracksMesh(fallbackMat) {
     });
   }
 
-  return finishProcBuilding(root, "barracks", 0.7);
+  return finishProcBuilding(root, "barracks", 0.7, cols);
 }
 
 /** Cold Fusion Reactor — containment drum + cooling stacks. */
-function createPowerPlantMesh(fallbackMat) {
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+function createPowerPlantMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const p = milPalette(cols);
   const root = new THREE.Group();
 
   bldgPart(root, new THREE.CylinderGeometry(0.72, 0.78, 0.06, 16), p.concreteDark, 0, 0.03, 0, 0, 0, 0, {
@@ -2615,12 +2733,13 @@ function createPowerPlantMesh(fallbackMat) {
   });
   bldgPart(root, new THREE.BoxGeometry(0.5, 0.04, 0.05), p.accent, 0.55, 0.36, -0.35);
 
-  return finishProcBuilding(root, "power_plant", 1.05);
+  return finishProcBuilding(root, "power_plant", 1.05, cols);
 }
 
 /** Supply Center — warehouse + dock + crates. */
-function createSupplyCenterMesh(fallbackMat) {
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+function createSupplyCenterMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const p = milPalette(cols);
   const root = new THREE.Group();
 
   bldgPart(root, new THREE.BoxGeometry(1.55, 0.05, 1.15), p.concreteDark, 0, 0.025, 0, 0, 0, 0, {
@@ -2688,12 +2807,13 @@ function createSupplyCenterMesh(fallbackMat) {
   }
 
   bldgPart(root, new THREE.BoxGeometry(1.0, 0.04, 0.05), p.accent, 0, 0.5, 0.38);
-  return finishProcBuilding(root, "supply", 0.85);
+  return finishProcBuilding(root, "supply", 0.85, cols);
 }
 
 /** War Factory — tank hangar + assembly bay. */
-function createWarFactoryMesh(fallbackMat) {
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+function createWarFactoryMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const p = milPalette(cols);
   const root = new THREE.Group();
 
   bldgPart(root, new THREE.BoxGeometry(1.95, 0.06, 1.45), p.concreteDark, 0, 0.03, 0, 0, 0, 0, {
@@ -2779,12 +2899,13 @@ function createWarFactoryMesh(fallbackMat) {
   });
 
   bldgPart(root, new THREE.BoxGeometry(1.4, 0.05, 0.06), p.accent, 0, 0.55, 0.56);
-  return finishProcBuilding(root, "war_factory", 1.35);
+  return finishProcBuilding(root, "war_factory", 1.35, cols);
 }
 
 /** USA Airfield — runway strip, hangar, control cabin. */
-function createAirfieldMesh(fallbackMat) {
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+function createAirfieldMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const p = milPalette(cols);
   const root = new THREE.Group();
   const asphalt = 0x3a3c40;
   const asphaltDark = 0x2a2c30;
@@ -2854,20 +2975,22 @@ function createAirfieldMesh(fallbackMat) {
   });
   bldgPart(root, new THREE.BoxGeometry(0.28, 0.16, 0.22), p.warning, 0.95, 0.12, 0.35);
 
-  return finishProcBuilding(root, "airfield", 1.55);
+  return finishProcBuilding(root, "airfield", 1.55, cols);
 }
 
-function createBuildingMesh(kind, fallbackMat) {
-  if (kind === "turret" || kind === "stinger_site") return createPatriotBatteryMesh(fallbackMat);
-  if (kind === "gatling_cannon") return createGattlingCannonMesh(fallbackMat);
-  if (kind === "bunker" || kind === "tunnel_network") return createBunkerMesh(fallbackMat);
+function createBuildingMesh(kind, fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  if (fallbackMat) fallbackMat.userData = { ...(fallbackMat.userData || {}), ownerColors: cols };
+  if (kind === "turret" || kind === "stinger_site") return createPatriotBatteryMesh(fallbackMat, cols);
+  if (kind === "gatling_cannon") return createGattlingCannonMesh(fallbackMat, cols);
+  if (kind === "bunker" || kind === "tunnel_network") return createBunkerMesh(fallbackMat, cols);
   if (kind === "demo_trap") {
-    const m = createBunkerMesh(fallbackMat);
+    const m = createBunkerMesh(fallbackMat, cols);
     m.scale.setScalar(0.55);
     return m;
   }
-  if (kind === "firebase") return createFirebaseMesh(fallbackMat);
-  if (kind === "hq") return createCommandCenterMesh(fallbackMat);
+  if (kind === "firebase") return createFirebaseMesh(fallbackMat, cols);
+  if (kind === "hq") return createCommandCenterMesh(fallbackMat, cols);
   if (
     kind === "strategy_center" ||
     kind === "propaganda_center" ||
@@ -2875,9 +2998,9 @@ function createBuildingMesh(kind, fallbackMat) {
     kind === "internet_center" ||
     kind === "black_market"
   ) {
-    return createStrategyCenterMesh(fallbackMat, kind);
+    return createStrategyCenterMesh(fallbackMat, kind, cols);
   }
-  if (kind === "barracks") return createBarracksMesh(fallbackMat);
+  if (kind === "barracks") return createBarracksMesh(fallbackMat, cols);
   if (
     kind === "power_plant" ||
     kind === "nuclear_reactor" ||
@@ -2885,26 +3008,27 @@ function createBuildingMesh(kind, fallbackMat) {
     kind === "nuclear_silo" ||
     kind === "scud_storm"
   ) {
-    const m = createPowerPlantMesh(fallbackMat);
+    const m = createPowerPlantMesh(fallbackMat, cols);
     if (kind === "particle_cannon" || kind === "nuclear_silo" || kind === "scud_storm") {
       m.scale.setScalar(1.25);
     }
     return m;
   }
-  if (kind === "supply" || kind === "supply_stash") return createSupplyCenterMesh(fallbackMat);
-  if (kind === "war_factory" || kind === "arms_dealer") return createWarFactoryMesh(fallbackMat);
-  if (kind === "airfield") return createAirfieldMesh(fallbackMat);
+  if (kind === "supply" || kind === "supply_stash") return createSupplyCenterMesh(fallbackMat, cols);
+  if (kind === "war_factory" || kind === "arms_dealer") return createWarFactoryMesh(fallbackMat, cols);
+  if (kind === "airfield") return createAirfieldMesh(fallbackMat, cols);
 
   // Unknown kind — small procedural shed
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+  const p = milPalette(cols);
   const root = new THREE.Group();
   bldgPart(root, new THREE.BoxGeometry(0.9, 0.45, 0.7), p.olive, 0, 0.25, 0);
-  return finishProcBuilding(root, kind, 0.5);
+  return finishProcBuilding(root, kind, 0.5, cols);
 }
 
 /** China Gattling Cannon — twin spinning barrels on a pedestal (not a Patriot clone). */
-function createGattlingCannonMesh(fallbackMat) {
-  const accent = fallbackMat?.color?.getHex?.() ?? 0x8a3030;
+function createGattlingCannonMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const accent = cols[0] ?? 0x8a3030;
   const ochre = 0x6a5030;
   const ochreDark = 0x4a3820;
   const metal = 0x3a3e42;
@@ -3025,8 +3149,9 @@ function createGattlingCannonMesh(fallbackMat) {
 }
 
 /** Strategy Center / Palace / Propaganda — tech HQ with dish & battle-plan look. */
-function createStrategyCenterMesh(fallbackMat, kind = "strategy_center") {
-  const p = milPalette(fallbackMat?.color?.getHex?.());
+function createStrategyCenterMesh(fallbackMat, kind = "strategy_center", ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const p = milPalette(cols);
   const root = new THREE.Group();
 
   bldgPart(root, new THREE.BoxGeometry(1.7, 0.06, 1.4), p.concreteDark, 0, 0.03, 0, 0, 0, 0, {
@@ -3104,7 +3229,7 @@ function createStrategyCenterMesh(fallbackMat, kind = "strategy_center") {
     });
   }
 
-  const finished = finishProcBuilding(root, kind, 1.15);
+  const finished = finishProcBuilding(root, kind, 1.15, cols);
   finished.userData.strategyRigVersion = STRATEGY_RIG_VERSION;
   return finished;
 }
@@ -3113,12 +3238,13 @@ function createStrategyCenterMesh(fallbackMat, kind = "strategy_center") {
  * MIM-104 Patriot — M901 Launching Station + AN/MPQ-53 radar (piece-built, Generals scale).
  * Refs: Raytheon LS, M860 trailer, 4× PAC-2 canisters; array face ~hex lattice cue.
  */
-function createPatriotBatteryMesh(fallbackMat) {
-  const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
-  // CARC Forest Green / NATO olive — matte, not chrome.
-  const olive = 0x4a5438;
-  const oliveDk = 0x3a422c;
-  const oliveLt = 0x5a6448;
+function createPatriotBatteryMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const accent = cols[2] ?? cols[0] ?? 0x556b2f;
+  // CARC wash mixed with commander tricolor so ownership reads at a glance.
+  const olive = mixHex(cols[0], 0x4a5438, 0.34);
+  const oliveDk = mixHex(cols[0], 0x3a422c, 0.42);
+  const oliveLt = mixHex(cols[1], 0x5a6448, 0.38);
   const desert = 0x6a6450;
   const iron = 0x4a4840;
   const ironDk = 0x2e2c28;
@@ -3405,8 +3531,9 @@ function createPatriotBatteryMesh(fallbackMat) {
 }
 
 /** Reinforced MG pillbox — crew silhouettes + rotating cupola. */
-function createBunkerMesh(fallbackMat) {
-  const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
+function createBunkerMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const accent = cols[0] ?? 0x556b2f;
   const concrete = 0x4e4c42;
   const concreteDark = 0x35342c;
   const dirt = 0x3a3428;
@@ -3778,8 +3905,9 @@ function createRadarStationMesh(fallbackMat) {
 }
 
 /** USA Fire Base — howitzer pit + sandbags (not a radar dish). */
-function createFirebaseMesh(fallbackMat) {
-  const accent = fallbackMat?.color?.getHex?.() ?? 0x556b2f;
+function createFirebaseMesh(fallbackMat, ownerColors) {
+  const cols = ownerColorsFromMat(fallbackMat, ownerColors);
+  const accent = cols[0] ?? 0x556b2f;
   const olive = 0x4a5538;
   const oliveDark = 0x343c2c;
   const oliveLight = 0x5a6648;
