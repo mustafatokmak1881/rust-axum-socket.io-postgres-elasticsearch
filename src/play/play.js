@@ -1002,6 +1002,17 @@ function mergeDelta(into, extra) {
   }
   into.entities = [...latest.values()];
 
+  // Motions: later pose wins; a full entity for the same id supersedes the motion.
+  const motionMap = new Map();
+  for (const m of into.motions || []) {
+    if (!gone.has(m.id) && !latest.has(m.id)) motionMap.set(m.id, m);
+  }
+  for (const m of extra.motions || []) {
+    if (gone.has(m.id) || latest.has(m.id)) continue;
+    motionMap.set(m.id, m);
+  }
+  into.motions = [...motionMap.values()];
+
   const died = new Set(into.died || []);
   for (const id of extra.died || []) died.add(id);
   into.died = [...died];
@@ -1012,6 +1023,9 @@ function mergeDelta(into, extra) {
   into.removed = [...removed];
 
   into.shots = [...(into.shots || []), ...(extra.shots || [])];
+  if (extra.explored_new?.length) {
+    into.explored_new = [...(into.explored_new || []), ...extra.explored_new];
+  }
   if (extra.scoreboard) into.scoreboard = extra.scoreboard;
   if (typeof extra.global_vision === "boolean") into.global_vision = extra.global_vision;
 }
@@ -1130,6 +1144,33 @@ function applyDelta(msg) {
     state.entities.set(entity.id, entity);
     if (scene) upsertMesh(entity);
     syncBuildingSfx(prev, entity);
+  }
+  // Slim pose updates — merge onto last full EntityView (identity fields stay local).
+  for (const motion of msg.motions || []) {
+    if (gone.has(motion.id)) continue;
+    const prev = state.entities.get(motion.id);
+    if (!prev) continue;
+    if (motion.hp != null && motion.hp <= 0) {
+      dropEntityVisual(motion.id, { wreck: true });
+      continue;
+    }
+    const merged = {
+      ...prev,
+      x: motion.x,
+      y: motion.y,
+      hp: motion.hp,
+      progress: motion.progress !== undefined ? motion.progress : prev.progress,
+      train_progress:
+        motion.train_progress !== undefined ? motion.train_progress : prev.train_progress,
+      prone: !!motion.prone,
+      hacked: !!motion.hacked,
+      aim_at: motion.aim_at !== undefined ? motion.aim_at : prev.aim_at,
+      aim_yaw: motion.aim_yaw !== undefined ? motion.aim_yaw : prev.aim_yaw,
+      airborne: !!motion.airborne,
+    };
+    state.entities.set(motion.id, merged);
+    if (scene) upsertMesh(merged);
+    syncBuildingSfx(prev, merged);
   }
   playShots(msg.shots || []);
   updateArmyCounts();

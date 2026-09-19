@@ -8,8 +8,8 @@ use super::bots::{self, BotMind};
 use super::generals_roster::{self, faction_ok};
 use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
-    BuildableInfo, EntityView, MatchPlayerStats, MatchSnapshot, MountainView, PondView,
-    ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
+    BuildableInfo, EntityMotion, EntityView, MatchPlayerStats, MatchSnapshot, MountainView,
+    PondView, ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
 };
 
 pub const TICK_HZ: u32 = 20;
@@ -122,6 +122,10 @@ pub struct PlayerState {
     pub connected: bool,
     /// Entity ids last acknowledged in this player's vision (enter/leave sync).
     pub aoi_known: HashSet<Uuid>,
+    /// Last full entity snapshot sent on the wire — skip / slim-diff against this.
+    pub last_sent_entities: HashMap<Uuid, EntityView>,
+    /// Last resources payload sent — omit from Delta when unchanged.
+    pub last_sent_resources: Option<ResourcesView>,
     /// Permanent explored shroud (Generals-style).
     pub explored: aoi::ExploredMap,
     /// Computer commander — `None` for human players.
@@ -1074,6 +1078,8 @@ impl MatchSim {
                 alive: true,
                 connected,
                 aoi_known: HashSet::new(),
+                last_sent_entities: HashMap::new(),
+                last_sent_resources: None,
                 explored: aoi::ExploredMap::new(self.map_size),
                 bot,
                 debug_omniscient: false,
@@ -1240,6 +1246,8 @@ impl MatchSim {
         state.bot = None;
         state.connected = true;
         state.aoi_known.clear();
+        state.last_sent_entities.clear();
+        state.last_sent_resources = None;
         // Keep team, colors, resources, explored, home_hq, colonies, stats, focus, alive.
 
         for entity in self.entities.values_mut() {
@@ -1988,6 +1996,8 @@ impl MatchSim {
         if on {
             // Force a full resync of every entity now that the map is open.
             player.aoi_known.clear();
+            player.last_sent_entities.clear();
+            player.last_sent_resources = None;
             player.explored.reveal_all();
             return true;
         }
@@ -5657,6 +5667,7 @@ impl MatchSim {
         user_id: Uuid,
     ) -> (
         Vec<EntityView>,
+        Vec<EntityMotion>,
         Vec<Uuid>,
         Vec<Uuid>,
         Option<ResourcesView>,
@@ -5671,27 +5682,62 @@ impl MatchSim {
             explored_new.truncate(MAX_EXPLORED_NEW);
         }
 
-        let resources = self.resources_view_for(user_id);
-        let Some(player) = self.players.get_mut(&user_id) else {
-            return (vec![], vec![], vec![], None, explored_new, vec![]);
+        let resources_now = self.resources_view_for(user_id);
+        if !self.players.contains_key(&user_id) {
+            return (vec![], vec![], vec![], vec![], None, explored_new, vec![]);
+        }
+        let previously_known = {
+            let player = self.players.get_mut(&user_id).unwrap();
+            std::mem::take(&mut player.aoi_known)
         };
-        let previously_known = std::mem::take(&mut player.aoi_known);
+        let resources = {
+            let player = self.players.get_mut(&user_id).unwrap();
+            match (&resources_now, &player.last_sent_resources) {
+                (Some(now), Some(prev)) if now == prev => None,
+                (Some(now), _) => {
+                    player.last_sent_resources = Some(now.clone());
+                    Some(now.clone())
+                }
+                (None, _) => None,
+            }
+        };
 
         let visible_ids = self.visible_ids_for(user_id);
 
-        let mut entities = Vec::new();
+        // Build candidate views first (needs &self), then diff against last-sent cache.
+        let mut candidates: Vec<(Uuid, EntityView, bool)> = Vec::new();
         for id in &visible_ids {
             let Some(entity) = self.entities.get(id) else {
                 continue;
             };
             let entered_vision = !previously_known.contains(id);
-            if entity.dirty
+            if !(entity.dirty
                 || entity.move_to.is_some()
                 || entity.build_remaining_ms > 0
                 || !entity.train_queue.is_empty()
-                || entered_vision
+                || entered_vision)
             {
-                entities.push(self.entity_view(entity));
+                continue;
+            }
+            candidates.push((*id, self.entity_view(entity), entered_vision));
+        }
+
+        let mut entities = Vec::new();
+        let mut motions = Vec::new();
+        if let Some(player) = self.players.get_mut(&user_id) {
+            for (id, view, entered_vision) in candidates {
+                if let Some(prev) = player.last_sent_entities.get(&id) {
+                    if !entered_vision && view.wire_eq(prev) {
+                        continue;
+                    }
+                    if !entered_vision && prev.static_eq(&view) {
+                        motions.push(view.to_motion());
+                        player.last_sent_entities.insert(id, view);
+                        continue;
+                    }
+                }
+                player.last_sent_entities.insert(id, view.clone());
+                entities.push(view);
             }
         }
 
@@ -5715,6 +5761,16 @@ impl MatchSim {
             removed.push(*id);
         }
 
+        // Drop wire cache for anything that left this viewer's FOW or died.
+        if let Some(player) = self.players.get_mut(&user_id) {
+            for id in died.iter().chain(removed.iter()) {
+                player.last_sent_entities.remove(id);
+            }
+            for id in &self.removed {
+                player.last_sent_entities.remove(id);
+            }
+        }
+
         // Shots only if either end is in this viewer's fog window.
         let shots: Vec<ShotEvent> = self
             .shots
@@ -5736,13 +5792,23 @@ impl MatchSim {
             player.aoi_known = known;
         }
 
-        (entities, removed, died, resources, explored_new, shots)
+        (
+            entities,
+            motions,
+            removed,
+            died,
+            resources,
+            explored_new,
+            shots,
+        )
     }
 
     /// After reconnect, force the next deltas to re-send everything currently visible.
     pub fn force_aoi_resync(&mut self, user_id: Uuid) {
         if let Some(player) = self.players.get_mut(&user_id) {
             player.aoi_known.clear();
+            player.last_sent_entities.clear();
+            player.last_sent_resources = None;
         }
     }
 
