@@ -8356,6 +8356,108 @@ function updateTankDrive(mesh, dt) {
   } else {
     Sfx.stopEngine(id);
   }
+
+  // Track dust — kick up dirt behind the hull while rolling.
+  if (mesh.userData.moving && step > 0.0015) {
+    emitTankDust(mesh, step, now);
+  }
+}
+
+/** Shared dusty puff pool — tracks kick up dirt behind moving vehicles. */
+const tankDustPuffs = [];
+const TANK_DUST_MAX = 96;
+let tankDustMat = null;
+let tankDustGeo = null;
+
+function ensureTankDustAssets() {
+  if (!tankDustMat) {
+    tankDustMat = new THREE.MeshBasicMaterial({
+      color: 0x8a7a58,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+    });
+  }
+  if (!tankDustGeo) {
+    tankDustGeo = new THREE.SphereGeometry(1, 6, 5);
+  }
+}
+
+function emitTankDust(mesh, step, now) {
+  if (!scene || !mesh) return;
+  // Throttle by travel so crawls don't fill the screen.
+  const last = mesh.userData.dustAt || 0;
+  const gap = Math.max(28, 55 - step * 400);
+  if (now - last < gap) return;
+  mesh.userData.dustAt = now;
+
+  // Skip far vehicles (LOD).
+  if (camera) {
+    const dx = mesh.position.x - camera.position.x;
+    const dz = mesh.position.z - camera.position.z;
+    if (dx * dx + dz * dz > 70 * 70) return;
+  }
+
+  ensureTankDustAssets();
+  const yaw = mesh.rotation.y || 0;
+  const backX = -Math.sin(yaw);
+  const backZ = -Math.cos(yaw);
+  const heavy = !!mesh.userData.isAbrams || !!mesh.userData.isMlrs;
+  const side = (Math.random() - 0.5) * (heavy ? 0.28 : 0.2);
+  const groundY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
+  const px = mesh.position.x + backX * (heavy ? 0.32 : 0.22) + Math.cos(yaw) * side;
+  const pz = mesh.position.z + backZ * (heavy ? 0.32 : 0.22) + Math.sin(yaw) * side;
+
+  let puff = null;
+  if (tankDustPuffs.length >= TANK_DUST_MAX) {
+    puff = tankDustPuffs.shift();
+  } else {
+    puff = new THREE.Mesh(tankDustGeo, tankDustMat.clone());
+    puff.material.depthWrite = false;
+    puff.material.transparent = true;
+    scene.add(puff);
+  }
+  const scale = (heavy ? 0.1 : 0.07) + Math.random() * 0.05 + step * 1.8;
+  puff.position.set(px, groundY + 0.03 + Math.random() * 0.02, pz);
+  puff.scale.setScalar(scale);
+  puff.userData.baseScale = scale;
+  puff.material.opacity = 0.38 + Math.min(0.25, step * 12);
+  puff.material.color.setHex(Math.random() > 0.45 ? 0x8a7a58 : 0x6e6248);
+  puff.userData.born = now;
+  puff.userData.life = 420 + Math.random() * 280;
+  puff.userData.vx = backX * (0.08 + Math.random() * 0.1) + (Math.random() - 0.5) * 0.06;
+  puff.userData.vy = 0.12 + Math.random() * 0.14;
+  puff.userData.vz = backZ * (0.08 + Math.random() * 0.1) + (Math.random() - 0.5) * 0.06;
+  puff.userData.grow = 1.7 + Math.random() * 1.1;
+  puff.visible = true;
+  tankDustPuffs.push(puff);
+}
+
+function updateTankDust(now, dt) {
+  for (let i = tankDustPuffs.length - 1; i >= 0; i--) {
+    const p = tankDustPuffs[i];
+    if (!p.visible) continue;
+    const age = now - (p.userData.born || now);
+    const life = p.userData.life || 500;
+    const t = Math.min(1, age / life);
+    if (t >= 1) {
+      p.visible = false;
+      continue;
+    }
+    p.position.x += (p.userData.vx || 0) * dt;
+    p.position.y += (p.userData.vy || 0) * dt;
+    p.position.z += (p.userData.vz || 0) * dt;
+    p.userData.vy = (p.userData.vy || 0) * 0.9;
+    const base = p.userData.baseScale || 0.08;
+    const grow = 1 + t * (p.userData.grow || 1.8);
+    p.scale.setScalar(base * grow);
+    if (p.material) p.material.opacity = (1 - t) * (1 - t) * 0.48;
+  }
+  while (tankDustPuffs.length && !tankDustPuffs[0].visible) {
+    const dead = tankDustPuffs.shift();
+    if (dead.material && dead.material !== tankDustMat) dead.material.dispose?.();
+    scene?.remove(dead);
+  }
 }
 
 function smoothPatriotFacing(mesh, dt) {
@@ -10217,6 +10319,7 @@ function animate() {
   }
   for (const mesh of reap) reapUnitMesh(mesh);
   updateCombatFx(now);
+  updateTankDust(now, dt);
   if (now - (animate._sfxAt || 0) > 80) {
     animate._sfxAt = now;
     Sfx.updateSpatial();

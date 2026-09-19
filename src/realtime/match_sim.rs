@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::{Duration, Instant};
 
 use rand::Rng;
 use uuid::Uuid;
@@ -887,8 +886,6 @@ pub struct MatchSim {
     pub ended: bool,
     pub winner_team: Option<u8>,
     pub end_reason: String,
-    pub created_at: Instant,
-    pub max_duration: Duration,
     /// Pending stream jobs (build completes etc.) mirrored conceptually to Redis Streams.
     pub stream_jobs: VecDeque<StreamJob>,
 }
@@ -924,8 +921,6 @@ impl MatchSim {
             ended: false,
             winner_team: None,
             end_reason: String::new(),
-            created_at: Instant::now(),
-            max_duration: Duration::from_secs(30 * 60),
             stream_jobs: VecDeque::new(),
         };
 
@@ -4753,18 +4748,17 @@ impl MatchSim {
         visible
     }
 
-    /// Teams that still have anything on the map (units or buildings).
-    /// HQ loss marks a player DEAD for scoreboard/build, but leftover army keeps them in the fight.
-    fn teams_with_forces(&self) -> HashMap<u8, f32> {
-        let mut teams: HashMap<u8, f32> = HashMap::new();
+    /// Teams that still own at least one living Command Center.
+    fn teams_with_command_centers(&self) -> HashMap<u8, u32> {
+        let mut teams: HashMap<u8, u32> = HashMap::new();
         for entity in self.entities.values() {
-            if entity.hp <= 0.0 {
+            if entity.hp <= 0.0 || entity.kind != "hq" {
                 continue;
             }
             let Some(player) = self.players.get(&entity.owner) else {
                 continue;
             };
-            *teams.entry(player.team).or_default() += entity.hp.max(0.0);
+            *teams.entry(player.team).or_default() += 1;
         }
         teams
     }
@@ -4773,24 +4767,13 @@ impl MatchSim {
         if self.ended {
             return;
         }
-        let force_teams = self.teams_with_forces();
-
-        if self.created_at.elapsed() >= self.max_duration {
+        // No time limit — fight until only one side still holds a Command Center.
+        // Drop-in: don't end while only one commander has joined yet.
+        let hq_teams = self.teams_with_command_centers();
+        if self.players.len() >= 2 && hq_teams.len() <= 1 {
             self.ended = true;
-            self.end_reason = "Time limit".into();
-            self.winner_team = force_teams
-                .into_iter()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(t, _)| t);
-            return;
-        }
-
-        // Don't end on HQ death alone — only when one side has nothing left on the field.
-        // Drop-in matches: don't end while only one commander has joined yet.
-        if self.players.len() >= 2 && force_teams.len() <= 1 {
-            self.ended = true;
-            self.winner_team = force_teams.into_keys().next();
-            self.end_reason = "Last force standing".into();
+            self.winner_team = hq_teams.into_keys().next();
+            self.end_reason = "Last Command Center".into();
         }
     }
 
