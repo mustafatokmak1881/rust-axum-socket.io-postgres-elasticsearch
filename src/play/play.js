@@ -4868,6 +4868,11 @@ function makeFallbackTerrainTexture(mapSize) {
   return bakeBiomeTerrainTexture(null, mapSize, terrainSeed);
 }
 
+function isStealthSpecialistKind(kind) {
+  const k = String(kind || "");
+  return k === "spy" || k === "hacker" || k === "terrorist";
+}
+
 function visionRadiusFor(entity) {
   if (!entity || (entity.hp != null && entity.hp <= 0)) return 0;
   const kind = String(entity.kind || "");
@@ -4878,7 +4883,10 @@ function visionRadiusFor(entity) {
     return building ? 6 : 20;
   }
   if (entity.building) return 13;
-  if (entity.unit) return 11;
+  // Stealthed to enemies, but must open FOW for the owner (same loop as other units).
+  if (kind === "spy" || kind === "hacker") return 17.5;
+  if (kind === "terrorist") return 11;
+  if (entity.unit || isStealthSpecialistKind(kind)) return 11;
   return 0;
 }
 
@@ -5029,8 +5037,11 @@ function refreshLiveVision() {
     if (!mine && !ally) continue;
     const radius = visionRadiusFor(entity);
     if (!radius) continue;
-    // Infantry blobs overlap — one stamp covers a squad and saves ~50× circle fills.
-    if (entity.unit && !entity.building) {
+    const kind = String(entity.kind || "");
+    const stealthScout = isStealthSpecialistKind(kind);
+    // Infantry blobs overlap — one stamp covers a squad. Never skip spies /
+    // hackers / terrorists: they walk alone into black fog and must open it.
+    if (entity.unit && !entity.building && !stealthScout) {
       let covered = false;
       for (let i = 0; i < stamped.length; i++) {
         const s = stamped[i];
