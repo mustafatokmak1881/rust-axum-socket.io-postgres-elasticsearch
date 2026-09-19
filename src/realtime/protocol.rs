@@ -138,7 +138,7 @@ pub enum ServerMsg {
     StoreOk {
         entitlements: Vec<String>,
     },
-    /// Ally team chat, or Alone whisper (`@name message`).
+    /// Ally team chat, or Alone all-chat / `@name` whisper.
     AllyChat {
         from: Uuid,
         name: String,
@@ -146,7 +146,7 @@ pub enum ServerMsg {
         text: String,
         /// Unix ms for client ordering / display.
         ts: u64,
-        /// Alone mode private message.
+        /// Alone mode private message (`@name`).
         #[serde(default)]
         whisper: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
