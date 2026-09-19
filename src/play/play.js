@@ -7448,9 +7448,11 @@ function slideToward(mesh, dt, speedScale = 1) {
   const dz = pz - mesh.position.z;
   const dist = Math.hypot(dx, dz);
   if (dist < 1e-5) return 0;
-  const cruise = (mesh.userData.moveSpeed || 0.22) * Math.max(0.05, speedScale);
-  const catchup = dist / 0.4;
-  const speed = Math.min(cruise * 2.1, Math.max(cruise, catchup * speedScale));
+  const cruise = (mesh.userData.moveSpeed || 0.22) * Math.max(0.08, speedScale);
+  const catchup = dist / 0.35;
+  // Anti-crab may throttle cruise, but catch-up must stay alive — server ignores facing.
+  const catchScale = Math.max(speedScale, 0.42);
+  const speed = Math.min(cruise * 2.2, Math.max(cruise, catchup * catchScale));
   const step = Math.min(dist, speed * dt);
   mesh.position.x += (dx / dist) * step;
   mesh.position.z += (dz / dist) * step;
@@ -7484,24 +7486,27 @@ function updateTankDrive(mesh, dt) {
   }
 
   // Don't crab: if hull is far from travel heading, turn first / crawl.
+  // Gates stay mild — hullTurnRate ~2.5+ already pivots fast; hard 0.05 starved catch-up.
   const face = mesh.userData.faceYaw;
   const hullYaw = mesh.rotation.y;
   const misalign =
     face != null && Number.isFinite(face)
       ? Math.abs(shortestAngle(hullYaw, face))
       : 0;
-  // Harder gate after Abrams rate change — no sideways ice-skate.
   let driveScale = 1;
-  if (misalign > 0.85) driveScale = 0.05;
-  else if (misalign > 0.5) driveScale = 0.22;
-  else if (misalign > 0.28) driveScale = 0.5;
+  if (misalign > 0.9) driveScale = 0.25;
+  else if (misalign > 0.55) driveScale = 0.48;
+  else if (misalign > 0.3) driveScale = 0.72;
+  // If we lagged behind the server during a pivot, prioritize closing the gap.
+  if (toDist > 1.15) driveScale = Math.max(driveScale, 0.6);
+  else if (toDist > 0.55) driveScale = Math.max(driveScale, 0.4);
 
   const beforeX = mesh.position.x;
   const beforeZ = mesh.position.z;
   slideToward(mesh, dt, driveScale);
   const step = Math.hypot(mesh.position.x - beforeX, mesh.position.z - beforeZ);
   const now = performance.now();
-  if (step < 0.00035 && misalign < 0.25) {
+  if (step < 0.00035 && misalign < 0.25 && toDist < 0.1) {
     mesh.userData.stillFrames = (mesh.userData.stillFrames || 0) + 1;
   } else {
     mesh.userData.stillFrames = 0;
@@ -7512,6 +7517,7 @@ function updateTankDrive(mesh, dt) {
     mesh.userData.velZ = 0;
     mesh.userData.moving = false;
     Sfx.stopEngine(id);
+    mesh.userData.hullMisalign = misalign;
     return;
   }
 
