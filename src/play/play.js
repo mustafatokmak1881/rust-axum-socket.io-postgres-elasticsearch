@@ -3527,18 +3527,20 @@ function createPatriotBatteryMesh(fallbackMat, ownerColors) {
     add(root, new THREE.BoxGeometry(0.06, 0.035, 0.045), carc(desert, 0.85), sx, 0.028, sz, 0, sx * 0.15, 0);
   }
 
-  return root;
+  root.userData.ownerColors = cols;
+  attachOwnerTricolor(root, cols, { y: 0.38, z: 0.42, w: 0.28, h: 0.08 });
+  return applyDirectionalShadows(root);
 }
 
 /** Reinforced MG pillbox — crew silhouettes + rotating cupola. */
 function createBunkerMesh(fallbackMat, ownerColors) {
   const cols = ownerColorsFromMat(fallbackMat, ownerColors);
-  const accent = cols[0] ?? 0x556b2f;
-  const concrete = 0x4e4c42;
-  const concreteDark = 0x35342c;
-  const dirt = 0x3a3428;
-  const dirtLight = 0x4a4436;
-  const sandbag = 0x5c5644;
+  const accent = cols[2] ?? cols[0] ?? 0x556b2f;
+  const concrete = mixHex(cols[1], 0x4e4c42, 0.7);
+  const concreteDark = mixHex(cols[0], 0x35342c, 0.75);
+  const dirt = mixHex(cols[0], 0x3a3428, 0.8);
+  const dirtLight = mixHex(cols[1], 0x4a4436, 0.75);
+  const sandbag = mixHex(cols[1], 0x5c5644, 0.65);
   const metal = 0x1e201c;
   const slit = 0x0a0c08;
 
@@ -3647,7 +3649,9 @@ function createBunkerMesh(fallbackMat, ownerColors) {
   tip.position.set(0, 0.005, 0.13);
   cupola.add(tip);
 
-  return root;
+  root.userData.ownerColors = cols;
+  attachOwnerTricolor(root, cols, { y: 0.32, z: 0.28, w: 0.22, h: 0.07 });
+  return applyDirectionalShadows(root);
 }
 
 
