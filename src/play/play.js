@@ -8828,6 +8828,8 @@ function createWheeledVehicleMesh(teamColor, opts = {}) {
   attachOwnerTricolor(g, [c0, c1, c2], { y: 0.2, z: 0.18, w: 0.16, h: 0.05 });
   return g;
 }
+
+function createLightVehicleMesh(teamColor, opts = {}) {
   return createWheeledVehicleMesh(teamColor, opts);
 }
 
@@ -9028,6 +9030,8 @@ function createMlrsMesh(teamColor) {
   attachOwnerTricolor(g, [c0, c1, c2], { y: 0.28, z: 0.2, w: 0.18, h: 0.055 });
   return g;
 }
+
+const AIR_RIG_VERSION = 7;
 
 function isAirUnitKind(kind) {
   const k = String(kind || "");
