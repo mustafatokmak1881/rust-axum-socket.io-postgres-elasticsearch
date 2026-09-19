@@ -9946,6 +9946,25 @@ function animate() {
 
 /* ---------- UI events ---------- */
 
+/** Edge length from commander slots — mirrors server `map_size_for_players`. */
+function mapSizeForCommanders(n) {
+  const c = Math.max(2, Math.min(32, Number(n) || 2));
+  let size = Math.round(64 * Math.sqrt(c / 2));
+  size = Math.round(size / 2) * 2;
+  return Math.max(64, Math.min(256, size));
+}
+
+function syncLobbyMapSize() {
+  const slots = $("#max-players");
+  const mapEl = $("#map-size");
+  if (!slots || !mapEl) return;
+  mapEl.value = String(mapSizeForCommanders(slots.value));
+}
+
+$("#max-players")?.addEventListener("input", syncLobbyMapSize);
+$("#max-players")?.addEventListener("change", syncLobbyMapSize);
+syncLobbyMapSize();
+
 $("#faction-row")?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-faction]");
   if (!btn) return;
@@ -9956,14 +9975,17 @@ $("#faction-row")?.addEventListener("click", (event) => {
 
 $("#btn-create").addEventListener("click", () => {
   void enterGameFullscreen();
+  const maxPlayers = Number($("#max-players").value) || 8;
+  const mapSize = mapSizeForCommanders(maxPlayers);
+  if ($("#map-size")) $("#map-size").value = String(mapSize);
   send({
     t: "create_lobby",
-    max_players: Number($("#max-players").value) || 32,
-    map_size: Number($("#map-size").value) || 128,
+    max_players: maxPlayers,
+    map_size: mapSize,
     ffa: ($("#match-mode")?.value || "ally") === "alone",
     faction: "usa",
   });
-  toast(`Starting USA match…`);
+  toast(`Starting USA match · ${maxPlayers} komutan · harita ${mapSize}`);
 });
 
 $("#btn-join").addEventListener("click", () => {

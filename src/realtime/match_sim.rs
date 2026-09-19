@@ -17,6 +17,15 @@ pub const TICK_HZ: u32 = 20;
 pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 32;
 
+/// Map edge length scales with commander slots so more players get more ground.
+/// 2 → 64, 8 → 128, 32 → 256 (area ~linear in player count).
+pub fn map_size_for_players(max_players: u8) -> u16 {
+    let n = max_players.clamp(2, MAX_PLAYERS) as f32;
+    let size = (64.0 * (n / 2.0).sqrt()).round() as i32;
+    let size = ((size + 1) / 2) * 2; // even
+    size.clamp(64, 256) as u16
+}
+
 /// Total living+queued units with a single home HQ.
 pub const HOME_UNIT_BUDGET: usize = 18;
 /// Extra units per captured colony HQ (= half of home → x + x/2 + x/2 …).
