@@ -260,20 +260,19 @@ impl MatchHub {
                     .get(&match_id)
                     .map(|e| e.clone())
                     .ok_or("Match missing")?;
-                let (tick, entities, motions, removed, died, resources, explored_new, shots, global_vision) = {
+                let (tick, entities, removed, died, resources, explored_new, shots, global_vision) = {
                     let mut rt = runtime.write().await;
                     let on = rt.sim.toggle_debug_vision(user_id);
                     let tick = rt.sim.tick;
-                    let (entities, motions, removed, died, resources, explored_new, shots) =
+                    let (entities, removed, died, resources, explored_new, shots) =
                         rt.sim.delta_for(user_id);
-                    (tick, entities, motions, removed, died, resources, explored_new, shots, on)
+                    (tick, entities, removed, died, resources, explored_new, shots, on)
                 };
                 self.send(
                     user_id,
                     ServerMsg::Delta {
                         tick,
                         entities,
-                        motions,
                         removed,
                         died,
                         resources,
@@ -536,7 +535,7 @@ impl MatchHub {
                                 // Offline commanders: no WS payload, no vision stamp.
                                 continue;
                             }
-                            let (entities, motions, removed, died, resources, explored_new, shots) =
+                            let (entities, removed, died, resources, explored_new, shots) =
                                 rt.sim.delta_for(uid);
                             // Tab scoreboard — FOW-independent roster; ~1 Hz is enough & cheap.
                             let scoreboard = if tick % (match_sim::TICK_HZ as u64) == 0 {
@@ -547,7 +546,6 @@ impl MatchHub {
                             let global_vision = rt.sim.player_has_global_vision(uid);
                             // Skip empty heartbeats when nothing in this FOW window changed.
                             if entities.is_empty()
-                                && motions.is_empty()
                                 && removed.is_empty()
                                 && died.is_empty()
                                 && explored_new.is_empty()
@@ -566,7 +564,6 @@ impl MatchHub {
                                 ServerMsg::Delta {
                                     tick,
                                     entities,
-                                    motions,
                                     removed,
                                     died,
                                     resources,

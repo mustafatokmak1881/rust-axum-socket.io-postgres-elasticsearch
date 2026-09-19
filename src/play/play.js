@@ -1002,17 +1002,6 @@ function mergeDelta(into, extra) {
   }
   into.entities = [...latest.values()];
 
-  // Motions: later pose wins; a full entity for the same id supersedes the motion.
-  const motionMap = new Map();
-  for (const m of into.motions || []) {
-    if (!gone.has(m.id) && !latest.has(m.id)) motionMap.set(m.id, m);
-  }
-  for (const m of extra.motions || []) {
-    if (gone.has(m.id) || latest.has(m.id)) continue;
-    motionMap.set(m.id, m);
-  }
-  into.motions = [...motionMap.values()];
-
   const died = new Set(into.died || []);
   for (const id of extra.died || []) died.add(id);
   into.died = [...died];
@@ -1141,39 +1130,19 @@ function applyDelta(msg) {
       reapUnitMesh(existing);
     }
     const prev = state.entities.get(entity.id);
-    state.entities.set(entity.id, entity);
-    if (scene) upsertMesh(entity);
-    syncBuildingSfx(prev, entity);
-  }
-  // Slim pose updates — merge onto last full EntityView (identity fields stay local).
-  for (const motion of msg.motions || []) {
-    if (gone.has(motion.id)) continue;
-    const prev = state.entities.get(motion.id);
-    if (!prev) continue;
-    if (motion.hp != null && motion.hp <= 0) {
-      dropEntityVisual(motion.id, { wreck: true });
-      continue;
+    // Normalize completion fields — omitted/null must clear a stuck 99% BUILD/TRAIN bar.
+    const next = { ...entity };
+    if (next.building) {
+      if (next.progress == null) next.progress = null;
+      if (next.train_progress == null) next.train_progress = null;
     }
-    const merged = {
-      ...prev,
-      x: motion.x,
-      y: motion.y,
-      hp: motion.hp,
-      progress: motion.progress !== undefined ? motion.progress : prev.progress,
-      train_progress:
-        motion.train_progress !== undefined ? motion.train_progress : prev.train_progress,
-      prone: !!motion.prone,
-      hacked: !!motion.hacked,
-      aim_at: motion.aim_at !== undefined ? motion.aim_at : prev.aim_at,
-      aim_yaw: motion.aim_yaw !== undefined ? motion.aim_yaw : prev.aim_yaw,
-      airborne: !!motion.airborne,
-    };
-    state.entities.set(motion.id, merged);
-    if (scene) upsertMesh(merged);
-    syncBuildingSfx(prev, merged);
+    state.entities.set(next.id, next);
+    if (scene) upsertMesh(next);
+    syncBuildingSfx(prev, next);
   }
   playShots(msg.shots || []);
   updateArmyCounts();
+  if (state.selectedBuilding) refreshTrainablePanel();
   $("#match-caption").textContent =
     `Tick ${msg.tick} · ${state.entities.size} entities · ${globalVision ? "open map" : "vision fog"}`;
 }
@@ -7474,6 +7443,7 @@ function labelHeightFor(entity) {
 }
 
 function activeLoadProgress(entity) {
+  // Nearly-complete frames (0.99) are still constructing; only null means done.
   if (entity.progress != null && entity.progress < 1) {
     return { pct: entity.progress, label: "BUILD" };
   }

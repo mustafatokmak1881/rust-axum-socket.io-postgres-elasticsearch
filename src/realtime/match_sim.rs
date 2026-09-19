@@ -8,8 +8,8 @@ use super::bots::{self, BotMind};
 use super::generals_roster::{self, faction_ok};
 use super::grid::{SpatialGrid, MAX_ENTITY_RADIUS, MAX_UNIT_RADIUS};
 use super::protocol::{
-    BuildableInfo, EntityMotion, EntityView, MatchPlayerStats, MatchSnapshot, MountainView,
-    PondView, ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
+    BuildableInfo, EntityView, MatchPlayerStats, MatchSnapshot, MountainView, PondView,
+    ResourcesView, ScoreboardRow, ShotEvent, TrainableInfo,
 };
 
 pub const TICK_HZ: u32 = 20;
@@ -18,6 +18,30 @@ pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MIN_MAP_SIZE: u16 = 96;
 /// Cap for auto-scaled arenas.
 pub const MAX_MAP_SIZE: u16 = 2048;
+
+/// Idle finished buildings only — never call this for units or active build/train.
+fn building_idle_wire_eq(a: &EntityView, b: &EntityView) -> bool {
+    a.id == b.id
+        && a.building
+        && b.building
+        && !a.unit
+        && !b.unit
+        && a.kind == b.kind
+        && a.owner == b.owner
+        && a.owner_name == b.owner_name
+        && a.colors == b.colors
+        && a.team == b.team
+        && a.flag == b.flag
+        && a.hacked == b.hacked
+        && a.progress.is_none()
+        && b.progress.is_none()
+        && a.train_progress.is_none()
+        && b.train_progress.is_none()
+        && (a.x - b.x).abs() <= 0.001
+        && (a.y - b.y).abs() <= 0.001
+        && (a.hp - b.hp).abs() <= 0.5
+        && (a.max_hp - b.max_hp).abs() <= 0.5
+}
 
 /// Auto map edge from commander count — large gaps between bases.
 /// Map size still clamps to MAX_MAP_SIZE; commander count itself is uncapped.
@@ -122,9 +146,9 @@ pub struct PlayerState {
     pub connected: bool,
     /// Entity ids last acknowledged in this player's vision (enter/leave sync).
     pub aoi_known: HashSet<Uuid>,
-    /// Last full entity snapshot sent on the wire — skip / slim-diff against this.
-    pub last_sent_entities: HashMap<Uuid, EntityView>,
-    /// Last resources payload sent — omit from Delta when unchanged.
+    /// Last idle-building snapshot sent — skip identical HUD spam only (never units).
+    pub last_sent_buildings: HashMap<Uuid, EntityView>,
+    /// Last resources payload sent — omit from Delta when unchanged (HUD only).
     pub last_sent_resources: Option<ResourcesView>,
     /// Permanent explored shroud (Generals-style).
     pub explored: aoi::ExploredMap,
@@ -934,6 +958,8 @@ pub struct MatchSim {
     pub end_reason: String,
     /// Pending stream jobs (build completes etc.) mirrored conceptually to Redis Streams.
     pub stream_jobs: VecDeque<StreamJob>,
+    /// After build/train finishes, force a few dirty broadcasts so clients clear 99% bars.
+    completion_resync: HashMap<Uuid, u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -968,6 +994,7 @@ impl MatchSim {
             winner_team: None,
             end_reason: String::new(),
             stream_jobs: VecDeque::new(),
+            completion_resync: HashMap::new(),
         };
 
         for (user_id, name, faction, team, flag) in roster.into_iter() {
@@ -1078,7 +1105,7 @@ impl MatchSim {
                 alive: true,
                 connected,
                 aoi_known: HashSet::new(),
-                last_sent_entities: HashMap::new(),
+                last_sent_buildings: HashMap::new(),
                 last_sent_resources: None,
                 explored: aoi::ExploredMap::new(self.map_size),
                 bot,
@@ -1246,7 +1273,7 @@ impl MatchSim {
         state.bot = None;
         state.connected = true;
         state.aoi_known.clear();
-        state.last_sent_entities.clear();
+        state.last_sent_buildings.clear();
         state.last_sent_resources = None;
         // Keep team, colors, resources, explored, home_hq, colonies, stats, focus, alive.
 
@@ -1996,7 +2023,7 @@ impl MatchSim {
         if on {
             // Force a full resync of every entity now that the map is open.
             player.aoi_known.clear();
-            player.last_sent_entities.clear();
+            player.last_sent_buildings.clear();
             player.last_sent_resources = None;
             player.explored.reveal_all();
             return true;
@@ -2795,6 +2822,13 @@ impl MatchSim {
             }
             if was_building && entity.build_remaining_ms == 0 {
                 self.on_building_finished(&entity);
+                // Keep dirty for several broadcasts — clients often hold a 99% bar if the
+                // single "progress: null" frame is coalesced away.
+                self.completion_resync.insert(entity.id, 8);
+                entity.dirty = true;
+            }
+            if self.completion_resync.contains_key(&entity.id) {
+                entity.dirty = true;
             }
             // Push a FOW update when hack blackout ends so clients clear the FX.
             if entity.hacked_until_tick > 0 && self.tick == entity.hacked_until_tick {
@@ -2816,6 +2850,8 @@ impl MatchSim {
                     entity.dirty = true;
                     if job.remaining_ms == 0 {
                         let unit_kind = entity.train_queue.pop_front().unwrap().unit;
+                        self.completion_resync.insert(entity.id, 8);
+                        entity.dirty = true;
                         let owner = entity.owner;
                         let living = self
                             .entities
@@ -5667,7 +5703,6 @@ impl MatchSim {
         user_id: Uuid,
     ) -> (
         Vec<EntityView>,
-        Vec<EntityMotion>,
         Vec<Uuid>,
         Vec<Uuid>,
         Option<ResourcesView>,
@@ -5684,12 +5719,13 @@ impl MatchSim {
 
         let resources_now = self.resources_view_for(user_id);
         if !self.players.contains_key(&user_id) {
-            return (vec![], vec![], vec![], vec![], None, explored_new, vec![]);
+            return (vec![], vec![], vec![], None, explored_new, vec![]);
         }
         let previously_known = {
             let player = self.players.get_mut(&user_id).unwrap();
             std::mem::take(&mut player.aoi_known)
         };
+        // HUD-only dedupe — never touches unit poses / prediction.
         let resources = {
             let player = self.players.get_mut(&user_id).unwrap();
             match (&resources_now, &player.last_sent_resources) {
@@ -5704,39 +5740,54 @@ impl MatchSim {
 
         let visible_ids = self.visible_ids_for(user_id);
 
-        // Build candidate views first (needs &self), then diff against last-sent cache.
-        let mut candidates: Vec<(Uuid, EntityView, bool)> = Vec::new();
+        // Gather views first (&self), then optionally dedupe idle buildings only.
+        let mut candidates: Vec<(Uuid, EntityView, bool, bool, bool)> = Vec::new();
         for id in &visible_ids {
             let Some(entity) = self.entities.get(id) else {
                 continue;
             };
             let entered_vision = !previously_known.contains(id);
+            let needs_completion_sync = self.completion_resync.contains_key(id);
             if !(entity.dirty
                 || entity.move_to.is_some()
                 || entity.build_remaining_ms > 0
                 || !entity.train_queue.is_empty()
-                || entered_vision)
+                || entered_vision
+                || needs_completion_sync)
             {
                 continue;
             }
-            candidates.push((*id, self.entity_view(entity), entered_vision));
+            // Idle finished building → eligible for wire skip. Units / active builds never.
+            let idle_building = entity.building
+                && !entity.unit
+                && entity.build_remaining_ms == 0
+                && entity.train_queue.is_empty()
+                && !needs_completion_sync;
+            candidates.push((
+                *id,
+                self.entity_view(entity),
+                entity.unit,
+                idle_building,
+                entered_vision,
+            ));
         }
 
         let mut entities = Vec::new();
-        let mut motions = Vec::new();
         if let Some(player) = self.players.get_mut(&user_id) {
-            for (id, view, entered_vision) in candidates {
-                if let Some(prev) = player.last_sent_entities.get(&id) {
-                    if !entered_vision && view.wire_eq(prev) {
-                        continue;
-                    }
-                    if !entered_vision && prev.static_eq(&view) {
-                        motions.push(view.to_motion());
-                        player.last_sent_entities.insert(id, view);
-                        continue;
+            for (id, view, is_unit, idle_building, entered_vision) in candidates {
+                if is_unit {
+                    // Units: always stream — comparison caused tank stutter before.
+                    entities.push(view);
+                    continue;
+                }
+                if idle_building && !entered_vision {
+                    if let Some(prev) = player.last_sent_buildings.get(&id) {
+                        if building_idle_wire_eq(&view, prev) {
+                            continue;
+                        }
                     }
                 }
-                player.last_sent_entities.insert(id, view.clone());
+                player.last_sent_buildings.insert(id, view.clone());
                 entities.push(view);
             }
         }
@@ -5761,13 +5812,12 @@ impl MatchSim {
             removed.push(*id);
         }
 
-        // Drop wire cache for anything that left this viewer's FOW or died.
         if let Some(player) = self.players.get_mut(&user_id) {
             for id in died.iter().chain(removed.iter()) {
-                player.last_sent_entities.remove(id);
+                player.last_sent_buildings.remove(id);
             }
             for id in &self.removed {
-                player.last_sent_entities.remove(id);
+                player.last_sent_buildings.remove(id);
             }
         }
 
@@ -5792,22 +5842,14 @@ impl MatchSim {
             player.aoi_known = known;
         }
 
-        (
-            entities,
-            motions,
-            removed,
-            died,
-            resources,
-            explored_new,
-            shots,
-        )
+        (entities, removed, died, resources, explored_new, shots)
     }
 
     /// After reconnect, force the next deltas to re-send everything currently visible.
     pub fn force_aoi_resync(&mut self, user_id: Uuid) {
         if let Some(player) = self.players.get_mut(&user_id) {
             player.aoi_known.clear();
-            player.last_sent_entities.clear();
+            player.last_sent_buildings.clear();
             player.last_sent_resources = None;
         }
     }
@@ -5818,6 +5860,14 @@ impl MatchSim {
         }
         self.removed.clear();
         self.shots.clear();
+        // Count down forced completion syncs (one step per broadcast frame).
+        let mut next = HashMap::new();
+        for (id, n) in self.completion_resync.drain() {
+            if n > 1 {
+                next.insert(id, n - 1);
+            }
+        }
+        self.completion_resync = next;
     }
 
     fn entity_view(&self, entity: &Entity) -> EntityView {

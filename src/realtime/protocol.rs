@@ -107,9 +107,6 @@ pub enum ServerMsg {
     Delta {
         tick: u64,
         entities: Vec<EntityView>,
-        /// Pose / HP / progress only — static identity fields unchanged since last full view.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        motions: Vec<EntityMotion>,
         /// Left this viewer's FOW / AOI (hide mesh — not a death).
         removed: Vec<Uuid>,
         /// Actually destroyed this tick (wreck FX). Distinct from FOW leave.
@@ -317,7 +314,8 @@ pub struct EntityView {
     pub flag: Option<String>,
     pub progress: Option<f32>,
     /// 0..1 while this building is training a unit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Always serialize (including `null`) so clients clear a stuck 99% TRAIN bar.
+    #[serde(default)]
     pub train_progress: Option<f32>,
     /// Infantry lying down in combat.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -334,104 +332,6 @@ pub struct EntityView {
     /// F-16 (and similar): true while on a sortie / RTB; false while hangared on the pad.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub airborne: bool,
-}
-
-/// Compact pose update when identity fields are unchanged since the last full `EntityView`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntityMotion {
-    pub id: Uuid,
-    pub x: f32,
-    pub y: f32,
-    pub hp: f32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub train_progress: Option<f32>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub prone: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub hacked: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aim_at: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aim_yaw: Option<f32>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub airborne: bool,
-}
-
-impl EntityView {
-    /// Wire-oriented equality: float noise does not force a resend.
-    pub fn wire_eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.kind == other.kind
-            && self.owner == other.owner
-            && self.owner_name == other.owner_name
-            && self.colors == other.colors
-            && self.team == other.team
-            && Self::approx(self.x, other.x, 0.04)
-            && Self::approx(self.y, other.y, 0.04)
-            && Self::approx(self.hp, other.hp, 0.5)
-            && Self::approx(self.max_hp, other.max_hp, 0.5)
-            && self.building == other.building
-            && self.unit == other.unit
-            && self.flag == other.flag
-            && Self::approx_opt(self.progress, other.progress, 0.01)
-            && Self::approx_opt(self.train_progress, other.train_progress, 0.01)
-            && self.prone == other.prone
-            && self.hacked == other.hacked
-            && self.aim_at == other.aim_at
-            && Self::approx_opt(self.aim_yaw, other.aim_yaw, 0.02)
-            && self.airborne == other.airborne
-    }
-
-    /// Identity / cosmetics unchanged — only pose & vitals may differ.
-    pub fn static_eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.kind == other.kind
-            && self.owner == other.owner
-            && self.owner_name == other.owner_name
-            && self.colors == other.colors
-            && self.team == other.team
-            && self.building == other.building
-            && self.unit == other.unit
-            && self.flag == other.flag
-            && Self::approx(self.max_hp, other.max_hp, 0.5)
-    }
-
-    pub fn to_motion(&self) -> EntityMotion {
-        EntityMotion {
-            id: self.id,
-            x: Self::quant(self.x, 0.02),
-            y: Self::quant(self.y, 0.02),
-            hp: Self::quant(self.hp, 0.25),
-            progress: self.progress.map(|p| Self::quant(p, 0.01)),
-            train_progress: self.train_progress.map(|p| Self::quant(p, 0.01)),
-            prone: self.prone,
-            hacked: self.hacked,
-            aim_at: self.aim_at,
-            aim_yaw: self.aim_yaw.map(|y| Self::quant(y, 0.02)),
-            airborne: self.airborne,
-        }
-    }
-
-    fn approx(a: f32, b: f32, eps: f32) -> bool {
-        (a - b).abs() <= eps
-    }
-
-    fn approx_opt(a: Option<f32>, b: Option<f32>, eps: f32) -> bool {
-        match (a, b) {
-            (None, None) => true,
-            (Some(x), Some(y)) => Self::approx(x, y, eps),
-            _ => false,
-        }
-    }
-
-    fn quant(v: f32, step: f32) -> f32 {
-        if step <= 0.0 {
-            return v;
-        }
-        (v / step).round() * step
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
