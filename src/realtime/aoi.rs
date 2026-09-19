@@ -11,6 +11,8 @@ pub const VISION_BUILDING: f32 = 13.0;
 pub const VISION_UNIT: f32 = 11.0;
 /// Spy / hacker intel disc — larger than a rifleman; mobile radar while stealthed.
 pub const VISION_SPY: f32 = 17.5;
+/// Bayraktar TB2 EO/IR + datalink — radar-like mobile vision bubble.
+pub const VISION_TB2: f32 = 19.5;
 
 pub fn entity_provides_vision(entity: &Entity) -> bool {
     entity.hp > 0.0 && (entity.building || entity.unit)
@@ -28,6 +30,8 @@ pub fn vision_radius(entity: &Entity) -> f32 {
     } else if matches!(entity.kind.as_str(), "spy" | "hacker") {
         // Stealth to enemies, but still opens FOW for the owner like any scout.
         VISION_SPY
+    } else if entity.kind == "tb2" || entity.kind.contains("tb2") {
+        VISION_TB2
     } else if entity.kind == "terrorist" {
         VISION_UNIT
     } else if entity.unit {

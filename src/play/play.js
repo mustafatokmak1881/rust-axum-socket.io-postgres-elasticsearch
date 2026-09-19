@@ -955,7 +955,11 @@ function refreshTrainablePanel() {
       <button type="button" class="unit-item" data-unit="${escapeHtml(item.unit)}" data-from="${escapeHtml(item.from_building)}">
         <strong>${escapeHtml(item.name)}</strong>
         <small>${item.cost_gold ?? 0}g · ${Math.round((item.train_ms || 0) / 1000)}s${
-          item.unit === "f16" ? " · kalkış 19500g" : ""
+          item.unit === "f16"
+            ? " · kalkış 19500g"
+            : item.unit === "tb2"
+              ? " · 4× MAM · radar"
+              : ""
         }</small>
       </button>`,
           )
@@ -6973,7 +6977,7 @@ const ENTITY_INFO = {
   airfield: {
     name: "Airfield",
     role: "Üretim",
-    tags: ["Hava", "4 F-16 hangar"],
+    tags: ["Hava", "F-16 · TB2", "4 slot hangar"],
   },
   turret: {
     name: "Patriot Battery",
@@ -7070,6 +7074,14 @@ const ENTITY_INFO = {
     speed: 10.8,
     tags: ["Hangar", "1 bomba / sorti", "Kalkış 19500g"],
   },
+  tb2: {
+    name: "Bayraktar TB2",
+    role: "İHA",
+    range: 14.5,
+    damage: 420,
+    speed: 1.72,
+    tags: ["Radar görüş", "4× MAM-L", "Boşken gezer", "Yenileme 1200g"],
+  },
 };
 
 const hoverTip = {
@@ -7142,6 +7154,10 @@ function buildEntityTipLines(entity) {
   if (entity.hacked && !tags.includes("Hack'li")) tags.push("Hack'li");
   if (kind.includes("f16")) {
     tags.push(entity.airborne ? "Sortide" : "Hangarda");
+  }
+  if (kind.includes("tb2") || kind.includes("bayraktar")) {
+    tags.push(entity.airborne ? "İstasyonda" : "Hangarda");
+    tags.push("Radar görüş");
   }
 
   const rows = [];
@@ -7297,10 +7313,17 @@ function onPointerDown(event) {
         const e = state.entities.get(id);
         return e && String(e.kind || "").includes("f16");
       }).length;
+      const tb2s = state.selectedUnits.filter((id) => {
+        const e = state.entities.get(id);
+        const k = String(e?.kind || "");
+        return e && (k.includes("tb2") || k.includes("bayraktar"));
+      }).length;
       toast(
         jets
           ? `F-16 sorti · hedef ${enemy.kind} · kalkış 19500g/jet`
-          : `Attacking ${enemy.kind} (${state.selectedUnits.length})`,
+          : tb2s
+            ? `TB2 MAM · hedef ${enemy.kind} · boşsa hangar 1200g`
+            : `Attacking ${enemy.kind} (${state.selectedUnits.length})`,
       );
     } else {
       const onlyHangaredF16 =
@@ -7494,12 +7517,12 @@ function hangaredF16Count(owner, nearEntity) {
   const oid = String(owner || "");
   const ax = nearEntity ? Number(nearEntity.x) : null;
   const ay = nearEntity ? Number(nearEntity.y) : null;
-  const r2 = 2.2 * 2.2; // ~airfield apron half-extent
+  const r2 = 2.2 * 2.2;
   let n = 0;
   for (const e of state.entities.values()) {
     if (String(e.owner) !== oid) continue;
     const k = String(e.kind || "");
-    if (!(k === "f16" || k.includes("f16"))) continue;
+    if (!(k.includes("f16") || k.includes("tb2") || k.includes("bayraktar"))) continue;
     if (e.airborne) continue;
     if ((e.hp ?? 1) <= 0) continue;
     if (ax != null && ay != null) {
@@ -7748,6 +7771,8 @@ function unitDims(kind) {
     k.includes("raptor") ||
     k.includes("mig") ||
     k.includes("f16") ||
+    k.includes("tb2") ||
+    k.includes("bayraktar") ||
     k.includes("comanche") ||
     k.includes("helix") ||
     k.includes("chinook")
@@ -9238,7 +9263,7 @@ function createMlrsMesh(teamColor) {
   return g;
 }
 
-const AIR_RIG_VERSION = 7;
+const AIR_RIG_VERSION = 8;
 
 function isAirUnitKind(kind) {
   const k = String(kind || "");
@@ -9246,6 +9271,8 @@ function isAirUnitKind(kind) {
     k.includes("raptor") ||
     k.includes("mig") ||
     k.includes("f16") ||
+    k.includes("tb2") ||
+    k.includes("bayraktar") ||
     k.includes("comanche") ||
     k.includes("helix") ||
     k.includes("chinook")
@@ -9259,6 +9286,11 @@ function isJetKind(kind) {
 
 function isF16Kind(kind) {
   return String(kind || "").includes("f16");
+}
+
+function isTb2Kind(kind) {
+  const k = String(kind || "");
+  return k.includes("tb2") || k.includes("bayraktar");
 }
 
 const AIRFIELD_PAD_OFFSETS = [
@@ -9725,9 +9757,292 @@ function createF16Mesh(teamColor) {
   return applyDirectionalShadows(g);
 }
 
+/**
+ * Bayraktar TB2 SİHA — matte military gray, V-tail, pusher prop, EO/IR ball, 4× MAM.
+ * Scale: ~1 wu ≈ 11 m → span ≈ 1.09, length ≈ 0.59.
+ */
+function createTb2Mesh(teamColor) {
+  const [c0, c1, c2] = resolveOwnerColors(teamColor);
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
+  g.userData.isAir = true;
+  g.userData.isHeli = false;
+  g.userData.isJet = false;
+  g.userData.isTb2 = true;
+  g.userData.isF16 = false;
+  g.userData.airAltitude = 1.55;
+  g.userData.hangarAltitude = 0.11;
+  g.userData.airRigVersion = AIR_RIG_VERSION;
+  g.userData.tintParts = [];
+  g.userData.unitHeight = 1.7;
+  g.userData.kind = "tb2";
+  g.userData.bank = 0;
+  g.userData.prevFaceYaw = 0;
+  g.userData.ownerColors = [c0, c1, c2];
+  g.rotation.order = "YXZ";
+
+  // Matte light military gray — low-gloss ISR paint.
+  const skin = mixHex(c0, 0x9aa3a8, 0.55);
+  const skinDk = mixHex(c0, 0x6a7278, 0.42);
+  const skinLt = mixHex(c1, 0xb8c0c4, 0.5);
+  const carbon = 0x2a2e32;
+  const lens = 0x1a2830;
+  const mamBody = 0x3a4830;
+  const mamNose = 0xc8c4b0;
+  const accent = c2 || 0x4a6a48;
+
+  const matSkin = () =>
+    matStd(skin, { metalness: 0.12, roughness: 0.78, envMapIntensity: 0.35 });
+  const matSkinDk = () =>
+    matStd(skinDk, { metalness: 0.14, roughness: 0.74, envMapIntensity: 0.3 });
+  const matSkinLt = () =>
+    matStd(skinLt, { metalness: 0.1, roughness: 0.82, envMapIntensity: 0.28 });
+  const matCarbon = () =>
+    matStd(carbon, { metalness: 0.35, roughness: 0.55 });
+  const matLens = () =>
+    matStd(lens, {
+      metalness: 0.55,
+      roughness: 0.18,
+      envMapIntensity: 0.9,
+    });
+
+  const add = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, opts = {}) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = opts.cast !== false;
+    m.receiveShadow = true;
+    if (opts.name) m.name = opts.name;
+    parent.add(m);
+    if (opts.tint) g.userData.tintParts.push(m);
+    return m;
+  };
+
+  // —— Fuselage (slender blended tube, +Z = nose) ——
+  // Nose tip
+  add(g, new THREE.SphereGeometry(0.028, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55), matSkin(), 0, 0.04, 0.28, 0, 0, 0, {
+    tint: true,
+  });
+  add(g, new THREE.CylinderGeometry(0.026, 0.032, 0.14, 16), matSkin(), 0, 0.04, 0.2, Math.PI / 2, 0, 0, {
+    tint: true,
+  });
+  // Mid body
+  add(g, new THREE.CylinderGeometry(0.032, 0.036, 0.22, 18), matSkinLt(), 0, 0.042, 0.02, Math.PI / 2, 0, 0, {
+    tint: true,
+  });
+  // Aft boom toward prop
+  add(g, new THREE.CylinderGeometry(0.034, 0.024, 0.2, 16), matSkinDk(), 0, 0.04, -0.18, Math.PI / 2, 0, 0, {
+    tint: true,
+  });
+  // Dorsal fairing
+  add(g, new THREE.CapsuleGeometry(0.014, 0.28, 6, 12), matSkin(), 0, 0.068, 0.02, Math.PI / 2, 0, 0, {
+    tint: true,
+    cast: false,
+  });
+  // Fine panel seams (thin geometry — not pixel strips)
+  for (const z of [0.16, 0.06, -0.06, -0.16]) {
+    add(g, new THREE.BoxGeometry(0.058, 0.0012, 0.0035), matCarbon(), 0, 0.072, z, 0, 0, 0, {
+      cast: false,
+    });
+  }
+
+  // —— High-aspect wings (span ~1.09) ——
+  const wing = new THREE.Group();
+  wing.position.set(0, 0.038, -0.02);
+  g.add(wing);
+  // Main wing panel — long tapered slab with rounded tips via spheres
+  add(wing, new THREE.BoxGeometry(1.05, 0.012, 0.16), matSkin(), 0, 0, 0, 0, 0, 0, { tint: true });
+  add(wing, new THREE.BoxGeometry(0.95, 0.008, 0.055), matSkinLt(), 0, 0.006, 0.06, 0, 0, 0, {
+    tint: true,
+    cast: false,
+  });
+  // Slight dihedral
+  wing.rotation.z = 0.04;
+  // Wingtips
+  for (const sx of [-1, 1]) {
+    add(wing, new THREE.SphereGeometry(0.018, 12, 10), matSkinDk(), sx * 0.52, 0, 0.02, 0, 0, 0, {
+      tint: true,
+    });
+    // Winglet
+    add(
+      wing,
+      new THREE.BoxGeometry(0.01, 0.055, 0.05),
+      matSkinDk(),
+      sx * 0.525,
+      0.028,
+      -0.02,
+      0,
+      0,
+      sx * 0.15,
+      { tint: true },
+    );
+  }
+  // Root fairings
+  add(g, new THREE.BoxGeometry(0.12, 0.02, 0.14), matSkin(), 0, 0.03, -0.02, 0, 0, 0, { tint: true });
+
+  // —— V-tail (inverted V / true V-tail) ——
+  const vTail = new THREE.Group();
+  vTail.position.set(0, 0.045, -0.28);
+  g.add(vTail);
+  for (const sx of [-1, 1]) {
+    const fin = new THREE.Mesh(
+      new THREE.BoxGeometry(0.012, 0.11, 0.14),
+      matSkin(),
+    );
+    fin.position.set(sx * 0.055, 0.04, 0);
+    fin.rotation.z = sx * 0.55;
+    fin.rotation.y = sx * -0.08;
+    fin.castShadow = true;
+    fin.receiveShadow = true;
+    g.userData.tintParts.push(fin);
+    vTail.add(fin);
+    // Leading-edge soft cap
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.012, 10, 8), matSkinLt());
+    tip.position.set(sx * 0.09, 0.085, 0.04);
+    tip.castShadow = false;
+    vTail.add(tip);
+  }
+  // Boom tip / prop mount
+  add(g, new THREE.CylinderGeometry(0.018, 0.02, 0.04, 12), matCarbon(), 0, 0.04, -0.32, Math.PI / 2);
+
+  // —— Pusher propeller (rear-facing) ——
+  const prop = new THREE.Group();
+  prop.name = "tb2Prop";
+  prop.position.set(0, 0.04, -0.355);
+  g.add(prop);
+  add(prop, new THREE.SphereGeometry(0.016, 12, 10), matCarbon(), 0, 0, 0);
+  for (let i = 0; i < 2; i++) {
+    const blade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.012, 0.004, 0.13),
+      matStd(0x3a3e42, { metalness: 0.25, roughness: 0.55 }),
+    );
+    blade.position.set(0, 0, 0);
+    blade.rotation.z = (i * Math.PI) / 2;
+    blade.rotation.y = 0.12;
+    blade.castShadow = true;
+    prop.add(blade);
+    // Blade tip round
+    const tip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.008, 8, 6),
+      matStd(0x3a3e42, { metalness: 0.25, roughness: 0.55 }),
+    );
+    tip.position.set(Math.cos(i * Math.PI) * 0.065, Math.sin(i * Math.PI) * 0.065, 0);
+    prop.add(tip);
+  }
+
+  // —— EO/IR camera ball under nose ——
+  const eo = new THREE.Group();
+  eo.position.set(0, -0.01, 0.18);
+  g.add(eo);
+  add(eo, new THREE.CylinderGeometry(0.014, 0.016, 0.025, 12), matCarbon(), 0, 0.012, 0);
+  add(eo, new THREE.SphereGeometry(0.022, 16, 14), matCarbon(), 0, -0.008, 0, 0, 0, 0, {
+    name: "tb2EoBall",
+  });
+  add(eo, new THREE.CircleGeometry(0.012, 16), matLens(), 0, -0.008, 0.021, 0, 0, 0, {
+    cast: false,
+  });
+  // Gimbal ring
+  add(eo, new THREE.TorusGeometry(0.024, 0.003, 8, 20), matCarbon(), 0, -0.008, 0, Math.PI / 2, 0, 0, {
+    cast: false,
+  });
+
+  // —— 4× MAM-L under wings ——
+  const mam = (x, z) => {
+    const m = new THREE.Group();
+    m.position.set(x, 0.012, z);
+    add(m, new THREE.CylinderGeometry(0.008, 0.009, 0.07, 10), matStd(mamBody, { metalness: 0.2, roughness: 0.7 }), 0, 0, 0, Math.PI / 2);
+    add(m, new THREE.ConeGeometry(0.008, 0.022, 10), matStd(mamNose, { metalness: 0.35, roughness: 0.4 }), 0, 0, 0.042, -Math.PI / 2);
+    add(m, new THREE.CylinderGeometry(0.004, 0.007, 0.012, 8), matCarbon(), 0, 0, -0.038, Math.PI / 2);
+    // Small fins
+    for (const a of [0, Math.PI / 2]) {
+      const fin = new THREE.Mesh(
+        new THREE.BoxGeometry(0.022, 0.0015, 0.012),
+        matStd(mamBody, { metalness: 0.15, roughness: 0.75 }),
+      );
+      fin.rotation.z = a;
+      fin.position.z = -0.02;
+      m.add(fin);
+    }
+    // Pylon
+    add(m, new THREE.BoxGeometry(0.01, 0.018, 0.03), matSkinDk(), 0, 0.016, 0, 0, 0, 0, {
+      tint: true,
+      cast: false,
+    });
+    g.add(m);
+  };
+  mam(-0.22, -0.02);
+  mam(-0.38, -0.015);
+  mam(0.22, -0.02);
+  mam(0.38, -0.015);
+
+  // Accent strip (commander color)
+  add(g, new THREE.BoxGeometry(0.004, 0.006, 0.2), matStd(accent, { metalness: 0.2, roughness: 0.55 }), 0.034, 0.055, 0.04, 0, 0, 0, {
+    cast: false,
+  });
+
+  // —— Landing gear (visible when hangared) ——
+  const gear = new THREE.Group();
+  gear.name = "tb2Gear";
+  g.add(gear);
+  const strut = (x, z, tall) => {
+    add(gear, new THREE.CylinderGeometry(0.003, 0.004, tall, 6), matCarbon(), x, -tall * 0.35, z);
+    add(
+      gear,
+      new THREE.TorusGeometry(0.01, 0.004, 6, 12),
+      matStd(0x1a1a1a, { metalness: 0.3, roughness: 0.7 }),
+      x,
+      -tall * 0.72,
+      z,
+      Math.PI / 2,
+    );
+  };
+  strut(0, 0.12, 0.07);
+  strut(-0.08, -0.06, 0.075);
+  strut(0.08, -0.06, 0.075);
+
+  // Pick volume
+  const pickVol = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.16, 0.35, 4, 8),
+    new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    }),
+  );
+  pickVol.name = "airPickVolume";
+  pickVol.rotation.x = Math.PI / 2;
+  pickVol.position.set(0, 0.04, 0);
+  pickVol.castShadow = false;
+  g.add(pickVol);
+
+  const muzzle = new THREE.Object3D();
+  muzzle.name = "muzzle";
+  muzzle.position.set(0, -0.02, 0.05);
+  g.add(muzzle);
+
+  // Soft ground shadow blob
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.38, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0x000000,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+    }),
+  );
+  shadow.name = "airShadow";
+  shadow.rotation.x = -Math.PI / 2;
+  shadow.position.y = -1.55;
+  shadow.castShadow = false;
+  g.add(shadow);
+
+  return applyDirectionalShadows(g);
+}
+
 function createAirMesh(teamColor, kind = "") {
   const k = String(kind || "");
   if (isF16Kind(k)) return createF16Mesh(teamColor);
+  if (isTb2Kind(k)) return createTb2Mesh(teamColor);
 
   const heli =
     k.includes("comanche") ||
@@ -10389,14 +10704,14 @@ function upsertMesh(entity) {
   } else if (mesh.userData.isUnitRig) {
     applyUnitMotion(mesh, entity);
     if (mesh.userData.isAir || isAirUnitKind(entity.kind)) {
-      if (mesh.userData.isF16) {
+      if (mesh.userData.isF16 || mesh.userData.isTb2) {
         const wasHangared = mesh.userData.hangared;
         mesh.userData.hangared = !entity.airborne;
         mesh.userData.rtbHome = entity.airborne && f16NearHomeApron(entity);
         if (wasHangared && !mesh.userData.hangared) {
           mesh.userData.flightPhase = "takeoff";
           mesh.userData.phaseT = 0;
-          mesh.userData.takeoffUntil = performance.now() + 3400;
+          mesh.userData.takeoffUntil = performance.now() + (mesh.userData.isTb2 ? 2200 : 3400);
         } else if (!wasHangared && mesh.userData.hangared) {
           mesh.userData.flightPhase = "hangared";
           mesh.userData.phaseT = 0;
@@ -10579,6 +10894,7 @@ function clientMoveSpeed(kind) {
   if (isAirUnitKind(k)) {
     if (k.includes("mig")) return 11.6; // ~1000 km/h
     if (k.includes("f16")) return 11.2; // ~960 km/h
+    if (k.includes("tb2") || k.includes("bayraktar")) return 1.85; // ~140–160 km/h cruise
     if (k.includes("raptor")) return 11.0; // ~950 km/h
     if (k.includes("comanche")) return 3.15; // ~270 km/h
     if (k.includes("helix")) return 2.9; // ~250 km/h
@@ -11059,7 +11375,7 @@ function updateInfantryDrive(mesh, dt) {
 function updateAirDrive(mesh, dt) {
   if (!mesh?.userData?.isAir || mesh.userData.knock) return;
 
-  if (mesh.userData.isF16) {
+  if (mesh.userData.isF16 || mesh.userData.isTb2) {
     updateF16Flight(mesh, dt);
     return;
   }
@@ -11240,8 +11556,15 @@ function updateF16Flight(mesh, dt) {
     }
   }
 
-  const gear = mesh.getObjectByName("f16Gear");
+  const gear =
+    mesh.getObjectByName("f16Gear") || mesh.getObjectByName("tb2Gear");
   if (gear) gear.visible = gearDown || alt < pad + 0.55;
+
+  // TB2: gentler pitch / bank, spin pusher prop while airborne.
+  if (mesh.userData.isTb2) {
+    wantPitch *= 0.45;
+    burn = false;
+  }
 
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
   if (phase !== "hangared" && speed > 0.05) {
@@ -11253,8 +11576,9 @@ function updateF16Flight(mesh, dt) {
     let dyaw = (mesh.userData.faceYaw || 0) - (mesh.userData.prevFaceYaw || mesh.userData.faceYaw || 0);
     while (dyaw > Math.PI) dyaw -= Math.PI * 2;
     while (dyaw < -Math.PI) dyaw += Math.PI * 2;
-    const wantBank =
-      phase === "takeoff" || phase === "landing"
+    const wantBank = mesh.userData.isTb2
+      ? THREE.MathUtils.clamp(-dyaw * 2.0, -0.22, 0.22)
+      : phase === "takeoff" || phase === "landing"
         ? THREE.MathUtils.clamp(-dyaw * 2.2, -0.28, 0.28)
         : THREE.MathUtils.clamp(-dyaw * 4.5, -0.55, 0.55);
     mesh.userData.bank = (mesh.userData.bank || 0) * 0.85 + wantBank * 0.15;
@@ -11284,6 +11608,12 @@ function updateF16Flight(mesh, dt) {
           : 0.04;
     }
   });
+
+  const prop = mesh.getObjectByName("tb2Prop");
+  if (prop) {
+    const spin = phase === "hangared" ? 2.5 * dt : (18 + (mesh.userData.moving ? 14 : 6)) * dt;
+    prop.rotation.z += spin;
+  }
 }
 
 function updateInfantryWalk(mesh, dt, now) {
@@ -11375,13 +11705,16 @@ function spawnShotFx(shot) {
   const isTankCannon = kind.includes("tank") && !kind.includes("mg") && !isMlrs;
   const isMortar = kind.includes("mortar") || isFirebaseShell;
   const isAirBomb =
-    !!fromMesh?.userData?.isJet ||
+    (!!fromMesh?.userData?.isJet && !fromMesh?.userData?.isTb2) ||
     kind.includes("raptor") ||
     kind.includes("mig") ||
     kind.includes("f16");
+  const isTb2Mam =
+    !!fromMesh?.userData?.isTb2 || kind.includes("tb2") || kind.includes("bayraktar");
   const isAirRocket =
     !isAirBomb &&
-    (!!fromMesh?.userData?.isHeli ||
+    (isTb2Mam ||
+      !!fromMesh?.userData?.isHeli ||
       kind.includes("comanche") ||
       kind.includes("helix"));
   const isMissile =
@@ -13036,7 +13369,7 @@ function animate() {
       } else if (mesh.userData.building) {
         applyGroundPose(mesh, dt, { tilt: false });
       } else {
-        if (!mesh.userData.isF16) smoothUnitFacing(mesh, dt);
+        if (!mesh.userData.isF16 && !mesh.userData.isTb2) smoothUnitFacing(mesh, dt);
         updateInfantryDrive(mesh, dt);
         updateAirDrive(mesh, dt);
         updateInfantryWalk(mesh, dt, now);

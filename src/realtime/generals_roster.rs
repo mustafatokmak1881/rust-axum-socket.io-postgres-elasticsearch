@@ -177,6 +177,22 @@ pub fn trainables() -> &'static [UnitDef] {
             range: 16.5,
             attack_ms: 2_600,
         },
+        UnitDef {
+            // Bayraktar TB2 SİHA — airfield UAV. Persistent ISR (radar-like vision),
+            // 4× MAM-L class munitions; loiters when empty, rearms on the pad.
+            // Cruise ~140 km/h → speed ~1.7; MAM-L ~8 km → range 14.5 wu.
+            unit: "tb2",
+            name: "Bayraktar TB2",
+            faction: "usa",
+            from_building: "airfield",
+            cost_gold: 2_450,
+            train_ms: 36_000,
+            hp: 520.0,
+            damage: 420.0,
+            speed: 1.72,
+            range: 14.5,
+            attack_ms: 3_400,
+        },
     ]
 }
 
@@ -191,6 +207,7 @@ pub fn army_cap_for(unit: &str) -> usize {
         "tank" => 10,
         "mlrs" => 3,
         "f16" => 4,
+        "tb2" => 4,
         _ => 6,
     }
 }

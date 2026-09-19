@@ -373,12 +373,26 @@ const F16_SORTIE_GOLD: i32 = 19_500;
 /// One bomb per sortie — drop and RTB immediately.
 const F16_BOMBS: u8 = 1;
 const F16_REARM_MS: u32 = 80_000;
-/// Jets hangared / assigned / queued per airfield.
+/// Bayraktar TB2 — 4× MAM-L class; rearm on the pad (ammo fee).
+const TB2_MAMS: u8 = 4;
+const TB2_REARM_GOLD: i32 = 1_200;
+const TB2_REARM_MS: u32 = 14_000;
+/// Air assets hangared / assigned / queued per airfield.
 const AIRFIELD_HANGAR_CAP: usize = 4;
 
 #[inline]
 fn is_f16_kind(kind: &str) -> bool {
     kind == "f16" || kind.contains("f16")
+}
+
+#[inline]
+fn is_tb2_kind(kind: &str) -> bool {
+    kind == "tb2" || kind.contains("tb2") || kind.contains("bayraktar")
+}
+
+#[inline]
+fn is_airfield_craft(kind: &str) -> bool {
+    is_f16_kind(kind) || is_tb2_kind(kind)
 }
 
 #[inline]
@@ -403,6 +417,8 @@ fn is_vehicle_kind(kind: &str) -> bool {
         || kind.contains("raptor")
         || kind.contains("mig")
         || kind.contains("f16")
+        || kind.contains("tb2")
+        || kind.contains("bayraktar")
         || kind.contains("comanche")
         || kind.contains("helix")
         || kind.contains("chinook")
@@ -413,6 +429,8 @@ fn is_air_kind(kind: &str) -> bool {
     kind.contains("raptor")
         || kind.contains("mig")
         || kind.contains("f16")
+        || kind.contains("tb2")
+        || kind.contains("bayraktar")
         || kind.contains("comanche")
         || kind.contains("helix")
         || kind.contains("chinook")
@@ -512,6 +530,9 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         10_000.0
     } else if infantry && is_f16_kind(attacker_kind) {
         10_000.0
+    } else if infantry && is_tb2_kind(attacker_kind) {
+        // MAM-L blast / frag — lethal to soft targets under the seeker.
+        (base * 2.4).max(380.0)
     } else if infantry && attacker_kind.contains("mortar") {
         (base * 0.95).max(250.0)
     } else if infantry && (attacker_kind == "bunker" || attacker_kind == "tunnel_network") {
@@ -553,6 +574,13 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         } else {
             (base * 1.05).max(base)
         }
+    } else if armored && is_tb2_kind(attacker_kind) {
+        // MAM-L — top-attack vs soft AFVs; limited vs MBT roof.
+        if soft_vehicle {
+            (base * 1.55).max(base)
+        } else {
+            (base * 0.55).max(95.0)
+        }
     } else if armored && attacker_kind.contains("mortar") {
         (base * 0.22).max(55.0)
     } else if armored
@@ -590,6 +618,9 @@ fn hit_damage(attacker_kind: &str, target: &Entity, base: f32) -> f32 {
         (base * 1.1).max(base)
     } else if target.building && is_f16_kind(attacker_kind) {
         (base * 0.95).max(base * 0.85)
+    } else if target.building && is_tb2_kind(attacker_kind) {
+        // MAM vs structure — chips, not bunker-buster.
+        (base * 0.72).max(110.0)
     } else {
         base
     }
@@ -2395,10 +2426,10 @@ impl MatchSim {
             return Err("Wrong building type");
         }
 
-        // Airfield hangar: max 4 F-16s (parked + airborne home + queued) per strip.
-        if is_f16_kind(def.unit) && building.kind == "airfield" {
-            if self.airfield_f16_load(building_id, user_id) >= AIRFIELD_HANGAR_CAP {
-                return Err("Hangar dolu — hava alanında en fazla 4 F-16");
+        // Airfield hangar: max 4 airframes (F-16 / TB2 parked + airborne home + queued).
+        if is_airfield_craft(def.unit) && building.kind == "airfield" {
+            if self.airfield_air_load(building_id, user_id) >= AIRFIELD_HANGAR_CAP {
+                return Err("Hangar dolu — hava alanında en fazla 4 hava aracı");
             }
         }
 
@@ -2656,8 +2687,21 @@ impl MatchSim {
                 .entities
                 .get(id)
                 .is_some_and(|e| e.owner == user_id && e.unit && is_f16_kind(&e.kind));
+            let is_tb2 = self
+                .entities
+                .get(id)
+                .is_some_and(|e| e.owner == user_id && e.unit && is_tb2_kind(&e.kind));
             if is_jet {
                 match self.begin_f16_sortie(user_id, *id) {
+                    Ok(()) => armed_any = true,
+                    Err(e) => {
+                        sortie_err = Some(e);
+                        continue;
+                    }
+                }
+            }
+            if is_tb2 {
+                match self.ensure_tb2_armed(user_id, *id) {
                     Ok(()) => armed_any = true,
                     Err(e) => {
                         sortie_err = Some(e);
@@ -2685,6 +2729,9 @@ impl MatchSim {
                     } else {
                         entity.detour = None;
                         entity.detour_ttl = 0;
+                        if is_tb2_kind(&entity.kind) {
+                            armed_any = true;
+                        }
                     }
                     entity.dirty = true;
                 }
@@ -2698,6 +2745,59 @@ impl MatchSim {
             return Err(err);
         }
         Ok(())
+    }
+
+    fn near_own_airfield_apron(&self, owner: Uuid, x: f32, y: f32) -> bool {
+        let Some(af) = self.nearest_owned_airfield_id(owner, x, y) else {
+            return false;
+        };
+        let Some(e) = self.entities.get(&af) else {
+            return false;
+        };
+        let dx = e.x - x;
+        let dy = e.y - y;
+        dx * dx + dy * dy <= 3.2 * 3.2
+    }
+
+    /// TB2: already loaded, or rearm on the pad (gold), or RTB for munitions.
+    fn ensure_tb2_armed(&mut self, user_id: Uuid, unit_id: Uuid) -> Result<(), &'static str> {
+        let Some(e) = self.entities.get(&unit_id) else {
+            return Err("İHA bulunamadı");
+        };
+        if !is_tb2_kind(&e.kind) || e.owner != user_id {
+            return Ok(());
+        }
+        if e.mag_ammo > 0 {
+            return Ok(());
+        }
+        if e.ability_cooldown_ms > 0 {
+            return Err("TB2 mühimmat yenileniyor — hangarda bekleyin");
+        }
+        let on_pad = self.near_own_airfield_apron(user_id, e.x, e.y);
+        if on_pad {
+            let player = self.players.get_mut(&user_id).ok_or("Not in match")?;
+            if player.resources.gold < TB2_REARM_GOLD {
+                return Err("TB2 mühimmat için 1200 gold gerekli");
+            }
+            player.resources.gold -= TB2_REARM_GOLD;
+            if let Some(e) = self.entities.get_mut(&unit_id) {
+                e.mag_ammo = TB2_MAMS;
+                e.ability_cooldown_ms = TB2_REARM_MS;
+                e.dirty = true;
+            }
+            return Ok(());
+        }
+        // Empty while loitering — send home for MAM reload, no attack yet.
+        if let Some((approach, pad)) = self.f16_rtb_route(user_id, e.x, e.y, unit_id) {
+            if let Some(e) = self.entities.get_mut(&unit_id) {
+                e.detour = Some(approach);
+                e.detour_ttl = 400;
+                e.move_to = Some(pad);
+                e.target = None;
+                e.dirty = true;
+            }
+        }
+        Err("TB2 mühimmatsız — airfield'e dönüp MAM yüklüyor")
     }
 
     /// Pay for an F-16 takeoff and load bombs. Already-armed jets skip the fee.
@@ -2744,8 +2844,8 @@ impl MatchSim {
         best.map(|(id, _)| id)
     }
 
-    /// Parked + airborne jets that call this strip home + F-16 jobs in its queue.
-    fn airfield_f16_load(&self, airfield_id: Uuid, owner: Uuid) -> usize {
+    /// Parked + airborne craft that call this strip home + air jobs in its queue.
+    fn airfield_air_load(&self, airfield_id: Uuid, owner: Uuid) -> usize {
         let Some(af) = self.entities.get(&airfield_id) else {
             return 0;
         };
@@ -2755,7 +2855,7 @@ impl MatchSim {
         let queued = af
             .train_queue
             .iter()
-            .filter(|j| is_f16_kind(&j.unit))
+            .filter(|j| is_airfield_craft(&j.unit))
             .count();
         let assigned = self
             .entities
@@ -2764,7 +2864,7 @@ impl MatchSim {
                 e.owner == owner
                     && e.unit
                     && e.hp > 0.0
-                    && is_f16_kind(&e.kind)
+                    && is_airfield_craft(&e.kind)
                     && self.nearest_owned_airfield_id(owner, e.x, e.y) == Some(airfield_id)
             })
             .count();
@@ -2791,7 +2891,7 @@ impl MatchSim {
     ) -> bool {
         const R2: f32 = 0.28 * 0.28;
         self.entities.values().any(|e| {
-            if Some(e.id) == exclude || !e.unit || e.hp <= 0.0 || !is_f16_kind(&e.kind) {
+            if Some(e.id) == exclude || !e.unit || e.hp <= 0.0 || !is_airfield_craft(&e.kind) {
                 return false;
             }
             // Another jet already taxiing / RTB to this slot.
@@ -2802,9 +2902,10 @@ impl MatchSim {
                     return true;
                 }
             }
-            // Hangared jet sitting on the slot.
-            let airborne = e.mag_ammo > 0 || e.move_to.is_some() || e.target.is_some();
-            if airborne {
+            // F-16 with bombs is on a sortie; TB2 may sit hangared fully armed.
+            let on_sortie = e.target.is_some()
+                || (is_f16_kind(&e.kind) && e.mag_ammo > 0);
+            if on_sortie {
                 return false;
             }
             let dx = e.x - x;
@@ -2836,7 +2937,7 @@ impl MatchSim {
             .filter(|e| {
                 e.unit
                     && e.hp > 0.0
-                    && is_f16_kind(&e.kind)
+                    && is_airfield_craft(&e.kind)
                     && Some(e.id) != exclude
                     && self.nearest_owned_airfield_id(e.owner, e.x, e.y) == Some(airfield_id)
             })
@@ -3164,8 +3265,8 @@ impl MatchSim {
                             }
                         } else if let Some(def) = trainables().iter().find(|u| u.unit == unit_kind) {
                             let uid = Uuid::new_v4();
-                            let (sx, sy) = if is_f16_kind(def.unit) {
-                                // Park on a free apron slot — hangared until a sortie.
+                            let (sx, sy) = if is_airfield_craft(def.unit) {
+                                // Park on a free apron slot — hangared until ordered out.
                                 let af_id = entity.id;
                                 let ax = entity.x;
                                 let ay = entity.y;
@@ -3208,6 +3309,8 @@ impl MatchSim {
                                 attack_cooldown_ms: 0,
                                 mag_ammo: if is_rifle_infantry(def.unit) {
                                     RIFLE_MAG
+                                } else if is_tb2_kind(def.unit) {
+                                    TB2_MAMS
                                 } else {
                                     0
                                 },
@@ -3260,8 +3363,26 @@ impl MatchSim {
 
             let self_r = unit_radius(&entity.kind);
             let airborne = is_air_kind(&entity.kind);
-            if is_f16_kind(&entity.kind) {
+            if is_f16_kind(&entity.kind) || is_tb2_kind(&entity.kind) {
                 entity.ability_cooldown_ms = entity.ability_cooldown_ms.saturating_sub(dt_ms);
+            }
+            // TB2 on the apron with empty racks — auto-buy a fresh MAM loadout.
+            if is_tb2_kind(&entity.kind)
+                && entity.mag_ammo == 0
+                && entity.ability_cooldown_ms == 0
+                && entity.move_to.is_none()
+                && entity.target.is_none()
+                && self.near_own_airfield_apron(entity.owner, entity.x, entity.y)
+            {
+                let owner = entity.owner;
+                if let Some(player) = self.players.get_mut(&owner) {
+                    if player.resources.gold >= TB2_REARM_GOLD {
+                        player.resources.gold -= TB2_REARM_GOLD;
+                        entity.mag_ammo = TB2_MAMS;
+                        entity.ability_cooldown_ms = TB2_REARM_MS;
+                        entity.dirty = true;
+                    }
+                }
             }
             // If already overlapping a building (e.g. planted on top), shove clear first.
             if !airborne {
@@ -3306,7 +3427,13 @@ impl MatchSim {
             } else {
             let f16_can_hunt =
                 !is_f16_kind(&entity.kind) || (entity.mag_ammo > 0 && entity.detour.is_none());
-            if f16_can_hunt && entity.damage > 0.0 && entity.range > 0.0 && self.tick % 2 == 0 {
+            let tb2_can_hunt = !is_tb2_kind(&entity.kind) || entity.mag_ammo > 0;
+            if f16_can_hunt
+                && tb2_can_hunt
+                && entity.damage > 0.0
+                && entity.range > 0.0
+                && self.tick % 2 == 0
+            {
                 if obeying_move {
                     // On the march: always pick nearest in-range threat (don't stick to someone behind).
                     entity.target =
@@ -3322,8 +3449,11 @@ impl MatchSim {
                         entity.dirty = true;
                     }
                 }
-            } else if is_f16_kind(&entity.kind) && entity.mag_ammo == 0 && entity.target.is_some() {
-                // Hangared / RTB — drop stale attack locks.
+            } else if (is_f16_kind(&entity.kind) || is_tb2_kind(&entity.kind))
+                && entity.mag_ammo == 0
+                && entity.target.is_some()
+            {
+                // Hangared / RTB / empty racks — drop stale attack locks.
                 entity.target = None;
                 entity.dirty = true;
             }
@@ -3370,10 +3500,10 @@ impl MatchSim {
                 if let Some((gx, gy)) = goal {
                     if airborne {
                         // Generals-style air: fly straight over terrain and buildings.
-                        // F-16: honour takeoff-roll / landing-final detour before the real goal.
+                        // F-16 / TB2: honour takeoff / landing-final detour before the real goal.
                         let mut gx = gx;
                         let mut gy = gy;
-                        if is_f16_kind(&entity.kind) {
+                        if is_airfield_craft(&entity.kind) {
                             if let Some((dx, dy)) = entity.detour {
                                 let ddx = dx - entity.x;
                                 let ddy = dy - entity.y;
@@ -3406,8 +3536,13 @@ impl MatchSim {
                             } else if entity.mag_ammo == 0 {
                                 step *= 0.50; // RTB / final
                             }
+                        } else if is_tb2_kind(&entity.kind) && entity.mag_ammo == 0 {
+                            step *= 0.72; // RTB for MAM reload
                         }
-                        let arrive_r = if is_f16_kind(&entity.kind) && entity.mag_ammo == 0 {
+                        let arrive_r = if is_airfield_craft(&entity.kind)
+                            && entity.mag_ammo == 0
+                            && entity.target.is_none()
+                        {
                             0.16 // must seat into the apron slot
                         } else {
                             (entity.range * 0.15).clamp(0.35, 1.2)
@@ -3678,6 +3813,7 @@ impl MatchSim {
                         && entity.attack_cooldown_ms == 0
                         && aimed
                         && !(is_f16_kind(&entity.kind) && entity.mag_ammo == 0)
+                        && !(is_tb2_kind(&entity.kind) && entity.mag_ammo == 0)
                     {
                         let mut f16_spent = false;
                         if is_rifle_infantry(&entity.kind) {
@@ -3707,6 +3843,10 @@ impl MatchSim {
                             entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
                             entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
                             f16_spent = entity.mag_ammo == 0;
+                        } else if is_tb2_kind(&entity.kind) {
+                            entity.mag_ammo = entity.mag_ammo.saturating_sub(1);
+                            entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
+                            // Empty racks — keep loitering (no forced RTB).
                         } else {
                             entity.attack_cooldown_ms = attack_cooldown_for(&entity.kind);
                         }
@@ -3722,8 +3862,8 @@ impl MatchSim {
                         let attacker_owner = entity.owner;
                         let hit_p = shot_hit_chance(&kind, target, dist, entity.range, cover.exposure);
                         let mut rng = rand::thread_rng();
-                        let hit = if is_f16_kind(&kind) {
-                            // Strike package — bomb leaves the jet; impact is the sortie.
+                        let hit = if is_f16_kind(&kind) || is_tb2_kind(&kind) {
+                            // Guided package — seeker lock; impact is the strike.
                             true
                         } else {
                             rng.gen_range(0.0..1.0) < hit_p
@@ -3738,6 +3878,13 @@ impl MatchSim {
                             (jx, jy)
                         } else if is_f16_kind(&kind) {
                             let j = if hit { 0.22 } else { 0.85 };
+                            let jx = (tx + rng.gen_range(-j..j))
+                                .clamp(0.5, self.map_size as f32 - 0.5);
+                            let jy = (ty + rng.gen_range(-j..j))
+                                .clamp(0.5, self.map_size as f32 - 0.5);
+                            (jx, jy)
+                        } else if is_tb2_kind(&kind) {
+                            let j = if hit { 0.18 } else { 0.55 };
                             let jx = (tx + rng.gen_range(-j..j))
                                 .clamp(0.5, self.map_size as f32 - 0.5);
                             let jy = (ty + rng.gen_range(-j..j))
@@ -3786,6 +3933,8 @@ impl MatchSim {
                             self.apply_mlrs_blast(team, attacker_owner, fx, fy, ix, iy, tid);
                         } else if hit && is_f16_kind(&kind) {
                             self.apply_f16_bomb_blast(team, attacker_owner, fx, fy, ix, iy, tid);
+                        } else if hit && is_tb2_kind(&kind) {
+                            self.apply_tb2_mam_blast(team, attacker_owner, fx, fy, ix, iy, tid);
                         } else if hit && is_air_bomb_kind(&kind) {
                             self.apply_air_bomb_blast(team, attacker_owner, fx, fy, ix, iy, tid);
                         } else if hit && kind.contains("tank") && !kind.contains("mg") {
@@ -4459,6 +4608,80 @@ impl MatchSim {
                 v.dirty = true;
                 if v.unit && is_soft_unit(&v.kind) {
                     v.prone_until_tick = v.prone_until_tick.max(self.tick + 48);
+                }
+            }
+        }
+    }
+
+    /// Bayraktar TB2 MAM-L — tight laser-guided seat, shreds soft targets.
+    fn apply_tb2_mam_blast(
+        &mut self,
+        team: u8,
+        attacker: Uuid,
+        from_x: f32,
+        from_y: f32,
+        x: f32,
+        y: f32,
+        primary: Uuid,
+    ) {
+        const RADIUS: f32 = 1.05;
+        let mut victims: Vec<(Uuid, f32, bool)> = Vec::new();
+        self.grid.for_each_nearby(x, y, RADIUS + MAX_ENTITY_RADIUS, |id| {
+            let Some(e) = self.entities.get(&id) else {
+                return false;
+            };
+            if e.hp <= 0.0 || !(e.unit || e.building) {
+                return false;
+            }
+            if e.team == team && e.id != primary {
+                return false;
+            }
+            let dx = e.x - x;
+            let dy = e.y - y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist > RADIUS {
+                return false;
+            }
+            victims.push((e.id, dist, e.unit && is_soft_unit(&e.kind)));
+            false
+        });
+
+        let inx = x - from_x;
+        let iny = y - from_y;
+        let in_len = (inx * inx + iny * iny).sqrt().max(0.001);
+        let iux = inx / in_len;
+        let iuy = iny / in_len;
+
+        for (id, dist, is_infantry) in victims {
+            if id == primary {
+                continue;
+            }
+            let Some(victim) = self.entities.get(&id) else {
+                continue;
+            };
+            if victim.building && self.blast_blocked(primary, x, y, iux, iuy, victim) {
+                continue;
+            }
+            let falloff = 1.0 - (dist / RADIUS).clamp(0.0, 1.0);
+            let t = falloff * falloff;
+            let dmg = if victim.building {
+                55.0 + 160.0 * t
+            } else if is_infantry {
+                220.0 + 280.0 * t
+            } else if is_air_kind(&victim.kind) {
+                40.0 * falloff
+            } else if victim.kind.contains("mlrs") {
+                380.0 + 420.0 * t
+            } else {
+                // Limited vs MBT roof — chips, not kills.
+                95.0 + 140.0 * t
+            };
+            if let Some(v) = self.entities.get_mut(&id) {
+                v.hp -= dmg;
+                v.last_hit_by = Some(attacker);
+                v.dirty = true;
+                if v.unit && is_soft_unit(&v.kind) {
+                    v.prone_until_tick = v.prone_until_tick.max(self.tick + 40);
                 }
             }
         }
@@ -6218,8 +6441,25 @@ impl MatchSim {
             } else {
                 None
             },
-            airborne: is_f16_kind(&entity.kind)
-                && (entity.mag_ammo > 0 || entity.move_to.is_some() || entity.target.is_some()),
+            airborne: self.craft_is_airborne(entity),
         }
+    }
+
+    fn craft_is_airborne(&self, entity: &Entity) -> bool {
+        if is_f16_kind(&entity.kind) {
+            return entity.mag_ammo > 0 || entity.move_to.is_some() || entity.target.is_some();
+        }
+        if is_tb2_kind(&entity.kind) {
+            if entity.move_to.is_some() || entity.target.is_some() {
+                return true;
+            }
+            // Hangared / rearming on the apron.
+            if self.near_own_airfield_apron(entity.owner, entity.x, entity.y) {
+                return false;
+            }
+            // Loitering on station even with empty racks.
+            return true;
+        }
+        false
     }
 }
