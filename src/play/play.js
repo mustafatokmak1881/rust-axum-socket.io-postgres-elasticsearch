@@ -145,6 +145,9 @@ function onServer(msg) {
       }
       break;
     }
+    case "map_expand":
+      void applyMapExpand(msg);
+      break;
     case "delta":
       queueDelta(msg);
       break;
@@ -5200,6 +5203,66 @@ function loadExploredFromSnapshot(snapshot) {
   fogExploredData = unpackExploredBytes(bytes, size);
   if (fogDataTexture) fogDataTexture.needsUpdate = true;
   refreshLiveVision();
+}
+
+/** Mid-match overflow: playable edge grew — resize FOW / ground for existing clients. */
+async function applyMapExpand(msg) {
+  const newSize = Number(msg.map_size) || mapSize;
+  state.ponds = Array.isArray(msg.ponds) ? msg.ponds : state.ponds;
+  state.mountains = Array.isArray(msg.mountains) ? msg.mountains : state.mountains;
+  if (state.match) state.match.map_size = newSize;
+
+  if (newSize === mapSize) {
+    loadExploredFromSnapshot({ map_size: newSize, explored: msg.explored });
+    return;
+  }
+
+  mapSize = newSize;
+  const cx = newSize / 2;
+  const cz = newSize / 2;
+
+  if (fogOfWar && scene) {
+    scene.remove(fogOfWar);
+    fogOfWar.geometry?.dispose?.();
+    fogOfWar.material?.dispose?.();
+    fogDataTexture?.dispose?.();
+    fogOfWar = null;
+    fogDataTexture = null;
+  }
+  if (scene) {
+    fogOfWar = createFogOfWar(newSize);
+    fogOfWar.visible = !globalVision;
+    scene.add(fogOfWar);
+  } else {
+    fogExploredData = unpackExploredBytes(msg.explored, newSize);
+    fogVisionData = new Uint8Array(newSize * newSize);
+  }
+  loadExploredFromSnapshot({ map_size: newSize, explored: msg.explored });
+
+  if (ground) {
+    ground.geometry?.dispose?.();
+    const segs = Math.min(160, Math.max(64, Math.round(newSize * 0.9)));
+    ground.geometry = new THREE.PlaneGeometry(newSize, newSize, segs, segs);
+    ground.position.set(cx, 0, cz);
+    try {
+      const terrain = await loadTerrainTexture(newSize, terrainSeed || 1);
+      if (ground.material?.map) ground.material.map.dispose?.();
+      if (ground.material) {
+        ground.material.map = terrain;
+        ground.material.needsUpdate = true;
+      }
+    } catch (_) {
+      /* keep prior material color */
+    }
+    applyHeightFieldToGround(ground, newSize);
+  }
+
+  if (camera) {
+    camera.far = Math.max(800, newSize * 4);
+    camera.updateProjectionMatrix();
+  }
+
+  toast(`Harita genişledi · ${newSize}`);
 }
 
 /**

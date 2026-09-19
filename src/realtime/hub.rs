@@ -401,7 +401,7 @@ impl MatchHub {
             return Err("Match not found or already ended".into());
         };
 
-        {
+        let expand_notices = {
             let mut rt = runtime.write().await;
             if rt.sim.ended || !rt.open {
                 return Err("Match is closed".into());
