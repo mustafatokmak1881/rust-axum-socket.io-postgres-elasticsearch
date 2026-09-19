@@ -1789,6 +1789,8 @@ const Radar = {
 /* ---------- Three.js ---------- */
 
 let renderer, scene, camera, controls, ground, raycaster, pointer;
+let sunLight = null;
+let sunFillLight = null;
 let mapSize = 192;
 let buildingGeometries = Object.create(null);
 let buildingTemplates = Object.create(null);
@@ -1815,6 +1817,74 @@ const CAMERA_DIST_MIN = 7;
 const CAMERA_DIST_MAX = 10;
 const CAMERA_FOV = 32;
 const EDGE_SCROLL_PX = 160;
+
+/**
+ * Fixed afternoon sun — warm light from the southwest.
+ * Azimuth 0 = +Z (north-ish in map space), elevation from horizon.
+ * Everything casts / receives shadows along this direction.
+ */
+const SUN_AZIMUTH = (218 * Math.PI) / 180;
+const SUN_ELEVATION = (36 * Math.PI) / 180;
+const SUN_DISTANCE = 110;
+const _sunOffset = new THREE.Vector3(
+  Math.cos(SUN_ELEVATION) * Math.sin(SUN_AZIMUTH) * SUN_DISTANCE,
+  Math.sin(SUN_ELEVATION) * SUN_DISTANCE,
+  Math.cos(SUN_ELEVATION) * Math.cos(SUN_AZIMUTH) * SUN_DISTANCE,
+);
+const _sunTarget = new THREE.Vector3();
+
+/** Enable cast+receive on solid meshes; skip sprites, rings, FX blobs. */
+function applyDirectionalShadows(root) {
+  if (!root) return root;
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    const name = obj.name || "";
+    if (
+      name === "airShadow" ||
+      name === "selRing" ||
+      name === "fogOfWar" ||
+      name === "lake" ||
+      name.startsWith("fx") ||
+      name.includes("Flame") ||
+      name.includes("Smoke")
+    ) {
+      obj.castShadow = false;
+      obj.receiveShadow = name !== "fogOfWar" && name !== "airShadow" && name !== "selRing";
+      return;
+    }
+    // Water discs sit under lake group — never cast onto the shore.
+    if (obj.parent?.name === "lake") {
+      obj.castShadow = false;
+      obj.receiveShadow = true;
+      return;
+    }
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const basicOnly = mats.every((m) => m && (m.isMeshBasicMaterial || m.isSpriteMaterial));
+    if (basicOnly) {
+      obj.castShadow = false;
+      obj.receiveShadow = false;
+      return;
+    }
+    const soft = mats.some((m) => m && m.transparent && (m.opacity ?? 1) < 0.45);
+    obj.castShadow = !soft;
+    obj.receiveShadow = true;
+  });
+  root.userData.shadowsApplied = true;
+  return root;
+}
+
+function updateSunLight() {
+  if (!sunLight || !controls) return;
+  const t = controls.target;
+  _sunTarget.set(t.x, sampleTerrainHeight(t.x, t.z), t.z);
+  sunLight.position.set(
+    _sunTarget.x + _sunOffset.x,
+    _sunTarget.y + _sunOffset.y,
+    _sunTarget.z + _sunOffset.z,
+  );
+  sunLight.target.position.copy(_sunTarget);
+  sunLight.target.updateMatrixWorld();
+}
 
 /** Visual max-dimension targets — must match server `building_visual_size`. */
 const BUILDING_VISUAL = {
@@ -1891,7 +1961,7 @@ function finishProcBuilding(root, kind, unitHeight) {
   root.userData.buildingFitVersion = BUILDING_FIT_VERSION;
   root.userData.unitHeight = unitHeight;
   root.userData.procBuilding = true;
-  return root;
+  return applyDirectionalShadows(root);
 }
 
 function milPalette(accent) {
@@ -4584,17 +4654,24 @@ function scatterGroundDecor(scene, size) {
     const seed = ((pond.x * 17) ^ (pond.y * 31) ^ (pond.r * 13)) | 0;
     const stretch = 0.84 + ((Math.abs(pond.x * 13 + pond.y) * 0.01) % 1) * 0.28;
     const lake = new THREE.Group();
+    lake.name = "lake";
     lake.position.set(pond.x, sampleTerrainHeight(pond.x, pond.y) + 0.028, pond.y);
     lake.rotation.y = (pond.x + pond.y) * 0.15;
     lake.scale.set(stretch, 1, 1 / Math.max(0.7, stretch));
 
     const deep = new THREE.Mesh(makeOrganicDiscGeometry(r * 0.58, seed, 80), waterDeep);
+    deep.castShadow = false;
+    deep.receiveShadow = true;
     lake.add(deep);
     const mid = new THREE.Mesh(makeOrganicDiscGeometry(r * 0.9, seed + 5, 80), waterMat);
     mid.position.y = 0.005;
+    mid.castShadow = false;
+    mid.receiveShadow = true;
     lake.add(mid);
     const shore = new THREE.Mesh(makeOrganicDiscGeometry(r * 1.06, seed + 11, 72), waterShore);
     shore.position.y = 0.008;
+    shore.castShadow = false;
+    shore.receiveShadow = true;
     lake.add(shore);
     group.add(lake);
   }
@@ -4733,12 +4810,16 @@ function scatterGroundDecor(scene, size) {
         forestTrunk,
       );
       trunk.position.y = h * 0.22;
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
       tree.add(trunk);
       const canopy = new THREE.Mesh(
         new THREE.ConeGeometry(0.28 + Math.random() * 0.22, h * 0.85, 6),
         Math.random() > 0.45 ? forestCanopy : forestCanopyDeep,
       );
       canopy.position.y = h * 0.7;
+      canopy.castShadow = true;
+      canopy.receiveShadow = true;
       tree.add(canopy);
       if (Math.random() > 0.55) {
         const mid = new THREE.Mesh(
@@ -4746,6 +4827,8 @@ function scatterGroundDecor(scene, size) {
           forestCanopyDeep,
         );
         mid.position.y = h * 0.95;
+        mid.castShadow = true;
+        mid.receiveShadow = true;
         tree.add(mid);
       }
       tree.position.set(x, sampleTerrainHeight(x, z), z);
@@ -4761,6 +4844,8 @@ function scatterGroundDecor(scene, size) {
       rock.position.set(x, sampleTerrainHeight(x, z) + s * 0.28, z);
       rock.rotation.set(Math.random(), Math.random(), Math.random());
       rock.scale.set(1 + Math.random() * 0.4, 0.55 + Math.random() * 0.35, 1 + Math.random() * 0.35);
+      rock.castShadow = true;
+      rock.receiveShadow = true;
       group.add(rock);
       rocks += 1;
       continue;
@@ -4772,15 +4857,16 @@ function scatterGroundDecor(scene, size) {
       bush.position.set(x, sampleTerrainHeight(x, z) + s * 0.35, z);
       bush.scale.set(1.2, 0.55 + Math.random() * 0.35, 1.1);
       bush.rotation.y = Math.random() * Math.PI;
+      bush.castShadow = true;
+      bush.receiveShadow = true;
       group.add(bush);
       bushes += 1;
     }
   }
 
   scene.add(group);
+  applyDirectionalShadows(group);
 }
-
-function initThree(size, terrainTexture, home) {
   mapSize = size;
   const canvas = $("#viewport");
   ghostMesh = null;
@@ -4840,28 +4926,36 @@ function initThree(size, terrainTexture, home) {
   controls.maxPolarAngle = CAMERA_PITCH;
   controls.update();
 
-  const hemi = new THREE.HemisphereLight(0xfff2e0, 0x3a3020, 1.05);
+  const hemi = new THREE.HemisphereLight(0xfff0e4, 0x2e281e, 0.72);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xffeed8, 1.15);
-  sun.position.set(48, 78, 32);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.near = 8;
-  sun.shadow.camera.far = 220;
-  const shadowSpan = Math.min(90, size * 0.55);
-  sun.shadow.camera.left = -shadowSpan;
-  sun.shadow.camera.right = shadowSpan;
-  sun.shadow.camera.top = shadowSpan;
-  sun.shadow.camera.bottom = -shadowSpan;
-  sun.shadow.bias = -0.0008;
-  sun.shadow.normalBias = 0.04;
-  sun.shadow.radius = 3.5;
-  scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xc8daf0, 0.48);
-  fill.position.set(-40, 35, -50);
-  scene.add(fill);
-  const rim = new THREE.DirectionalLight(0xffd8a8, 0.28);
-  rim.position.set(-20, 18, 55);
+
+  // Primary sun — fixed SW elevation; shadow frustum follows the camera target.
+  sunLight = new THREE.DirectionalLight(0xffe2b8, 1.55);
+  sunLight.castShadow = true;
+  const shadowRes = navigator.deviceMemory && navigator.deviceMemory <= 8 ? 1536 : 2048;
+  sunLight.shadow.mapSize.set(shadowRes, shadowRes);
+  sunLight.shadow.camera.near = 4;
+  sunLight.shadow.camera.far = 220;
+  const shadowSpan = 42;
+  sunLight.shadow.camera.left = -shadowSpan;
+  sunLight.shadow.camera.right = shadowSpan;
+  sunLight.shadow.camera.top = shadowSpan;
+  sunLight.shadow.camera.bottom = -shadowSpan;
+  sunLight.shadow.bias = -0.00035;
+  sunLight.shadow.normalBias = 0.028;
+  sunLight.shadow.radius = 2.2;
+  scene.add(sunLight);
+  scene.add(sunLight.target);
+  updateSunLight();
+
+  // Soft fill only — must NOT cast (would flatten sun shadows).
+  sunFillLight = new THREE.DirectionalLight(0xa8c0e0, 0.22);
+  sunFillLight.position.set(-_sunOffset.x * 0.35, _sunOffset.y * 0.45, -_sunOffset.z * 0.35);
+  sunFillLight.castShadow = false;
+  scene.add(sunFillLight);
+  const rim = new THREE.DirectionalLight(0xffd0a0, 0.14);
+  rim.position.set(-20, 22, 55);
+  rim.castShadow = false;
   scene.add(rim);
 
   const segs = Math.min(160, Math.max(64, Math.round(size * 0.9)));
@@ -5938,6 +6032,8 @@ function createRangerMesh(teamColor, opts = {}) {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
     m.rotation.set(rx, ry, rz);
+    m.castShadow = true;
+    m.receiveShadow = true;
     if (tint) g.userData.tintParts.push(m);
     parent.add(m);
     return m;
@@ -6153,7 +6249,7 @@ function createRangerMesh(teamColor, opts = {}) {
   };
   // Real-scale infantry vs buildings (~1/3 of previous size).
   g.scale.setScalar(1 / 3);
-  return g;
+  return applyDirectionalShadows(g);
 }
 
 function createMortarMesh(teamColor) {
@@ -6229,7 +6325,7 @@ function createMortarMesh(teamColor) {
   }
 
   (torso || g).add(mortar);
-  return g;
+  return applyDirectionalShadows(g);
 }
 
 function tankVariantFor(kind) {
@@ -7350,22 +7446,24 @@ function createAirMesh(teamColor, kind = "") {
   muzzle.position.set(0, heli ? 0.02 : -0.02, heli ? 0.18 : 0.05);
   g.add(muzzle);
 
-  // Shadow blob on ground (child at -altitude so it sits on terrain)
+  // Soft contact hint under aircraft (real sun shadow does the heavy lifting)
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(heli ? 0.22 : 0.28, 16),
     new THREE.MeshBasicMaterial({
       color: 0x000000,
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.12,
       depthWrite: false,
     }),
   );
   shadow.name = "airShadow";
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = -(g.userData.airAltitude || 2);
+  shadow.castShadow = false;
+  shadow.receiveShadow = false;
   g.add(shadow);
 
-  return g;
+  return applyDirectionalShadows(g);
 }
 
 function createUnitMesh(kind, teamColor) {
@@ -7403,8 +7501,8 @@ function createUnitMesh(kind, teamColor) {
         ? "gla"
         : "usa";
 
-  // Air — temporary simple elevated mesh
-  if (isAirUnitKind(k)) return createAirMesh(teamColor, k);
+  // Air — elevated craft cast real sun shadows onto the ground
+  if (isAirUnitKind(k)) return applyDirectionalShadows(createAirMesh(teamColor, k));
 
   // Artillery / rocket vehicles
   if (
@@ -7413,22 +7511,24 @@ function createUnitMesh(kind, teamColor) {
     k.includes("inferno") ||
     k.includes("scud")
   ) {
-    return createMlrsMesh(teamColor);
+    return applyDirectionalShadows(createMlrsMesh(teamColor));
   }
 
   // Heavy / medium / specialty tanks — distinct Generals silhouettes
   const tankVar = tankVariantFor(k);
   if (isVehicleDriveKind(k) && tankVar !== "wheeled") {
-    return createTankMesh(teamColor, {
-      style,
-      variant: tankVar,
-      heavy: isHeavyTankKind(k),
-    });
+    return applyDirectionalShadows(
+      createTankMesh(teamColor, {
+        style,
+        variant: tankVar,
+        heavy: isHeavyTankKind(k),
+      }),
+    );
   }
 
   // Light vehicles (Humvee / Technical / crawler / bus…)
   if (tankVar === "wheeled") {
-    return createLightVehicleMesh(teamColor, { style, kind: k });
+    return applyDirectionalShadows(createLightVehicleMesh(teamColor, { style, kind: k }));
   }
 
   // Rocket / AT infantry → mortar pose
@@ -7438,7 +7538,7 @@ function createUnitMesh(kind, teamColor) {
     k.includes("tank_hunter") ||
     k.includes("rpg")
   ) {
-    return createMortarMesh(teamColor);
+    return applyDirectionalShadows(createMortarMesh(teamColor));
   }
 
   // Infantry / heroes / specialists
@@ -7455,15 +7555,19 @@ function createUnitMesh(kind, teamColor) {
     k.includes("jarmen") ||
     k.includes("burton")
   ) {
-    return createRangerMesh(teamColor, { style });
+    return applyDirectionalShadows(createRangerMesh(teamColor, { style }));
   }
 
   // Fallback
-  if (k.includes("missile") || k.includes("mortar")) return createMortarMesh(teamColor);
-  if (k.includes("tank") || k.includes("cannon")) {
-    return createTankMesh(teamColor, { style, variant: tankVariantFor(k) });
+  if (k.includes("missile") || k.includes("mortar")) {
+    return applyDirectionalShadows(createMortarMesh(teamColor));
   }
-  return createRangerMesh(teamColor, { style });
+  if (k.includes("tank") || k.includes("cannon")) {
+    return applyDirectionalShadows(
+      createTankMesh(teamColor, { style, variant: tankVariantFor(k) }),
+    );
+  }
+  return applyDirectionalShadows(createRangerMesh(teamColor, { style }));
 }
 
 
@@ -7681,6 +7785,7 @@ function upsertMesh(entity) {
     mesh.userData.building = !!entity.building;
     mesh.userData.unit = !!entity.unit;
     mesh.userData.kind = entity.kind;
+    if (!mesh.userData.shadowsApplied) applyDirectionalShadows(mesh);
     scene.add(mesh);
     state.meshes.set(entity.id, mesh);
 
@@ -9880,6 +9985,7 @@ function animate() {
   animate._last = now;
   applyEdgePan();
   controls?.update();
+  updateSunLight();
   updateTankCrushVisuals(now);
   const reap = [];
   for (const mesh of state.meshes.values()) {
