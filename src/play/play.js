@@ -314,7 +314,7 @@ function renderStore() {
         <button type="button" class="store-item" data-item="${escapeHtml(item.id)}">
           <strong>${escapeHtml(item.name)}</strong>
           <small>${escapeHtml(item.description)}</small>
-          <span>${owned ? "Owned — Equip" : escapeHtml(item.price_label)}</span>
+          <span>${owned ? "Sahip — Kuşan" : escapeHtml(item.price_label)}</span>
         </button>`;
     })
     .join("");
@@ -471,8 +471,8 @@ function renderScoreboard() {
               : "OYUNCU";
       const teamLabel = state.match?.ffa ? "—" : `T${Number(r.team) + 1}`;
       const status = r.alive
-        ? `<span class="status on">ACTIVE</span>`
-        : `<span class="status off">DEAD</span>`;
+        ? `<span class="status on">AKTİF</span>`
+        : `<span class="status off">DÜŞTÜ</span>`;
       const bases = r.bases ?? 0;
       const army = (Number(r.infantry) || 0) + (Number(r.tanks) || 0);
       const seen = visibleHqsForOwner(r.id).length;
@@ -525,7 +525,7 @@ function centerCameraOnOwner(ownerId) {
   const row = (state.scoreboard || []).find((r) => String(r.id) === owner);
   const label = row
     ? `${String(row.faction || "").toUpperCase()} · ${row.name || "HQ"}`
-    : "Command Center";
+    : "Komuta Merkezi";
   toast(
     hqs.length > 1
       ? `${label} · üs ${hqJumpCursor.index + 1}/${hqs.length}`
