@@ -4757,6 +4757,330 @@ function loadExploredFromSnapshot(snapshot) {
   refreshLiveVision();
 }
 
+/**
+ * Real track → world units.
+ * HQ ~2.15 wu ≈ 25 m; Abrams length ~0.33 wu ≈ 9.8 m → ~0.034–0.086 m→wu.
+ * Use 0.052 so gauge/sleepers read next to tanks without looking toy-sized.
+ * UIC: gauge 1.435 m, sleeper spacing 0.60 m, sleeper ~2.60×0.28×0.22 m, ballast ~3.8 m wide.
+ */
+const RAIL_M2W = 0.052;
+
+/** Soft multi-lobe tree — no low-poly cones / flatShading. */
+function makeProTree(mats, rnd) {
+  const tree = new THREE.Group();
+  const pine = rnd() > 0.42;
+  const h = 0.72 + rnd() * 1.05;
+  const trunkH = h * (pine ? 0.52 : 0.4);
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.016 + rnd() * 0.01, 0.038 + rnd() * 0.022, trunkH, 10),
+    mats.trunk,
+  );
+  trunk.position.y = trunkH * 0.5;
+  trunk.castShadow = true;
+  trunk.receiveShadow = true;
+  tree.add(trunk);
+
+  const matA = rnd() > 0.4 ? mats.canopy : mats.canopyDeep;
+  const matB = mats.canopyDeep;
+  if (pine) {
+    const layers = 3 + Math.floor(rnd() * 2);
+    for (let i = 0; i < layers; i++) {
+      const t = i / Math.max(1, layers - 1);
+      const r = (0.34 - t * 0.2) * (0.88 + rnd() * 0.2);
+      const lobe = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 9), i % 2 ? matB : matA);
+      lobe.scale.set(1.05 + rnd() * 0.1, 0.48 + t * 0.12, 1.0 + rnd() * 0.08);
+      lobe.position.set((rnd() - 0.5) * 0.04, trunkH * 0.55 + t * h * 0.38, (rnd() - 0.5) * 0.04);
+      lobe.castShadow = true;
+      lobe.receiveShadow = true;
+      tree.add(lobe);
+    }
+  } else {
+    const lobes = 2 + Math.floor(rnd() * 2);
+    for (let i = 0; i < lobes; i++) {
+      const r = (0.28 + rnd() * 0.14) * (i === 0 ? 1 : 0.78);
+      const lobe = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), i ? matB : matA);
+      lobe.scale.set(1.15 + rnd() * 0.15, 0.72 + rnd() * 0.18, 1.1 + rnd() * 0.12);
+      lobe.position.set(
+        (rnd() - 0.5) * r * 0.55,
+        trunkH * 0.75 + i * r * 0.35,
+        (rnd() - 0.5) * r * 0.55,
+      );
+      lobe.castShadow = true;
+      lobe.receiveShadow = true;
+      tree.add(lobe);
+    }
+  }
+  return tree;
+}
+
+/** Soft scrub mound — rounded, not faceted. */
+function makeProBush(mat, rnd) {
+  const s = 0.18 + rnd() * 0.28;
+  const bush = new THREE.Group();
+  const a = new THREE.Mesh(new THREE.SphereGeometry(s, 10, 8), mat);
+  a.scale.set(1.25, 0.55 + rnd() * 0.25, 1.15);
+  a.castShadow = true;
+  a.receiveShadow = true;
+  bush.add(a);
+  if (rnd() > 0.35) {
+    const b = new THREE.Mesh(new THREE.SphereGeometry(s * 0.7, 8, 7), mat);
+    b.position.set((rnd() - 0.5) * s * 0.8, s * 0.08, (rnd() - 0.5) * s * 0.8);
+    b.scale.set(1.1, 0.5, 1.05);
+    b.castShadow = true;
+    bush.add(b);
+  }
+  return bush;
+}
+
+function railPathClear(x, z, nearBlocked, size) {
+  if (x < 4 || z < 4 || x > size - 4 || z > size - 4) return false;
+  if (nearBlocked(x, z, 2.4)) return false;
+  for (const e of state.entities.values()) {
+    if (e.kind !== "hq" || (e.hp ?? 1) <= 0) continue;
+    const dx = e.x - x;
+    const dy = e.y - z;
+    if (dx * dx + dy * dy < 7.5 * 7.5) return false;
+  }
+  return true;
+}
+
+/** Plan a long gently curved route edge-to-edge. */
+function planRailRoute(size, nearBlocked, seed, axis) {
+  const margin = 6;
+  const pts = [];
+  const steps = Math.max(48, Math.floor(size / 2.2));
+  const mid = margin + ((Math.abs(seed) * 47) % 1000) / 1000 * (size - 2 * margin);
+  const amp = size * (0.1 + ((Math.abs(seed) * 13) % 100) / 1000);
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const wave = Math.sin(t * Math.PI * 2.1 + seed * 0.17) * amp * Math.sin(Math.PI * t);
+    let x;
+    let z;
+    if (axis === "x") {
+      x = margin + t * (size - 2 * margin);
+      z = mid + wave;
+    } else if (axis === "z") {
+      z = margin + t * (size - 2 * margin);
+      x = mid + wave;
+    } else {
+      x = margin + t * (size - 2 * margin);
+      z = margin + t * (size - 2 * margin) * 0.92 + wave * 0.55 + (seed % 17) * 0.3;
+    }
+    pts.push({ x, z, ok: railPathClear(x, z, nearBlocked, size) });
+  }
+  return pts;
+}
+
+/** Build continuous UIC-scaled track along a polyline (ballast + sleepers + dual rails). */
+function layRailAlongPath(group, pts, mats, geos, mapSpan) {
+  const M = RAIL_M2W;
+  const GAUGE = 1.435 * M;
+  // Real 0.60 m; slightly thin on huge maps so init stays snappy (still dense from RTS cam).
+  const SLEEPER_SP = 0.6 * M * (mapSpan > 350 ? 1.5 : 1);
+  const halfGauge = GAUGE * 0.5;
+
+  const runs = [];
+  let cur = [];
+  for (const p of pts) {
+    if (p.ok) {
+      cur.push(p);
+    } else if (cur.length > 4) {
+      runs.push(cur);
+      cur = [];
+    } else {
+      cur = [];
+    }
+  }
+  if (cur.length > 4) runs.push(cur);
+
+  const dummy = new THREE.Object3D();
+  for (const run of runs) {
+    const samples = [];
+    let dist = 0;
+    samples.push({ x: run[0].x, z: run[0].z, dist: 0 });
+    for (let i = 1; i < run.length; i++) {
+      const dx = run[i].x - run[i - 1].x;
+      const dz = run[i].z - run[i - 1].z;
+      dist += Math.hypot(dx, dz);
+      samples.push({ x: run[i].x, z: run[i].z, dist });
+    }
+    if (dist < 2.5) continue;
+
+    const sleeperCount = Math.max(2, Math.floor(dist / SLEEPER_SP));
+    const sleeperMatrices = [];
+    const ballastMatrices = [];
+    const railMatrices = [];
+
+    const sampleAt = (d) => {
+      let a = samples[0];
+      let b = samples[samples.length - 1];
+      for (let s = 1; s < samples.length; s++) {
+        if (samples[s].dist >= d) {
+          a = samples[s - 1];
+          b = samples[s];
+          break;
+        }
+      }
+      const span = Math.max(1e-6, b.dist - a.dist);
+      const u = (d - a.dist) / span;
+      const x = a.x + (b.x - a.x) * u;
+      const z = a.z + (b.z - a.z) * u;
+      const tx = b.x - a.x;
+      const tz = b.z - a.z;
+      const len = Math.hypot(tx, tz) || 1;
+      return {
+        x,
+        z,
+        fx: tx / len,
+        fz: tz / len,
+        nx: -tz / len,
+        nz: tx / len,
+        yaw: Math.atan2(tx / len, tz / len),
+        y: sampleTerrainHeight(x, z),
+      };
+    };
+
+    for (let i = 0; i <= sleeperCount; i++) {
+      const p = sampleAt((i / sleeperCount) * dist);
+      dummy.position.set(p.x, p.y + geos.sleeperH * 0.55, p.z);
+      dummy.rotation.set(0, p.yaw, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      sleeperMatrices.push(dummy.matrix.clone());
+
+      if (i % 2 === 0) {
+        dummy.position.set(p.x, p.y + geos.ballastH * 0.35, p.z);
+        dummy.scale.set(1, 1, (SLEEPER_SP * 2.05) / geos.ballastLen);
+        dummy.updateMatrix();
+        ballastMatrices.push(dummy.matrix.clone());
+      }
+    }
+
+    // Rail instances: longer segments (every ~8 sleepers) for fewer draws, still continuous.
+    const railStride = 8;
+    for (let i = 0; i < sleeperCount; i += railStride) {
+      const i1 = Math.min(sleeperCount, i + railStride);
+      const p0 = sampleAt((i / sleeperCount) * dist);
+      const p1 = sampleAt((i1 / sleeperCount) * dist);
+      const dx = p1.x - p0.x;
+      const dz = p1.z - p0.z;
+      const segLen = Math.hypot(dx, dz);
+      if (segLen < 0.02) continue;
+      const midX = (p0.x + p1.x) * 0.5;
+      const midZ = (p0.z + p1.z) * 0.5;
+      const y0 = p0.y + geos.sleeperH + geos.railH * 0.55;
+      const y1 = p1.y + geos.sleeperH + geos.railH * 0.55;
+      const yaw = Math.atan2(dx, dz);
+      const pitch = Math.atan2(y1 - y0, segLen);
+
+      for (const side of [-1, 1]) {
+        const ox = p0.nx * halfGauge * side;
+        const oz = p0.nz * halfGauge * side;
+        const ox1 = p1.nx * halfGauge * side;
+        const oz1 = p1.nz * halfGauge * side;
+        const mx = midX + (ox + ox1) * 0.5;
+        const mz = midZ + (oz + oz1) * 0.5;
+        dummy.position.set(mx, (y0 + y1) * 0.5, mz);
+        dummy.rotation.order = "YXZ";
+        dummy.rotation.set(-pitch, yaw, 0);
+        dummy.scale.set(1, 1, segLen / geos.railLen);
+        dummy.updateMatrix();
+        railMatrices.push(dummy.matrix.clone());
+      }
+    }
+
+    if (sleeperMatrices.length) {
+      const sleepers = new THREE.InstancedMesh(geos.sleeper, mats.sleeper, sleeperMatrices.length);
+      sleepers.castShadow = true;
+      sleepers.receiveShadow = true;
+      sleepers.frustumCulled = true;
+      sleeperMatrices.forEach((m, i) => sleepers.setMatrixAt(i, m));
+      sleepers.instanceMatrix.needsUpdate = true;
+      group.add(sleepers);
+    }
+    if (ballastMatrices.length) {
+      const ballast = new THREE.InstancedMesh(geos.ballast, mats.ballast, ballastMatrices.length);
+      ballast.castShadow = false;
+      ballast.receiveShadow = true;
+      ballastMatrices.forEach((m, i) => ballast.setMatrixAt(i, m));
+      ballast.instanceMatrix.needsUpdate = true;
+      group.add(ballast);
+    }
+    if (railMatrices.length) {
+      const rails = new THREE.InstancedMesh(geos.rail, mats.rail, railMatrices.length);
+      rails.castShadow = true;
+      rails.receiveShadow = true;
+      railMatrices.forEach((m, i) => rails.setMatrixAt(i, m));
+      rails.instanceMatrix.needsUpdate = true;
+      group.add(rails);
+    }
+  }
+}
+
+function buildMapRailways(group, size, nearBlocked) {
+  const M = RAIL_M2W;
+  const mats = {
+    ballast: new THREE.MeshStandardMaterial({
+      color: 0x6a6458,
+      roughness: 0.97,
+      metalness: 0.02,
+      flatShading: false,
+    }),
+    sleeper: new THREE.MeshStandardMaterial({
+      color: 0x5a5040,
+      roughness: 0.92,
+      metalness: 0.04,
+      flatShading: false,
+    }),
+    rail: new THREE.MeshStandardMaterial({
+      color: 0x4a5058,
+      roughness: 0.35,
+      metalness: 0.78,
+      flatShading: false,
+    }),
+  };
+  const sleeperL = 2.6 * M;
+  const sleeperW = 0.28 * M;
+  const sleeperH = 0.2 * M;
+  const ballastW = 3.8 * M;
+  const ballastH = 0.3 * M;
+  const ballastLen = 0.6 * M * 2;
+  const railW = 0.075 * M; // readable head (real ~70mm)
+  const railH = 0.16 * M; // slight visual boost vs 172mm
+  const railLen = 1;
+  const geos = {
+    sleeper: new THREE.BoxGeometry(sleeperL, sleeperH, sleeperW),
+    ballast: new THREE.BoxGeometry(ballastW, ballastH, ballastLen),
+    rail: new THREE.BoxGeometry(railW, railH, railLen),
+    sleeperH,
+    ballastH,
+    ballastLen,
+    railH,
+    railLen,
+  };
+  // Soft bevel feel — slightly flatten ballast top visually via scale already.
+
+  const seed = (terrainSeed || size * 17) | 0;
+  const routes = [
+    planRailRoute(size, nearBlocked, seed + 3, "x"),
+    planRailRoute(size, nearBlocked, seed + 91, "z"),
+  ];
+  // Extra long diagonal on larger maps
+  if (size >= 120) {
+    routes.push(planRailRoute(size, nearBlocked, seed + 211, "diag"));
+  }
+  // Parallel second track on the primary EW line (track centers ~4.2 m UIC-ish)
+  const twin = planRailRoute(size, nearBlocked, seed + 3, "x").map((p) => {
+    const z = p.z + 4.2 * M;
+    return { x: p.x, z, ok: railPathClear(p.x, z, nearBlocked, size) };
+  });
+  routes.push(twin);
+
+  for (const pts of routes) {
+    layRailAlongPath(group, pts, mats, geos, size);
+  }
+}
+
 function scatterGroundDecor(scene, size) {
   const group = new THREE.Group();
   group.name = "groundDecor";
@@ -4765,31 +5089,33 @@ function scatterGroundDecor(scene, size) {
     color: 0x6a5240,
     roughness: 0.96,
     metalness: 0.04,
-    flatShading: true,
+    flatShading: false,
   });
   const scrubBush = new THREE.MeshStandardMaterial({
-    color: 0x5a6a38,
-    roughness: 0.92,
+    color: 0x4e6234,
+    roughness: 0.9,
     metalness: 0,
-    flatShading: true,
+    flatShading: false,
   });
   const forestTrunk = new THREE.MeshStandardMaterial({
     color: 0x4a3a28,
     roughness: 0.95,
     metalness: 0,
+    flatShading: false,
   });
   const forestCanopy = new THREE.MeshStandardMaterial({
     color: 0x2f4a28,
-    roughness: 0.88,
+    roughness: 0.82,
     metalness: 0,
-    flatShading: true,
+    flatShading: false,
   });
   const forestCanopyDeep = new THREE.MeshStandardMaterial({
     color: 0x243a20,
-    roughness: 0.9,
+    roughness: 0.86,
     metalness: 0,
-    flatShading: true,
+    flatShading: false,
   });
+  const treeMats = { trunk: forestTrunk, canopy: forestCanopy, canopyDeep: forestCanopyDeep };
   const waterMat = new THREE.MeshStandardMaterial({
     color: 0x3a9aaa,
     roughness: 0.14,
@@ -4957,62 +5283,37 @@ function scatterGroundDecor(scene, size) {
     return false;
   };
 
-  const maxTrees = Math.min(36, Math.floor(size * 0.18));
-  const maxRocks = Math.min(22, Math.floor(size * 0.12));
-  const maxBushes = Math.min(28, Math.floor(size * 0.14));
-  const tries = Math.min(280, Math.floor(size * 0.9));
+  const maxTrees = Math.min(110, Math.floor(size * 0.48));
+  const maxRocks = Math.min(36, Math.floor(size * 0.16));
+  const maxBushes = Math.min(90, Math.floor(size * 0.42));
+  const tries = Math.min(1100, Math.floor(size * 3.2));
   let trees = 0;
   let rocks = 0;
   let bushes = 0;
+  const rnd = () => Math.random();
   for (let i = 0; i < tries; i++) {
     const x = 5 + Math.random() * (size - 10);
     const z = 5 + Math.random() * (size - 10);
     if (nearBlocked(x, z)) continue;
     const biome = sampleBiome(x, z, size);
 
-    if (biome > 0.68 && trees < maxTrees) {
-      // Simple pine / canopy tree
-      const h = 0.55 + Math.random() * 0.85;
-      const tree = new THREE.Group();
-      const trunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.04, 0.07, h * 0.55, 5),
-        forestTrunk,
-      );
-      trunk.position.y = h * 0.22;
-      trunk.castShadow = true;
-      trunk.receiveShadow = true;
-      tree.add(trunk);
-      const canopy = new THREE.Mesh(
-        new THREE.ConeGeometry(0.28 + Math.random() * 0.22, h * 0.85, 6),
-        Math.random() > 0.45 ? forestCanopy : forestCanopyDeep,
-      );
-      canopy.position.y = h * 0.7;
-      canopy.castShadow = true;
-      canopy.receiveShadow = true;
-      tree.add(canopy);
-      if (Math.random() > 0.55) {
-        const mid = new THREE.Mesh(
-          new THREE.ConeGeometry(0.2 + Math.random() * 0.12, h * 0.45, 6),
-          forestCanopyDeep,
-        );
-        mid.position.y = h * 0.95;
-        mid.castShadow = true;
-        mid.receiveShadow = true;
-        tree.add(mid);
-      }
+    if (biome > 0.62 && trees < maxTrees) {
+      const tree = makeProTree(treeMats, rnd);
       tree.position.set(x, sampleTerrainHeight(x, z), z);
       tree.rotation.y = Math.random() * Math.PI * 2;
+      const s = 0.88 + Math.random() * 0.35;
+      tree.scale.setScalar(s);
       group.add(tree);
       trees += 1;
       continue;
     }
 
     if (biome < 0.36 && rocks < maxRocks) {
-      const s = 0.18 + Math.random() * 0.5;
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), desertRock);
-      rock.position.set(x, sampleTerrainHeight(x, z) + s * 0.28, z);
-      rock.rotation.set(Math.random(), Math.random(), Math.random());
-      rock.scale.set(1 + Math.random() * 0.4, 0.55 + Math.random() * 0.35, 1 + Math.random() * 0.35);
+      const s = 0.16 + Math.random() * 0.42;
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 1), desertRock);
+      rock.position.set(x, sampleTerrainHeight(x, z) + s * 0.22, z);
+      rock.rotation.set(Math.random() * 0.4, Math.random() * Math.PI, Math.random() * 0.35);
+      rock.scale.set(1 + Math.random() * 0.35, 0.5 + Math.random() * 0.32, 1 + Math.random() * 0.3);
       rock.castShadow = true;
       rock.receiveShadow = true;
       group.add(rock);
@@ -5020,18 +5321,17 @@ function scatterGroundDecor(scene, size) {
       continue;
     }
 
-    if (biome >= 0.36 && biome <= 0.72 && bushes < maxBushes) {
-      const s = 0.22 + Math.random() * 0.35;
-      const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0), scrubBush);
-      bush.position.set(x, sampleTerrainHeight(x, z) + s * 0.35, z);
-      bush.scale.set(1.2, 0.55 + Math.random() * 0.35, 1.1);
+    if (biome >= 0.34 && biome <= 0.74 && bushes < maxBushes) {
+      const bush = makeProBush(scrubBush, rnd);
+      bush.position.set(x, sampleTerrainHeight(x, z), z);
       bush.rotation.y = Math.random() * Math.PI;
-      bush.castShadow = true;
-      bush.receiveShadow = true;
       group.add(bush);
       bushes += 1;
     }
   }
+
+  // Long UIC-scaled rail corridors across empty ground.
+  buildMapRailways(group, size, nearBlocked);
 
   scene.add(group);
   applyDirectionalShadows(group);
@@ -8363,39 +8663,55 @@ function updateTankDrive(mesh, dt) {
   }
 }
 
-/** Shared dusty puff pool — tracks kick up dirt behind moving vehicles. */
+/** Soft dust puff pool — radial fade sprites, not faceted spheres. */
 const tankDustPuffs = [];
-const TANK_DUST_MAX = 96;
+const TANK_DUST_MAX = 120;
 let tankDustMat = null;
-let tankDustGeo = null;
+let tankDustTex = null;
 
+function makeSoftDustTexture() {
+  if (tankDustTex) return tankDustTex;
+  const c = document.createElement("canvas");
+  c.width = 64;
+  c.height = 64;
+  const ctx = c.getContext("2d");
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  g.addColorStop(0, "rgba(210,190,150,0.55)");
+  g.addColorStop(0.35, "rgba(160,140,100,0.28)");
+  g.addColorStop(0.7, "rgba(120,100,70,0.08)");
+  g.addColorStop(1, "rgba(90,70,50,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  tankDustTex = new THREE.CanvasTexture(c);
+  tankDustTex.colorSpace = THREE.SRGBColorSpace;
+  tankDustTex.needsUpdate = true;
+  return tankDustTex;
+}
+
+/** Soft billboard dust — no faceted spheres. */
 function ensureTankDustAssets() {
   if (!tankDustMat) {
-    tankDustMat = new THREE.MeshBasicMaterial({
-      color: 0x8a7a58,
+    tankDustMat = new THREE.SpriteMaterial({
+      map: makeSoftDustTexture(),
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.55,
       depthWrite: false,
+      blending: THREE.NormalBlending,
     });
-  }
-  if (!tankDustGeo) {
-    tankDustGeo = new THREE.SphereGeometry(1, 6, 5);
   }
 }
 
 function emitTankDust(mesh, step, now) {
   if (!scene || !mesh) return;
-  // Throttle by travel so crawls don't fill the screen.
   const last = mesh.userData.dustAt || 0;
-  const gap = Math.max(28, 55 - step * 400);
+  const gap = Math.max(22, 48 - step * 520);
   if (now - last < gap) return;
   mesh.userData.dustAt = now;
 
-  // Skip far vehicles (LOD).
   if (camera) {
     const dx = mesh.position.x - camera.position.x;
     const dz = mesh.position.z - camera.position.z;
-    if (dx * dx + dz * dz > 70 * 70) return;
+    if (dx * dx + dz * dz > 65 * 65) return;
   }
 
   ensureTankDustAssets();
@@ -8403,34 +8719,41 @@ function emitTankDust(mesh, step, now) {
   const backX = -Math.sin(yaw);
   const backZ = -Math.cos(yaw);
   const heavy = !!mesh.userData.isAbrams || !!mesh.userData.isMlrs;
-  const side = (Math.random() - 0.5) * (heavy ? 0.28 : 0.2);
   const groundY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
-  const px = mesh.position.x + backX * (heavy ? 0.32 : 0.22) + Math.cos(yaw) * side;
-  const pz = mesh.position.z + backZ * (heavy ? 0.32 : 0.22) + Math.sin(yaw) * side;
 
-  let puff = null;
-  if (tankDustPuffs.length >= TANK_DUST_MAX) {
-    puff = tankDustPuffs.shift();
-  } else {
-    puff = new THREE.Mesh(tankDustGeo, tankDustMat.clone());
-    puff.material.depthWrite = false;
-    puff.material.transparent = true;
-    scene.add(puff);
+  // Two soft puffs from left/right track rear.
+  for (const sideSign of [-1, 1]) {
+    const side = sideSign * (heavy ? 0.14 : 0.1) + (Math.random() - 0.5) * 0.04;
+    const px = mesh.position.x + backX * (heavy ? 0.28 : 0.2) + Math.cos(yaw) * side;
+    const pz = mesh.position.z + backZ * (heavy ? 0.28 : 0.2) + Math.sin(yaw) * side;
+
+    let puff;
+    if (tankDustPuffs.length >= TANK_DUST_MAX) {
+      puff = tankDustPuffs.shift();
+      if (!puff.isSprite) {
+        scene.remove(puff);
+        puff = new THREE.Sprite(tankDustMat.clone());
+        scene.add(puff);
+      }
+    } else {
+      puff = new THREE.Sprite(tankDustMat.clone());
+      scene.add(puff);
+    }
+    const scale = (heavy ? 0.22 : 0.16) + Math.random() * 0.08 + step * 2.4;
+    puff.position.set(px, groundY + 0.06 + Math.random() * 0.03, pz);
+    puff.scale.set(scale, scale * 0.72, 1);
+    puff.userData.baseScale = scale;
+    puff.material.opacity = 0.42 + Math.min(0.28, step * 14);
+    puff.userData.baseOpacity = puff.material.opacity;
+    puff.userData.born = now;
+    puff.userData.life = 520 + Math.random() * 320;
+    puff.userData.vx = backX * (0.05 + Math.random() * 0.08) + (Math.random() - 0.5) * 0.04;
+    puff.userData.vy = 0.08 + Math.random() * 0.1;
+    puff.userData.vz = backZ * (0.05 + Math.random() * 0.08) + (Math.random() - 0.5) * 0.04;
+    puff.userData.grow = 2.1 + Math.random() * 1.2;
+    puff.visible = true;
+    tankDustPuffs.push(puff);
   }
-  const scale = (heavy ? 0.1 : 0.07) + Math.random() * 0.05 + step * 1.8;
-  puff.position.set(px, groundY + 0.03 + Math.random() * 0.02, pz);
-  puff.scale.setScalar(scale);
-  puff.userData.baseScale = scale;
-  puff.material.opacity = 0.38 + Math.min(0.25, step * 12);
-  puff.material.color.setHex(Math.random() > 0.45 ? 0x8a7a58 : 0x6e6248);
-  puff.userData.born = now;
-  puff.userData.life = 420 + Math.random() * 280;
-  puff.userData.vx = backX * (0.08 + Math.random() * 0.1) + (Math.random() - 0.5) * 0.06;
-  puff.userData.vy = 0.12 + Math.random() * 0.14;
-  puff.userData.vz = backZ * (0.08 + Math.random() * 0.1) + (Math.random() - 0.5) * 0.06;
-  puff.userData.grow = 1.7 + Math.random() * 1.1;
-  puff.visible = true;
-  tankDustPuffs.push(puff);
 }
 
 function updateTankDust(now, dt) {
@@ -8447,15 +8770,16 @@ function updateTankDust(now, dt) {
     p.position.x += (p.userData.vx || 0) * dt;
     p.position.y += (p.userData.vy || 0) * dt;
     p.position.z += (p.userData.vz || 0) * dt;
-    p.userData.vy = (p.userData.vy || 0) * 0.9;
-    const base = p.userData.baseScale || 0.08;
-    const grow = 1 + t * (p.userData.grow || 1.8);
-    p.scale.setScalar(base * grow);
-    if (p.material) p.material.opacity = (1 - t) * (1 - t) * 0.48;
+    p.userData.vy = (p.userData.vy || 0) * 0.88;
+    const base = p.userData.baseScale || 0.16;
+    const grow = 1 + smoothstep(0, 1, t) * (p.userData.grow || 2);
+    const fade = 1 - t * t;
+    p.scale.set(base * grow, base * grow * 0.7, 1);
+    if (p.material) p.material.opacity = fade * fade * (p.userData.baseOpacity || 0.45);
   }
   while (tankDustPuffs.length && !tankDustPuffs[0].visible) {
     const dead = tankDustPuffs.shift();
-    if (dead.material && dead.material !== tankDustMat) dead.material.dispose?.();
+    if (dead.material) dead.material.dispose?.();
     scene?.remove(dead);
   }
 }
