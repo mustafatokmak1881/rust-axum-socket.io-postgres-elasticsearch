@@ -4417,19 +4417,26 @@ function pruneFogGhosts() {
 }
 
 function stampVisionCircle(data, size, cx, cy, radius) {
-  const r = Math.ceil(radius);
-  const ix = Math.floor(cx);
-  const iy = Math.floor(cy);
-  const r2 = radius * radius;
+  // Soft radial falloff — Linear-filtered fog reads as mist, not pixels.
+  const softR = radius * 1.22;
+  const r = Math.ceil(softR);
+  const core = radius * 0.68;
   for (let dy = -r; dy <= r; dy++) {
     for (let dx = -r; dx <= r; dx++) {
-      const x = ix + dx;
-      const y = iy + dy;
+      const x = Math.floor(cx) + dx;
+      const y = Math.floor(cy) + dy;
       if (x < 0 || y < 0 || x >= size || y >= size) continue;
       const fx = x + 0.5 - cx;
       const fy = y + 0.5 - cy;
-      if (fx * fx + fy * fy > r2) continue;
-      data[y * size + x] = 255;
+      const d = Math.hypot(fx, fy);
+      if (d > softR) continue;
+      let v = 255;
+      if (d > core) {
+        const t = (d - core) / Math.max(0.001, softR - core);
+        v = Math.round(255 * (1 - t) * (1 - t));
+      }
+      const i = y * size + x;
+      if (v > data[i]) data[i] = v;
     }
   }
 }
@@ -4519,20 +4526,24 @@ function createFogOfWar(size) {
   fogVisionData = new Uint8Array(size * size);
   const rgba = new Uint8Array(size * size * 4);
   fogDataTexture = new THREE.DataTexture(rgba, size, size, THREE.RGBAFormat);
-  fogDataTexture.magFilter = THREE.NearestFilter;
-  fogDataTexture.minFilter = THREE.NearestFilter;
+  // Linear = soft mist edges (Nearest was the pixel grid look).
+  fogDataTexture.magFilter = THREE.LinearFilter;
+  fogDataTexture.minFilter = THREE.LinearFilter;
+  fogDataTexture.generateMipmaps = false;
   fogDataTexture.flipY = false;
   fogDataTexture.needsUpdate = true;
 
   const geo = new THREE.PlaneGeometry(size, size, 1, 1);
-  // Three r170 + WebGL2 uses GLSL3 — avoid texture2D/gl_FragColor and reserved `sample`.
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
+    depthTest: true,
+    blending: THREE.NormalBlending,
     glslVersion: THREE.GLSL3,
     uniforms: {
       uMap: { value: fogDataTexture },
       uSize: { value: size },
+      uTime: { value: 0 },
     },
     vertexShader: `
       out vec3 vWorldPos;
@@ -4545,32 +4556,84 @@ function createFogOfWar(size) {
     fragmentShader: `
       uniform sampler2D uMap;
       uniform float uSize;
+      uniform float uTime;
       in vec3 vWorldPos;
       out vec4 fragColor;
+
+      float hash21(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float valueNoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+      }
+
+      float fbm(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += a * valueNoise(p);
+          p = p * 2.05 + vec2(17.1, 9.3);
+          a *= 0.5;
+        }
+        return v;
+      }
+
       void main() {
         vec2 uv = vec2(vWorldPos.x, vWorldPos.z) / uSize;
-        if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
-          fragColor = vec4(0.06, 0.04, 0.025, 0.93);
-          return;
+        vec2 world = vec2(vWorldPos.x, vWorldPos.z);
+
+        // Drifting mist swirls
+        float t = uTime * 0.045;
+        float n1 = fbm(world * 0.085 + vec2(t * 0.7, -t * 0.45));
+        float n2 = fbm(world * 0.18 + vec2(-t * 0.55, t * 0.35) + 20.0);
+        float mistNoise = n1 * 0.65 + n2 * 0.35;
+
+        float explored = 0.0;
+        float visible = 0.0;
+        if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
+          vec4 texel = texture(uMap, uv);
+          explored = texel.r;
+          visible = texel.g;
         }
-        vec4 texel = texture(uMap, uv);
-        float explored = texel.r;
-        float visible = texel.g;
-        if (explored < 0.5) {
-          fragColor = vec4(0.06, 0.04, 0.025, 0.93);
-          return;
-        }
-        if (visible < 0.5) {
-          fragColor = vec4(0.1, 0.07, 0.04, 0.58);
-          return;
-        }
-        discard;
+
+        // Soft clearings — no hard binary cut
+        float clear = smoothstep(0.12, 0.88, visible);
+        float known = smoothstep(0.04, 0.5, explored);
+
+        // Pale atmospheric haze (not black void)
+        vec3 deepMist = vec3(0.52, 0.56, 0.58);
+        vec3 warmMist = vec3(0.70, 0.66, 0.58);
+        vec3 lightHaze = vec3(0.78, 0.76, 0.70);
+        vec3 col = mix(deepMist, warmMist, mistNoise);
+        col = mix(col, lightHaze, known * 0.55);
+        // Soft luminance variation like real fog banks
+        col *= 0.88 + mistNoise * 0.22;
+
+        // Unexplored denser; explored-not-visible thinner; visible fades out
+        float density = mix(0.82, 0.40, known);
+        density *= 1.0 - clear;
+        density *= 0.78 + mistNoise * 0.35;
+        // Soft fringe at vision edge
+        density = clamp(density, 0.0, 0.88);
+
+        if (density < 0.025) discard;
+        fragColor = vec4(col, density);
       }
     `,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(size / 2, terrainHeightAmp + 0.55, size / 2);
+  mesh.position.set(size / 2, terrainHeightAmp + 0.72, size / 2);
   mesh.renderOrder = 8;
   mesh.name = "fogOfWar";
   return mesh;
@@ -9986,6 +10049,9 @@ function animate() {
   applyEdgePan();
   controls?.update();
   updateSunLight();
+  if (fogOfWar?.material?.uniforms?.uTime) {
+    fogOfWar.material.uniforms.uTime.value = now * 0.001;
+  }
   updateTankCrushVisuals(now);
   const reap = [];
   for (const mesh of state.meshes.values()) {
