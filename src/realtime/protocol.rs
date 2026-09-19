@@ -307,6 +307,9 @@ pub struct EntityView {
     /// Infantry lying down in combat.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prone: bool,
+    /// Building under hacker blackout.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hacked: bool,
     /// Current attack target — tanks/Patriot slew toward this before firing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aim_at: Option<Uuid>,

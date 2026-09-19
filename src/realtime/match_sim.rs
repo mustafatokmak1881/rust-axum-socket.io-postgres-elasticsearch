@@ -259,6 +259,10 @@ pub struct Entity {
     pub mg_cooldown_ms: u32,
     /// Last commander who damaged this entity (for HQ capture attribution).
     pub last_hit_by: Option<Uuid>,
+    /// Building disabled by a hacker until this tick (production / income / guns freeze).
+    pub hacked_until_tick: u64,
+    /// Specialist ability recharge (spy sabotage / hack / revolt).
+    pub ability_cooldown_ms: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -398,6 +402,7 @@ fn is_rifle_infantry(kind: &str) -> bool {
     matches!(
         kind,
         "ranger"
+            | "spy"
             | "red_guard"
             | "rebel"
             | "pathfinder"
@@ -1073,6 +1078,8 @@ impl MatchSim {
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
             last_hit_by: None,
+            hacked_until_tick: 0,
+            ability_cooldown_ms: 0,
         });
         if let Some(player) = self.players.get_mut(&user_id) {
             player.home_hq = Some(hq_id);
@@ -1330,6 +1337,8 @@ impl MatchSim {
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
             last_hit_by: None,
+            hacked_until_tick: 0,
+            ability_cooldown_ms: 0,
         });
 
         if let Some(player) = self.players.get_mut(&owner) {
@@ -1387,6 +1396,8 @@ impl MatchSim {
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
             last_hit_by: None,
+            hacked_until_tick: 0,
+            ability_cooldown_ms: 0,
         });
     }
 
@@ -1583,21 +1594,14 @@ impl MatchSim {
                 }
             })
             .collect();
+        // Power ranking: alive → bases → army → buildings → gold (live ladder).
+        let _ = (viewer_team, ffa);
         rows.sort_by(|a, b| {
-            let relation = |r: &ScoreboardRow| -> u8 {
-                if r.you {
-                    0
-                } else if !ffa && viewer_team == Some(r.team) {
-                    1 // ally
-                } else {
-                    2 // enemy
-                }
-            };
-            relation(a)
-                .cmp(&relation(b))
-                .then_with(|| b.alive.cmp(&a.alive))
+            b.alive
+                .cmp(&a.alive)
                 .then_with(|| b.bases.cmp(&a.bases))
                 .then_with(|| (b.infantry + b.tanks).cmp(&(a.infantry + a.tanks)))
+                .then_with(|| b.buildings.cmp(&a.buildings))
                 .then_with(|| b.gold.cmp(&a.gold))
                 .then_with(|| a.name.cmp(&b.name))
         });
@@ -1892,6 +1896,8 @@ impl MatchSim {
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
             last_hit_by: None,
+            hacked_until_tick: 0,
+            ability_cooldown_ms: 0,
         });
 
         // Redis-stream style delayed job marker.
@@ -2204,6 +2210,9 @@ impl MatchSim {
             if !e.building || e.hp <= 0.0 || e.build_remaining_ms > 0 {
                 continue;
             }
+            if self.tick < e.hacked_until_tick {
+                continue; // Hacker blackout — no income from this structure.
+            }
             let g = by_owner.entry(e.owner).or_default();
             match e.kind.as_str() {
                 "hq" => {
@@ -2327,6 +2336,10 @@ impl MatchSim {
             if was_building && entity.build_remaining_ms == 0 {
                 self.on_building_finished(&entity);
             }
+            // Push a FOW update when hack blackout ends so clients clear the FX.
+            if entity.hacked_until_tick > 0 && self.tick == entity.hacked_until_tick {
+                entity.dirty = true;
+            }
 
             let powered = self
                 .players
@@ -2335,7 +2348,9 @@ impl MatchSim {
                 .unwrap_or(false);
 
             // Brownout: factories / barracks freeze production. Power plants still finish.
-            if entity.build_remaining_ms == 0 && powered {
+            // Hacked buildings also freeze (cyber blackout).
+            let hacked = self.tick < entity.hacked_until_tick;
+            if entity.build_remaining_ms == 0 && powered && !hacked {
                 if let Some(job) = entity.train_queue.front_mut() {
                     job.remaining_ms = job.remaining_ms.saturating_sub(dt_ms);
                     entity.dirty = true;
@@ -2409,6 +2424,8 @@ impl MatchSim {
                                 aim_yaw: 0.0,
                                 mg_cooldown_ms: 0,
                                 last_hit_by: None,
+                                hacked_until_tick: 0,
+                                ability_cooldown_ms: 0,
                             };
                             self.put_entity(spawn);
                             if let Some(p) = self.players.get_mut(&owner) {
@@ -2419,8 +2436,9 @@ impl MatchSim {
                 }
             }
 
-            // Armed buildings go dark without power.
+            // Armed buildings go dark without power or while hacked.
             if powered
+                && !hacked
                 && entity.build_remaining_ms == 0
                 && entity.damage > 0.0
                 && entity.range > 0.0
@@ -2936,6 +2954,7 @@ impl MatchSim {
         self.eject_units_from_buildings();
         self.crush_infantry_under_tanks();
         self.clamp_entities_to_map();
+        self.tick_special_ops(dt_ms);
 
         // Remove dead.
         let dead: Vec<Uuid> = self
@@ -3098,6 +3117,196 @@ impl MatchSim {
         }
     }
 
+    fn is_enemy_of(&self, a: Uuid, b_owner: Uuid, b_team: u8) -> bool {
+        if a == b_owner {
+            return false;
+        }
+        let Some(ap) = self.players.get(&a) else {
+            return false;
+        };
+        if self.ffa {
+            return true;
+        }
+        ap.team != b_team
+    }
+
+    /// Spy sabotage / Hacker cyber / Terrorist revolt — pulsed abilities.
+    fn tick_special_ops(&mut self, dt_ms: u32) {
+        let ids: Vec<Uuid> = self
+            .entities
+            .values()
+            .filter(|e| {
+                e.unit
+                    && e.hp > 0.0
+                    && matches!(e.kind.as_str(), "spy" | "hacker" | "terrorist")
+            })
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            let Some(mut agent) = self.take_entity(id) else {
+                continue;
+            };
+            agent.ability_cooldown_ms = agent.ability_cooldown_ms.saturating_sub(dt_ms);
+            if agent.ability_cooldown_ms > 0 {
+                self.put_entity(agent);
+                continue;
+            }
+            let owner = agent.owner;
+            let ax = agent.x;
+            let ay = agent.y;
+            let kind = agent.kind.clone();
+
+            match kind.as_str() {
+                "spy" => {
+                    // Sabotage nearest finished enemy building in reach.
+                    let mut best: Option<(Uuid, f32)> = None;
+                    for e in self.entities.values() {
+                        if !e.building || e.hp <= 0.0 || e.build_remaining_ms > 0 {
+                            continue;
+                        }
+                        if !self.is_enemy_of(owner, e.owner, e.team) {
+                            continue;
+                        }
+                        let dx = e.x - ax;
+                        let dy = e.y - ay;
+                        let d2 = dx * dx + dy * dy;
+                        if d2 > 2.6 * 2.6 {
+                            continue;
+                        }
+                        if best.map(|(_, bd)| d2 < bd).unwrap_or(true) {
+                            best = Some((e.id, d2));
+                        }
+                    }
+                    if let Some((bid, _)) = best {
+                        if let Some(b) = self.entities.get_mut(&bid) {
+                            let dmg = if b.kind == "hq" { 35.0 } else { 75.0 };
+                            b.hp = (b.hp - dmg).max(0.0);
+                            b.last_hit_by = Some(owner);
+                            b.dirty = true;
+                            agent.ability_cooldown_ms = 2_400;
+                            agent.dirty = true;
+                        }
+                    }
+                }
+                "hacker" => {
+                    // Near own HQ → siphon gold home (passive income while staging).
+                    let near_home = self.entities.values().any(|e| {
+                        e.owner == owner
+                            && e.kind == "hq"
+                            && e.hp > 0.0
+                            && {
+                                let dx = e.x - ax;
+                                let dy = e.y - ay;
+                                dx * dx + dy * dy <= 6.0 * 6.0
+                            }
+                    });
+                    if near_home {
+                        if let Some(p) = self.players.get_mut(&owner) {
+                            p.resources.gold = p.resources.gold.saturating_add(10);
+                            p.stats.gold_earned = p.stats.gold_earned.saturating_add(10);
+                        }
+                        agent.ability_cooldown_ms = 1_000;
+                        agent.dirty = true;
+                    } else {
+                        // Inside enemy footprint → hack building + drain power + steal gold.
+                        let mut best: Option<(Uuid, Uuid, f32)> = None;
+                        for e in self.entities.values() {
+                            if !e.building || e.hp <= 0.0 || e.build_remaining_ms > 0 {
+                                continue;
+                            }
+                            if e.kind == "hq" {
+                                continue; // CC immune to full blackout
+                            }
+                            if !self.is_enemy_of(owner, e.owner, e.team) {
+                                continue;
+                            }
+                            let dx = e.x - ax;
+                            let dy = e.y - ay;
+                            let d2 = dx * dx + dy * dy;
+                            if d2 > 2.8 * 2.8 {
+                                continue;
+                            }
+                            if best.map(|(_, _, bd)| d2 < bd).unwrap_or(true) {
+                                best = Some((e.id, e.owner, d2));
+                            }
+                        }
+                        if let Some((bid, victim, _)) = best {
+                            let steal;
+                            if let Some(vp) = self.players.get_mut(&victim) {
+                                let take = (vp.resources.gold / 12).clamp(20, 90);
+                                steal = take.min(vp.resources.gold.max(0));
+                                vp.resources.gold = vp.resources.gold.saturating_sub(steal);
+                                vp.resources.power = (vp.resources.power - 14).max(0);
+                            } else {
+                                steal = 0;
+                            }
+                            if steal > 0 {
+                                if let Some(ap) = self.players.get_mut(&owner) {
+                                    ap.resources.gold = ap.resources.gold.saturating_add(steal);
+                                    ap.stats.gold_earned =
+                                        ap.stats.gold_earned.saturating_add(steal as u32);
+                                }
+                            }
+                            if let Some(b) = self.entities.get_mut(&bid) {
+                                b.hacked_until_tick = self.tick + 100; // ~5s
+                                b.dirty = true;
+                            }
+                            agent.ability_cooldown_ms = 2_200;
+                            agent.dirty = true;
+                        }
+                    }
+                }
+                "terrorist" => {
+                    // Convert nearby enemy soft infantry (insurgency / revolt).
+                    let mut candidates: Vec<(Uuid, f32)> = Vec::new();
+                    for e in self.entities.values() {
+                        if !e.unit || e.hp <= 0.0 || !is_soft_unit(&e.kind) {
+                            continue;
+                        }
+                        if e.kind == "terrorist" || e.kind == "spy" || e.kind == "hacker" {
+                            continue;
+                        }
+                        if !self.is_enemy_of(owner, e.owner, e.team) {
+                            continue;
+                        }
+                        let dx = e.x - ax;
+                        let dy = e.y - ay;
+                        let d2 = dx * dx + dy * dy;
+                        if d2 > 3.4 * 3.4 {
+                            continue;
+                        }
+                        candidates.push((e.id, d2));
+                    }
+                    candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    let (team, flag) = self
+                        .players
+                        .get(&owner)
+                        .map(|p| (p.team, p.flag.clone()))
+                        .unwrap_or((agent.team, None));
+                    let mut flipped = 0u32;
+                    for (cid, _) in candidates.into_iter().take(2) {
+                        if let Some(c) = self.entities.get_mut(&cid) {
+                            c.owner = owner;
+                            c.team = team;
+                            c.flag = flag.clone();
+                            c.target = None;
+                            c.move_to = None;
+                            c.last_hit_by = None;
+                            c.dirty = true;
+                            flipped += 1;
+                        }
+                    }
+                    if flipped > 0 {
+                        agent.ability_cooldown_ms = 5_500;
+                        agent.dirty = true;
+                    }
+                }
+                _ => {}
+            }
+            self.put_entity(agent);
+        }
+    }
+
     fn is_hostile_commander(&self, attacker: Uuid, victim_owner: Uuid, victim_team: u8) -> bool {
         if attacker == victim_owner {
             return false;
@@ -3185,6 +3394,8 @@ impl MatchSim {
             aim_yaw: 0.0,
             mg_cooldown_ms: 0,
             last_hit_by: None,
+            hacked_until_tick: 0,
+            ability_cooldown_ms: 0,
         });
         let hqs = self
             .entities
@@ -4994,6 +5205,7 @@ impl MatchSim {
             progress,
             train_progress,
             prone: entity.prone,
+            hacked: entity.building && self.tick < entity.hacked_until_tick,
             aim_at: if entity.kind.contains("tank")
                 || entity.kind.contains("mlrs")
                 || entity.kind == "turret"

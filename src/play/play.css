@@ -500,11 +500,23 @@ input, select {
   background: #121a10;
 }
 
-.scoreboard th:nth-child(n+3),
-.scoreboard td:nth-child(n+3) {
+.scoreboard th:nth-child(n+4),
+.scoreboard td:nth-child(n+4) {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+
+.scoreboard td.rank {
+  text-align: center;
+  font-family: Oswald, sans-serif;
+  font-weight: 700;
+  color: #9aab88;
+  width: 2.2em;
+}
+
+.scoreboard tr.top1 td.rank { color: #f0d060; }
+.scoreboard tr.top2 td.rank { color: #c0c8d0; }
+.scoreboard tr.top3 td.rank { color: #c48a5a; }
 
 .scoreboard td {
   padding: 8px;

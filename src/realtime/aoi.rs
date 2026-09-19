@@ -9,6 +9,8 @@ pub const AOI_RADIUS: f32 = 20.0;
 pub const VISION_HQ: f32 = 20.0;
 pub const VISION_BUILDING: f32 = 13.0;
 pub const VISION_UNIT: f32 = 11.0;
+/// Spy intel disc — larger than a rifleman; acts like a mobile radar.
+pub const VISION_SPY: f32 = 17.5;
 
 pub fn entity_provides_vision(entity: &Entity) -> bool {
     entity.hp > 0.0 && (entity.building || entity.unit)
@@ -23,6 +25,8 @@ pub fn vision_radius(entity: &Entity) -> f32 {
         VISION_HQ
     } else if entity.building {
         VISION_BUILDING
+    } else if entity.kind == "spy" {
+        VISION_SPY
     } else if entity.unit {
         VISION_UNIT
     } else {

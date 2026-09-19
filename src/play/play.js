@@ -358,37 +358,90 @@ function visibleHqsForOwner(ownerId) {
 }
 
 const hqJumpCursor = { owner: null, index: 0 };
+/** Last known HQ count for local commander — drives base gain/loss toasts. */
+let lastKnownBases = null;
+
+function sortScoreboardRows(rows) {
+  return [...(rows || [])].sort((a, b) => {
+    const aa = a.alive ? 1 : 0;
+    const ba = b.alive ? 1 : 0;
+    if (ba !== aa) return ba - aa;
+    const ab = Number(a.bases) || 0;
+    const bb = Number(b.bases) || 0;
+    if (bb !== ab) return bb - ab;
+    const au = (Number(a.infantry) || 0) + (Number(a.tanks) || 0);
+    const bu = (Number(b.infantry) || 0) + (Number(b.tanks) || 0);
+    if (bu !== au) return bu - au;
+    const abd = Number(a.buildings) || 0;
+    const bbd = Number(b.buildings) || 0;
+    if (bbd !== abd) return bbd - abd;
+    const ag = Number(a.gold) || 0;
+    const bg = Number(b.gold) || 0;
+    if (bg !== ag) return bg - ag;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
+function notifyBaseChanges(rows) {
+  const me = (rows || []).find((r) => r.you);
+  if (!me) return;
+  const bases = Number(me.bases) || 0;
+  if (lastKnownBases == null) {
+    lastKnownBases = bases;
+    return;
+  }
+  if (bases > lastKnownBases) {
+    const gained = bases - lastKnownBases;
+    toast(
+      gained === 1
+        ? "Tebrikler bir üs daha kazandın komutan!"
+        : `Tebrikler ${gained} üs daha kazandın komutan!`,
+      4200,
+    );
+  } else if (bases < lastKnownBases) {
+    toast("Üssünü kaybettin!", 4500);
+  }
+  lastKnownBases = bases;
+}
+
+function applyScoreboard(rows) {
+  const sorted = sortScoreboardRows(rows);
+  state.scoreboard = sorted;
+  notifyBaseChanges(sorted);
+  if (!$("#scoreboard")?.hidden) renderScoreboard();
+}
 
 function renderScoreboard() {
   const body = $("#scoreboard-body");
   if (!body) return;
-  const rows = state.scoreboard || [];
+  const rows = sortScoreboardRows(state.scoreboard || []);
+  state.scoreboard = rows;
   const legend = $("#scoreboard-legend");
   const hint = $("#scoreboard-hint");
   const allyMode = state.match && !state.match.ffa;
   if (legend) legend.hidden = !allyMode;
   if (hint) {
     hint.textContent = allyMode
-      ? "Tab · canlı istatistik (sis yok) · yeşil=sen · mavi=dost · kırmızı=düşman · tıkla=üs"
-      : "Tab · canlı istatistik (sis yok) · tıkla=üs (tekrar = sonraki)";
+      ? "Tab · sıra = üs + ordu · canlı · yeşil=sen · mavi=dost · kırmızı=düşman"
+      : "Tab · sıra = üs + ordu · canlı · tıkla=üs";
   }
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="10" class="muted">Veri yok</td></tr>`;
     body.dataset.sbKey = "";
     return;
   }
-  // Skip DOM rebuild when nothing meaningful changed (perf while Tab held).
   const sbKey = rows
     .map(
-      (r) =>
-        `${r.id}:${r.alive | 0}:${r.bases}:${r.infantry}:${r.tanks}:${r.buildings}:${r.gold}:${r.power_used}:${r.power}`,
+      (r, i) =>
+        `${i}:${r.id}:${r.alive | 0}:${r.bases}:${r.infantry}:${r.tanks}:${r.buildings}:${r.gold}:${r.power_used}:${r.power}`,
     )
     .join("|");
   if (body.dataset.sbKey === sbKey) return;
   body.dataset.sbKey = sbKey;
 
   body.innerHTML = rows
-    .map((r) => {
+    .map((r, idx) => {
+      const rank = idx + 1;
       const [c0, c1, c2] = r.colors || [0x888888, 0x555555, 0x333333];
       const ally =
         allyMode && !r.you && Number(r.team) === Number(state.match?.team);
@@ -399,6 +452,7 @@ function renderScoreboard() {
         enemy ? "enemy" : "",
         r.alive ? "alive" : "dead",
         "jumpable",
+        rank <= 3 ? `top${rank}` : "",
       ]
         .filter(Boolean)
         .join(" ");
@@ -416,16 +470,15 @@ function renderScoreboard() {
       const status = r.alive
         ? `<span class="status on">ACTIVE</span>`
         : `<span class="status off">DEAD</span>`;
-      // Stats are always full server truth — independent of fog of war.
       const bases = r.bases ?? 0;
+      const army = (Number(r.infantry) || 0) + (Number(r.tanks) || 0);
       const seen = visibleHqsForOwner(r.id).length;
       const title =
         seen > 0
-          ? `Üs: ${bases} · görünen: ${seen} · tıkla (tekrar = sonraki)`
-          : bases > 0
-            ? `Üs: ${bases} · haritada sis altında olabilir · tıkla`
-            : "Command Center yok";
+          ? `#${rank} · Üs ${bases} · Ordu ${army} · görünen üs ${seen}`
+          : `#${rank} · Üs ${bases} · Ordu ${army}`;
       return `<tr class="${cls}" data-owner="${escapeHtml(String(r.id || ""))}" title="${escapeHtml(title)}">
+        <td class="rank">${rank}</td>
         <td><span class="swatch"><i style="background:${hexColor(c0)}"></i><i style="background:${hexColor(c1)}"></i><i style="background:${hexColor(c2)}"></i></span></td>
         <td><div class="who"><strong>${escapeHtml(r.name || "—")}</strong><small>${escapeHtml(faction)} · ${tag} · ${teamLabel}</small></div></td>
         <td>${status}</td>
@@ -660,7 +713,8 @@ function clearWorldMeshes() {
 
 function enterMatch(snapshot) {
   state.match = snapshot;
-  state.scoreboard = snapshot.scoreboard || [];
+  lastKnownBases = null;
+  applyScoreboard(snapshot.scoreboard || []);
   state.ponds = Array.isArray(snapshot.ponds) ? snapshot.ponds : [];
   state.mountains = Array.isArray(snapshot.mountains) ? snapshot.mountains : [];
   if (snapshot.you_faction) {
@@ -1030,8 +1084,7 @@ function applyDelta(msg) {
     }
   }
   if (msg.scoreboard) {
-    state.scoreboard = msg.scoreboard;
-    if (!$("#scoreboard")?.hidden) renderScoreboard();
+    applyScoreboard(msg.scoreboard);
   }
   applyExploredNew(msg.explored_new);
 
@@ -2188,7 +2241,7 @@ const STRATEGY_RIG_VERSION = 1;
 /** Distinct Generals vehicle silhouettes — remesh when below this. */
 const TANK_RIG_VERSION = 15;
 /** Infantry mesh revision. */
-const INFANTRY_RIG_VERSION = 7;
+const INFANTRY_RIG_VERSION = 9;
 /** MLRS mesh revision. */
 const MLRS_RIG_VERSION = 3;
 
@@ -7011,6 +7064,269 @@ function createRangerMesh(teamColor, opts = {}) {
   return applyDirectionalShadows(g);
 }
 
+/**
+ * Specialist infantry — built from soft cylinders/spheres (not stacked boxes).
+ * Same walk pivots as ranger so limb swing stays coherent.
+ */
+function createSpecialistMesh(kind, teamColor, opts = {}) {
+  void opts;
+  const g = new THREE.Group();
+  g.userData.isUnitRig = true;
+  g.userData.isInfantry = true;
+  g.userData.rigVersion = INFANTRY_RIG_VERSION;
+  g.userData.specialist = kind;
+  g.userData.tintParts = [];
+  g.userData.walkPhase = Math.random() * Math.PI * 2;
+  g.userData.moving = false;
+  g.rotation.order = "YXZ";
+
+  const accent = (teamColor >>> 0) || 0x88aa66;
+  const skin = 0xc4a882;
+  let cloth = 0x1a1e24;
+  let clothDark = 0x12151a;
+  let trim = 0x2a3038;
+  if (kind === "hacker") {
+    cloth = 0x2a2438;
+    clothDark = 0x1a1628;
+    trim = 0x3a3450;
+  } else if (kind === "terrorist") {
+    cloth = 0x4a4030;
+    clothDark = 0x2e2818;
+    trim = 0x5a1010;
+  }
+
+  const soft = (color, optsM = {}) =>
+    matSatin(color, { metalness: optsM.metalness ?? 0.22, roughness: optsM.roughness ?? 0.72, ...optsM });
+
+  const addMesh = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, tint = false) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    m.rotation.set(rx, ry, rz);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    if (tint) g.userData.tintParts.push(m);
+    parent.add(m);
+    return m;
+  };
+
+  // —— Legs (hip pivots — must match walk animation) ——
+  const makeLeg = (name, hx) => {
+    const leg = new THREE.Group();
+    leg.name = name;
+    leg.position.set(hx, 0.078, 0);
+    // thigh — tapered soft cylinder
+    addMesh(leg, new THREE.CylinderGeometry(0.013, 0.016, 0.042, 10), soft(cloth), 0, -0.02, 0.002);
+    // knee joint
+    addMesh(leg, new THREE.SphereGeometry(0.012, 10, 8), soft(clothDark), 0, -0.042, 0.004);
+    // calf
+    addMesh(leg, new THREE.CylinderGeometry(0.011, 0.013, 0.038, 10), soft(clothDark), 0, -0.064, 0.002);
+    // ankle
+    addMesh(leg, new THREE.SphereGeometry(0.009, 8, 6), soft(0x2a2620), 0, -0.084, 0.004);
+    // boot sole (slightly elongated, rounded)
+    const boot = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.011, 0.018, 4, 8),
+      soft(0x1a1814, { metalness: 0.35, roughness: 0.65 }),
+    );
+    boot.rotation.x = Math.PI / 2;
+    boot.position.set(0, -0.09, 0.01);
+    boot.castShadow = true;
+    leg.add(boot);
+    g.add(leg);
+    return leg;
+  };
+  makeLeg("leftLeg", -0.018);
+  makeLeg("rightLeg", 0.018);
+
+  // —— Torso ——
+  const torso = new THREE.Group();
+  torso.name = "torso";
+
+  // hips
+  addMesh(torso, new THREE.SphereGeometry(0.028, 12, 10), soft(clothDark), 0, 0.092, 0);
+  torso.children[torso.children.length - 1].scale.set(1.35, 0.7, 1.05);
+  // pelvis belt
+  addMesh(
+    torso,
+    new THREE.TorusGeometry(0.032, 0.006, 8, 16),
+    soft(trim, { metalness: 0.45, roughness: 0.5 }),
+    0,
+    0.1,
+    0,
+    Math.PI / 2,
+    0,
+    0,
+  );
+
+  // torso core — soft capsule upright
+  const chest = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.032, 0.048, 6, 12),
+    soft(cloth),
+  );
+  chest.position.set(0, 0.142, 0);
+  chest.castShadow = true;
+  chest.receiveShadow = true;
+  torso.add(chest);
+
+  // team accent sash / stripe on chest
+  addMesh(
+    torso,
+    new THREE.CapsuleGeometry(0.006, 0.04, 4, 8),
+    soft(accent, { metalness: 0.55, roughness: 0.4 }),
+    0,
+    0.145,
+    0.03,
+    0,
+    0,
+    0,
+    true,
+  );
+
+  // —— Arms ——
+  const makeArm = (name, ax) => {
+    const arm = new THREE.Group();
+    arm.name = name;
+    arm.position.set(ax, 0.168, 0.004);
+    addMesh(arm, new THREE.SphereGeometry(0.013, 10, 8), soft(clothDark), 0, 0, 0); // shoulder
+    addMesh(arm, new THREE.CylinderGeometry(0.01, 0.012, 0.036, 10), soft(cloth), 0, -0.026, 0.004);
+    addMesh(arm, new THREE.SphereGeometry(0.01, 8, 6), soft(clothDark), 0, -0.046, 0.006); // elbow
+    addMesh(arm, new THREE.CylinderGeometry(0.009, 0.01, 0.032, 10), soft(clothDark), 0, -0.066, 0.008);
+    addMesh(arm, new THREE.SphereGeometry(0.01, 8, 6), soft(0x2a2620, { metalness: 0.4 }), 0, -0.086, 0.01); // hand
+    torso.add(arm);
+    return arm;
+  };
+  makeArm("leftArm", -0.046);
+  makeArm("rightArm", 0.046);
+
+  // —— Head (sphere + soft features) ——
+  const head = new THREE.Group();
+  head.name = "head";
+  head.position.set(0, 0.198, 0.002);
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.024, 14, 12), soft(skin, { metalness: 0.05, roughness: 0.78 }));
+  skull.castShadow = true;
+  head.add(skull);
+  // neck
+  addMesh(torso, new THREE.CylinderGeometry(0.01, 0.014, 0.018, 10), soft(skin, { metalness: 0.05, roughness: 0.78 }), 0, 0.178, 0);
+  torso.add(head);
+
+  // Kind-specific headgear / gear — attached to head or torso so walk stays coherent
+  if (kind === "spy") {
+    // Fedora-like soft hat
+    const brim = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.036, 0.038, 0.006, 16),
+      soft(0x12151a, { metalness: 0.2, roughness: 0.7 }),
+    );
+    brim.position.y = 0.012;
+    brim.castShadow = true;
+    head.add(brim);
+    const crown = new THREE.Mesh(
+      new THREE.SphereGeometry(0.022, 12, 10),
+      soft(0x1a1e24, { metalness: 0.18, roughness: 0.68 }),
+    );
+    crown.scale.set(1, 0.75, 1.05);
+    crown.position.y = 0.022;
+    head.add(crown);
+    // earpiece
+    addMesh(head, new THREE.SphereGeometry(0.006, 8, 6), soft(0x3a4048, { metalness: 0.7 }), 0.022, 0, 0);
+    addMesh(head, new THREE.CylinderGeometry(0.002, 0.002, 0.04, 6), soft(0x5a6570, { metalness: 0.8 }), 0.024, 0.02, -0.005, 0, 0, 0.3);
+    // overcoat flaps — parented to torso (moves with bob)
+    addMesh(torso, new THREE.CapsuleGeometry(0.018, 0.05, 4, 10), soft(0x141820), -0.028, 0.13, -0.01);
+    addMesh(torso, new THREE.CapsuleGeometry(0.018, 0.05, 4, 10), soft(0x141820), 0.028, 0.13, -0.01);
+    // suppressed pistol on right hand path
+    const pistol = new THREE.Group();
+    pistol.name = "muzzleRoot";
+    pistol.position.set(0.04, 0.11, 0.045);
+    addMesh(pistol, new THREE.CapsuleGeometry(0.007, 0.028, 4, 8), soft(0x2a2e32, { metalness: 0.75, roughness: 0.32 }), 0, 0, 0, Math.PI / 2);
+    addMesh(pistol, new THREE.CylinderGeometry(0.005, 0.006, 0.022, 8), soft(0x1a1c1e, { metalness: 0.55 }), 0, 0, 0.028, Math.PI / 2);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.042);
+    pistol.add(tip);
+    torso.add(pistol);
+  } else if (kind === "hacker") {
+    // Hood — soft half-sphere behind head
+    const hood = new THREE.Mesh(
+      new THREE.SphereGeometry(0.03, 14, 12),
+      soft(clothDark, { metalness: 0.12, roughness: 0.82 }),
+    );
+    hood.scale.set(1.15, 0.85, 1.2);
+    hood.position.set(0, 0.008, -0.012);
+    head.add(hood);
+    // visor glasses
+    const visor = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.006, 0.028, 4, 8),
+      matArmor(0x40e0d0, { metalness: 0.65, roughness: 0.22, emissive: 0x0a3030, emissiveIntensity: 0.4 }),
+    );
+    visor.rotation.z = Math.PI / 2;
+    visor.position.set(0, 0.002, 0.022);
+    head.add(visor);
+    // laptop held forward — parented to torso (bobs with walk, no limb conflict)
+    const slate = new THREE.Group();
+    slate.position.set(0.025, 0.115, 0.048);
+    slate.rotation.x = -0.95;
+    addMesh(slate, new THREE.BoxGeometry(0.048, 0.004, 0.034), soft(0x1a1a22, { metalness: 0.5, roughness: 0.4 }), 0, 0, 0);
+    addMesh(
+      slate,
+      new THREE.BoxGeometry(0.042, 0.0015, 0.028),
+      matArmor(0x33ff99, { metalness: 0.15, roughness: 0.3, emissive: 0x118844, emissiveIntensity: 0.5 }),
+      0,
+      0.003,
+      0,
+    );
+    torso.add(slate);
+    // cable loop on left hip
+    addMesh(torso, new THREE.TorusGeometry(0.012, 0.0035, 6, 12), soft(0x3a3a48, { metalness: 0.45 }), -0.038, 0.1, 0.02, 0.5, 0.4, 0);
+  } else {
+    // terrorist — bandana wrap + chest packs
+    const band = new THREE.Mesh(
+      new THREE.TorusGeometry(0.022, 0.008, 8, 14),
+      soft(0x5a1010, { metalness: 0.12, roughness: 0.78 }),
+    );
+    band.rotation.x = Math.PI / 2;
+    band.position.y = 0.006;
+    head.add(band);
+    // keffiyeh-ish rear drape
+    addMesh(head, new THREE.CapsuleGeometry(0.012, 0.03, 4, 8), soft(0x6a2020), 0, -0.01, -0.02, 0.4);
+    // chest packs row
+    for (const sx of [-0.022, 0, 0.022]) {
+      addMesh(torso, new THREE.CapsuleGeometry(0.008, 0.012, 4, 8), soft(0x2a2418), sx, 0.132, 0.034);
+    }
+    // rugged rifle
+    const rifle = new THREE.Group();
+    rifle.name = "muzzleRoot";
+    rifle.position.set(0.032, 0.12, 0.02);
+    addMesh(rifle, new THREE.CapsuleGeometry(0.008, 0.07, 4, 8), soft(0x3a3a38, { metalness: 0.65, roughness: 0.4 }), 0, 0, 0.04, Math.PI / 2);
+    addMesh(rifle, new THREE.BoxGeometry(0.012, 0.028, 0.016), soft(0x2c2c2a), 0, -0.012, 0.02);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tip.position.set(0, 0, 0.09);
+    rifle.add(tip);
+    torso.add(rifle);
+  }
+
+  // Default muzzle if missing (hacker)
+  if (!torso.getObjectByName("muzzleRoot")) {
+    const tipRoot = new THREE.Group();
+    tipRoot.name = "muzzleRoot";
+    tipRoot.position.set(0.03, 0.12, 0.05);
+    const tip = new THREE.Object3D();
+    tip.name = "muzzle";
+    tipRoot.add(tip);
+    torso.add(tipRoot);
+  }
+
+  g.add(torso);
+  g.userData.unitHeight = 0.08;
+  g.userData.walk = {
+    leftLeg: g.getObjectByName("leftLeg"),
+    rightLeg: g.getObjectByName("rightLeg"),
+    leftArm: torso.getObjectByName("leftArm"),
+    rightArm: torso.getObjectByName("rightArm"),
+    torso,
+  };
+  g.scale.setScalar(1 / 3);
+  return applyDirectionalShadows(g);
+}
+
 function createMortarMesh(teamColor) {
   const g = createRangerMesh(teamColor);
   g.userData.isMortar = true;
@@ -8290,6 +8606,11 @@ function createUnitMesh(kind, teamColor) {
     return applyDirectionalShadows(createLightVehicleMesh(teamColor, { style, kind: k }));
   }
 
+  // Specialists — distinct silhouettes
+  if (k === "spy" || k === "hacker" || k === "terrorist") {
+    return applyDirectionalShadows(createSpecialistMesh(k, teamColor, { style }));
+  }
+
   // Rocket / AT infantry → mortar pose
   if (
     k.includes("mortar") ||
@@ -8300,14 +8621,12 @@ function createUnitMesh(kind, teamColor) {
     return applyDirectionalShadows(createMortarMesh(teamColor));
   }
 
-  // Infantry / heroes / specialists
+  // Infantry / heroes
   if (
     k.includes("ranger") ||
     k.includes("red_guard") ||
     k.includes("rebel") ||
     k.includes("pathfinder") ||
-    k.includes("terrorist") ||
-    k.includes("hacker") ||
     k.includes("hijacker") ||
     k.includes("colonel") ||
     k.includes("lotus") ||
@@ -8620,6 +8939,9 @@ function upsertMesh(entity) {
   } else if (entity.building && constructing) {
     clearDamageFire(mesh);
   }
+
+  // Hacker blackout — soft cyan pulse on disabled buildings.
+  syncHackedFx(mesh, entity);
 
   // Refresh label if owner name/colors changed (rare).
   const label = mesh.userData.ownerLabel;
@@ -9314,15 +9636,20 @@ function updateInfantryWalk(mesh, dt, now) {
 
   if (recentlyMoved) {
     const crawl = 0.22 + (1 - blend) * 0.78;
+    const specialist = mesh.userData.specialist;
+    // Specialists: slightly tighter, smoother gait (less arm thrash with gear).
+    const legAmp = specialist ? 0.48 : 0.55;
+    const armAmp = specialist === "hacker" ? 0.22 : specialist ? 0.32 : 0.45;
+    const bobAmp = specialist ? 0.006 : 0.008;
     mesh.userData.walkPhase = (mesh.userData.walkPhase || 0) + dt * (8 + 6 * crawl);
-    const swing = Math.sin(mesh.userData.walkPhase) * 0.55 * crawl;
+    const swing = Math.sin(mesh.userData.walkPhase) * legAmp * crawl;
     leftLeg.rotation.x = swing;
     rightLeg.rotation.x = -swing;
-    if (leftArm) leftArm.rotation.x = -swing * 0.45;
-    if (rightArm) rightArm.rotation.x = swing * 0.35;
+    if (leftArm) leftArm.rotation.x = -swing * armAmp;
+    if (rightArm) rightArm.rotation.x = swing * (armAmp * 0.75);
     if (torso) {
-      torso.position.y = Math.abs(Math.sin(mesh.userData.walkPhase * 2)) * 0.008 * crawl;
-      torso.rotation.z = Math.sin(mesh.userData.walkPhase) * 0.04 * crawl;
+      torso.position.y = Math.abs(Math.sin(mesh.userData.walkPhase * 2)) * bobAmp * crawl;
+      torso.rotation.z = Math.sin(mesh.userData.walkPhase) * 0.032 * crawl;
     }
   } else {
     leftLeg.rotation.x = 0;
@@ -10284,6 +10611,38 @@ function clearDamageFire(mesh) {
   mesh.userData.damageFlames = null;
   mesh.userData.damageSmokes = null;
   mesh.userData.damageFireLevel = 0;
+}
+
+/** Soft cyan pulse while a building is under hacker blackout. */
+function syncHackedFx(mesh, entity) {
+  if (!mesh || !entity?.building) return;
+  const on = !!entity.hacked;
+  let fx = mesh.getObjectByName("hackFx");
+  if (!on) {
+    if (fx) {
+      mesh.remove(fx);
+      fx.geometry?.dispose?.();
+      fx.material?.dispose?.();
+    }
+    return;
+  }
+  if (!fx) {
+    fx = new THREE.Mesh(
+      new THREE.SphereGeometry(0.55, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color: 0x33ffcc,
+        transparent: true,
+        opacity: 0.22,
+        depthWrite: false,
+      }),
+    );
+    fx.name = "hackFx";
+    fx.scale.set(1.2, 0.55, 1.2);
+    mesh.add(fx);
+  }
+  const t = performance.now() * 0.006;
+  fx.material.opacity = 0.14 + Math.sin(t) * 0.1;
+  fx.position.y = 0.55 + Math.sin(t * 0.7) * 0.04;
 }
 
 /** Live building: catch fire as HP drops (light → heavy). */
