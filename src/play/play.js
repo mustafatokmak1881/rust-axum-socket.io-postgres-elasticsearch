@@ -519,26 +519,53 @@ function syncAllyChatPanel() {
 }
 
 let chatUnreadWhispers = 0;
+let chatUnreadObserver = null;
 
 function updateChatBadge() {
   const badge = $("#ally-chat-badge");
   if (!badge) return;
-  if (chatUnreadWhispers > 0) {
+  const n = Math.max(0, chatUnreadWhispers | 0);
+  chatUnreadWhispers = n;
+  if (n > 0) {
     badge.hidden = false;
-    badge.textContent = chatUnreadWhispers > 9 ? "9+" : String(chatUnreadWhispers);
+    badge.textContent = n > 9 ? "9+" : String(n);
   } else {
     badge.hidden = true;
     badge.textContent = "0";
   }
 }
 
+function ensureChatUnreadObserver() {
+  const log = $("#ally-chat-log");
+  if (!log || chatUnreadObserver) return;
+  chatUnreadObserver = new IntersectionObserver(
+    (entries) => {
+      let cleared = 0;
+      for (const entry of entries) {
+        if (!entry.isIntersecting || entry.intersectionRatio < 0.55) continue;
+        const el = entry.target;
+        if (!el.classList?.contains("unread")) continue;
+        el.classList.remove("unread");
+        chatUnreadObserver.unobserve(el);
+        cleared += 1;
+      }
+      if (cleared > 0) {
+        chatUnreadWhispers = Math.max(0, chatUnreadWhispers - cleared);
+        updateChatBadge();
+      }
+    },
+    { root: log, threshold: [0.55, 0.85] },
+  );
+}
+
 function markChatWhispersRead() {
-  if (chatUnreadWhispers === 0) return;
+  const log = $("#ally-chat-log");
+  log?.querySelectorAll(".line.whisper.unread").forEach((el) => {
+    el.classList.remove("unread");
+    chatUnreadObserver?.unobserve(el);
+  });
   chatUnreadWhispers = 0;
   updateChatBadge();
-  $("#ally-chat-log")
-    ?.querySelectorAll(".line.whisper.unread")
-    .forEach((el) => el.classList.remove("unread"));
 }
 
 function appendAllyChat(msg) {
@@ -563,15 +590,33 @@ function appendAllyChat(msg) {
   const body = document.createElement("span");
   body.textContent = msg.text || "";
   line.append(who, body);
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
   log.appendChild(line);
-  while (log.children.length > 80) log.removeChild(log.firstChild);
-  log.scrollTop = log.scrollHeight;
+  while (log.children.length > 80) {
+    const old = log.firstChild;
+    if (old?.classList?.contains("unread")) {
+      chatUnreadWhispers = Math.max(0, chatUnreadWhispers - 1);
+      chatUnreadObserver?.unobserve(old);
+    }
+    log.removeChild(old);
+  }
 
-  // Unread badge only for incoming private messages until chat is focused.
+  // Incoming PM: badge until the line is actually seen (or chat focused).
   if (toMe && !me && !inputFocused) {
-    line.classList.add("unread");
-    chatUnreadWhispers = Math.min(99, chatUnreadWhispers + 1);
-    updateChatBadge();
+    if (nearBottom) {
+      // Already watching the log — treat as read, no badge.
+      log.scrollTop = log.scrollHeight;
+    } else {
+      line.classList.add("unread");
+      chatUnreadWhispers = Math.min(99, chatUnreadWhispers + 1);
+      updateChatBadge();
+      ensureChatUnreadObserver();
+      chatUnreadObserver?.observe(line);
+      // Do not auto-scroll — keep badge until they scroll to the PM.
+    }
+  } else {
+    log.scrollTop = log.scrollHeight;
+    if (toMe && !me && inputFocused) markChatWhispersRead();
   }
 }
 
