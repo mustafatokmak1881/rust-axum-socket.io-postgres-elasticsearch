@@ -3639,6 +3639,10 @@ function fbm2(x, y, seed, octaves = 4) {
 let terrainBiomeField = null;
 let terrainBiomeSize = 0;
 let terrainSeed = 1;
+/** Rolling hills height field (−1..1), scaled by terrainHeightAmp in world units. */
+let terrainHeightField = null;
+let terrainHeightSize = 0;
+let terrainHeightAmp = 0.45;
 
 function sampleBiome(wx, wz, mapSize) {
   if (!terrainBiomeField || !terrainBiomeSize) return 0.5;
@@ -3647,6 +3651,181 @@ function sampleBiome(wx, wz, mapSize) {
   const x = Math.floor(u * terrainBiomeSize);
   const y = Math.floor(v * terrainBiomeSize);
   return terrainBiomeField[y * terrainBiomeSize + x];
+}
+
+let terrainHeightMapSize = 0;
+
+function sampleHeightFieldRaw(wx, wz) {
+  const ms = terrainHeightMapSize || mapSize;
+  if (!terrainHeightField || !terrainHeightSize || !ms) return 0;
+  const n = terrainHeightSize;
+  const u = Math.max(0, Math.min(n - 1.001, (wx / ms) * n));
+  const v = Math.max(0, Math.min(n - 1.001, (wz / ms) * n));
+  const x0 = Math.floor(u);
+  const y0 = Math.floor(v);
+  const x1 = Math.min(n - 1, x0 + 1);
+  const y1 = Math.min(n - 1, y0 + 1);
+  const fx = u - x0;
+  const fy = v - y0;
+  const h00 = terrainHeightField[y0 * n + x0];
+  const h10 = terrainHeightField[y0 * n + x1];
+  const h01 = terrainHeightField[y1 * n + x0];
+  const h11 = terrainHeightField[y1 * n + x1];
+  return h00 * (1 - fx) * (1 - fy) + h10 * fx * (1 - fy) + h01 * (1 - fx) * fy + h11 * fx * fy;
+}
+
+function sampleTerrainHeight(wx, wz) {
+  return sampleHeightFieldRaw(wx, wz) * terrainHeightAmp;
+}
+
+function flattenHeightDisk(cx, cy, radius, target = 0, strength = 0.9) {
+  const ms = terrainHeightMapSize || mapSize;
+  if (!terrainHeightField || !terrainHeightSize || !ms || radius <= 0) return;
+  const n = terrainHeightSize;
+  const cell = ms / n;
+  const r = radius;
+  const x0 = Math.max(0, Math.floor((cx - r) / cell));
+  const x1 = Math.min(n - 1, Math.ceil((cx + r) / cell));
+  const y0 = Math.max(0, Math.floor((cy - r) / cell));
+  const y1 = Math.min(n - 1, Math.ceil((cy + r) / cell));
+  const r2 = r * r;
+  for (let by = y0; by <= y1; by++) {
+    for (let bx = x0; bx <= x1; bx++) {
+      const wx = (bx + 0.5) * cell;
+      const wz = (by + 0.5) * cell;
+      const dx = wx - cx;
+      const dy = wz - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > r2) continue;
+      const t = Math.sqrt(d2) / r;
+      const w = (1 - t * t) * strength;
+      const i = by * n + bx;
+      terrainHeightField[i] = terrainHeightField[i] * (1 - w) + target * w;
+    }
+  }
+}
+
+function raiseHeightDisk(cx, cy, radius, amount = 0.45) {
+  const ms = terrainHeightMapSize || mapSize;
+  if (!terrainHeightField || !terrainHeightSize || !ms || radius <= 0) return;
+  const n = terrainHeightSize;
+  const cell = ms / n;
+  const r = radius;
+  const x0 = Math.max(0, Math.floor((cx - r) / cell));
+  const x1 = Math.min(n - 1, Math.ceil((cx + r) / cell));
+  const y0 = Math.max(0, Math.floor((cy - r) / cell));
+  const y1 = Math.min(n - 1, Math.ceil((cy + r) / cell));
+  const r2 = r * r;
+  for (let by = y0; by <= y1; by++) {
+    for (let bx = x0; bx <= x1; bx++) {
+      const wx = (bx + 0.5) * cell;
+      const wz = (by + 0.5) * cell;
+      const dx = wx - cx;
+      const dy = wz - cy;
+      const d2 = dx * dx + dy * dy;
+      if (d2 > r2) continue;
+      const t = Math.sqrt(d2) / r;
+      const w = (1 - t) * (1 - t);
+      const i = by * n + bx;
+      terrainHeightField[i] = Math.min(1.15, terrainHeightField[i] + amount * w);
+    }
+  }
+}
+
+/** Match-seeded rolling hills; lakes flat, mountains rise, HQ pads leveled. */
+function buildTerrainHeightField(size, seed = 1) {
+  const n = 96;
+  terrainHeightSize = n;
+  terrainHeightMapSize = size;
+  terrainHeightField = new Float32Array(n * n);
+  terrainHeightAmp = 0.46;
+  const ox = (seed % 97) * 0.31;
+  const oy = ((seed * 5) % 89) * 0.27;
+  for (let by = 0; by < n; by++) {
+    for (let bx = 0; bx < n; bx++) {
+      const nx = bx / n;
+      const ny = by / n;
+      let h =
+        fbm2(nx * 2.6 + ox, ny * 2.6 + oy, seed + 71, 5) * 0.58 +
+        fbm2(nx * 5.8 - oy, ny * 5.8 + ox, seed + 99, 3) * 0.3 +
+        fbm2(nx * 13.0, ny * 13.0, seed + 120, 2) * 0.12;
+      h = Math.tanh((h - 0.46) * 1.55);
+      terrainHeightField[by * n + bx] = h;
+    }
+  }
+  for (const pond of state.ponds || []) {
+    flattenHeightDisk(pond.x, pond.y, (pond.r || 3) * 1.2, -0.02, 0.95);
+  }
+  for (const mt of state.mountains || []) {
+    // Low knolls — modest rise that tanks can pitch over visually
+    raiseHeightDisk(mt.x, mt.y, (mt.r || 4) * 1.45, 0.28);
+  }
+  for (const e of state.entities.values()) {
+    if (e.kind === "hq" && (e.hp ?? 1) > 0) {
+      flattenHeightDisk(e.x, e.y, 6.2, 0.02, 0.9);
+    }
+  }
+}
+
+/** Displace a ground PlaneGeometry (XZ after rot.x = -π/2) to the heightfield. */
+function applyHeightFieldToGround(mesh, size) {
+  if (!mesh?.geometry || !terrainHeightField) return;
+  const pos = mesh.geometry.attributes.position;
+  const half = size * 0.5;
+  for (let i = 0; i < pos.count; i++) {
+    const lx = pos.getX(i);
+    const ly = pos.getY(i);
+    // Unrotated plane lies in XY; after rot.x=-π/2, local Y → world −Z, local X → world X.
+    // Mesh is centered at (size/2, 0, size/2), so world XZ = center + local.
+    const wx = half + lx;
+    const wz = half - ly;
+    pos.setZ(i, sampleTerrainHeight(wx, wz));
+  }
+  pos.needsUpdate = true;
+  mesh.geometry.computeVertexNormals();
+}
+
+/**
+ * Stick a ground unit / building to the heightfield.
+ * Tanks get tank-like pitch/roll across slopes; infantry lighter tilt.
+ */
+function applyGroundPose(mesh, dt, opts = {}) {
+  if (!mesh || mesh.userData.knock || mesh.userData.wreck) return;
+  if (mesh.userData.isAir) return;
+  const x = mesh.position.x;
+  const z = mesh.position.z;
+  const h = sampleTerrainHeight(x, z);
+  const blend = Math.min(1, (dt || 0.016) * (opts.snap ? 20 : 9));
+  mesh.position.y += (h - mesh.position.y) * blend;
+
+  if (!opts.tilt) {
+    mesh.rotation.x *= 1 - blend * 0.5;
+    mesh.rotation.z *= 1 - blend * 0.5;
+    return;
+  }
+
+  mesh.rotation.order = "YXZ";
+  const yaw = mesh.rotation.y || 0;
+  const sample = opts.sample || (mesh.userData.isTank ? 0.55 : 0.28);
+  const sx = Math.sin(yaw);
+  const sz = Math.cos(yaw);
+  const rx = Math.cos(yaw);
+  const rz = -Math.sin(yaw);
+  const hF = sampleTerrainHeight(x + sx * sample, z + sz * sample);
+  const hB = sampleTerrainHeight(x - sx * sample, z - sz * sample);
+  const hR = sampleTerrainHeight(x + rx * sample, z + rz * sample);
+  const hL = sampleTerrainHeight(x - rx * sample, z - rz * sample);
+  const forwardSlope = (hF - hB) / (sample * 2);
+  const rightSlope = (hR - hL) / (sample * 2);
+  const scale = opts.tiltScale != null ? opts.tiltScale : mesh.userData.isTank ? 1 : 0.4;
+  const maxTilt = opts.maxTilt != null ? opts.maxTilt : mesh.userData.isTank ? 0.42 : 0.22;
+  let wantPitch = -Math.atan(forwardSlope) * scale;
+  let wantRoll = Math.atan(rightSlope) * scale;
+  wantPitch = Math.max(-maxTilt, Math.min(maxTilt, wantPitch));
+  wantRoll = Math.max(-maxTilt, Math.min(maxTilt, wantRoll));
+  const tBlend = Math.min(1, (dt || 0.016) * 7);
+  mesh.rotation.x += (wantPitch - mesh.rotation.x) * tBlend;
+  mesh.rotation.z += (wantRoll - mesh.rotation.z) * tBlend;
 }
 
 function lerpColor(a, b, t) {
@@ -3707,7 +3886,62 @@ function makeOrganicDiscGeometry(radius, seed, segments = 72, yJitter = 0) {
 }
 
 /**
- * Rocky peak — subdivided icosahedron, noise-displaced, smooth normals.
+ * Soft rolling knoll — wide base, gentle crown (not a rocky mountain peak).
+ */
+function makeHillMoundGeometry(radius, height, seed, rings = 14, segments = 48) {
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+  // Apex
+  positions.push(0, height, 0);
+  uvs.push(0.5, 0.5);
+  for (let ring = 1; ring <= rings; ring++) {
+    const t = ring / rings;
+    // Gentle dome: flatter crown, soft skirt into ground
+    const elev = height * Math.pow(1 - t * t, 1.15) * (0.92 + (hash2(ring, seed, seed + 3) - 0.5) * 0.08);
+    for (let i = 0; i < segments; i++) {
+      const ang = (i / segments) * Math.PI * 2;
+      const w = shoreWarp(ang, seed + ring * 7, 0.9 + t * 0.35);
+      const micro =
+        0.94 +
+        valueNoise2(Math.cos(ang) * t * 3 + seed * 0.01, Math.sin(ang) * t * 3, seed + 5) * 0.12;
+      const rr = radius * t * w * micro;
+      const x = Math.cos(ang) * rr;
+      const z = Math.sin(ang) * rr;
+      // Slight ridge asymmetry so it doesn't look like a perfect dome
+      const ridge = valueNoise2(x * 0.35, z * 0.35, seed + 11) * height * 0.08 * (1 - t);
+      positions.push(x, Math.max(0.001, elev + ridge), z);
+      uvs.push(0.5 + (x / radius) * 0.5, 0.5 + (z / radius) * 0.5);
+    }
+  }
+  // Cap → first ring
+  for (let i = 0; i < segments; i++) {
+    const a = 1 + i;
+    const b = 1 + ((i + 1) % segments);
+    indices.push(0, a, b);
+  }
+  for (let ring = 1; ring < rings; ring++) {
+    const base = 1 + (ring - 1) * segments;
+    const next = 1 + ring * segments;
+    for (let i = 0; i < segments; i++) {
+      const i1 = base + i;
+      const i2 = base + ((i + 1) % segments);
+      const i3 = next + ((i + 1) % segments);
+      const i4 = next + i;
+      indices.push(i1, i4, i2);
+      indices.push(i2, i4, i3);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Small rock outcrop for hill tops — low, weathered, not a peak.
  */
 function makeRockMassGeometry(radius, height, seed) {
   const geo = new THREE.IcosahedronGeometry(1, 2);
@@ -3719,12 +3953,11 @@ function makeRockMassGeometry(radius, height, seed) {
       0.72 +
       valueNoise2(v.x * 2.4 + seed * 0.01, v.z * 2.4 - seed * 0.013, seed) * 0.38 +
       valueNoise2(v.x * 5.5, v.y * 5.5 + seed, seed + 9) * 0.16;
-    // Stretch into a ridge / peak; flatten the underside into the ground.
     const yN = (v.y + 1) * 0.5;
-    const flare = 1.05 - yN * 0.35;
+    const flare = 1.12 - yN * 0.28;
     v.x *= radius * n * flare;
     v.z *= radius * n * flare;
-    v.y = Math.max(-0.02, (v.y * 0.55 + 0.45) * height * n);
+    v.y = Math.max(-0.02, (v.y * 0.45 + 0.4) * height * n);
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   pos.needsUpdate = true;
@@ -3897,24 +4130,23 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
     }
   }
 
-  // ——— Mountains: strata, cliff shade, soft scree skirt (illustration, not Lego cones) ———
+  // ——— Hills: soft earthen knolls (no snow peaks / cliff paint) ———
   const mountains = state.mountains || [];
   for (const mt of mountains) {
     const cx = (mt.x / mapSize) * size;
     const cy = (mt.y / mapSize) * size;
     const pr = (mt.r / mapSize) * size;
     const r0 = Math.max(8, pr);
-    const skirt = Math.max(6, r0 * 0.32);
-    const pad = skirt + r0 * 0.15;
+    const skirt = Math.max(8, r0 * 0.55);
+    const pad = skirt + r0 * 0.12;
     const x0 = Math.max(0, Math.floor(cx - r0 - pad));
     const x1 = Math.min(size - 1, Math.ceil(cx + r0 + pad));
     const y0 = Math.max(0, Math.floor(cy - r0 - pad));
     const y1 = Math.min(size - 1, Math.ceil(cy + r0 + pad));
-    const snow = [198, 196, 188];
-    const peak = [118, 112, 102];
-    const rock = [78, 72, 62];
-    const cliff = [52, 48, 42];
-    const scree = [108, 90, 64];
+    const crest = [132, 112, 78];
+    const slope = [108, 96, 62];
+    const grass = [88, 98, 52];
+    const soilRim = [118, 92, 58];
     const seed = ((mt.x * 23) ^ (mt.y * 41) ^ (mt.r * 11)) | 0;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
@@ -3922,10 +4154,10 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
         const dy = y + 0.5 - cy;
         const ang = Math.atan2(dy, dx);
         const micro =
-          fbm2(x * 0.022 + seed, y * 0.022, seed + 11, 3) * 0.16 -
-          0.04 +
-          fbm2(x * 0.06, y * 0.06, seed + 28, 2) * 0.06;
-        const shoreR = r0 * shoreWarp(ang, seed + 3, 1.25) * (1 + micro);
+          fbm2(x * 0.02 + seed, y * 0.02, seed + 11, 3) * 0.18 -
+          0.05 +
+          fbm2(x * 0.055, y * 0.055, seed + 28, 2) * 0.07;
+        const shoreR = r0 * shoreWarp(ang, seed + 3, 1.15) * (1 + micro);
         const d = Math.hypot(dx, dy);
         if (d > shoreR + skirt) continue;
         const o = (y * size + x) * 4;
@@ -3935,33 +4167,27 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
         if (d > shoreR) {
           const t = (d - shoreR) / skirt;
           const edge = smoothstep(0, 1, t);
-          col = lerpColor(scree, under, smoothstep(0.05, 1, edge));
-          blend = 1 - smoothstep(0.4, 1, edge);
+          col = lerpColor(soilRim, under, smoothstep(0.08, 1, edge));
+          blend = (1 - smoothstep(0.25, 1, edge)) * 0.72;
         } else {
           const t = d / Math.max(0.001, shoreR);
-          const elev = 1 - smoothstep(0, 1, t);
-          // Pseudo cliff: darker on the "south-east" face
-          const shade = 0.55 + Math.cos(ang - 0.85) * 0.28;
-          if (elev > 0.78) {
-            col = lerpColor(peak, snow, smoothstep(0.78, 1, elev) * 0.35);
-          } else if (elev > 0.42) {
-            col = lerpColor(rock, peak, smoothstep(0.42, 0.78, elev));
+          const elev = Math.pow(1 - smoothstep(0, 1, t), 1.2);
+          const shade = 0.78 + Math.cos(ang - 0.7) * 0.14;
+          if (elev > 0.55) {
+            col = lerpColor(slope, crest, smoothstep(0.55, 1, elev));
+          } else if (elev > 0.22) {
+            col = lerpColor(grass, slope, smoothstep(0.22, 0.55, elev));
           } else {
-            col = lerpColor(cliff, rock, smoothstep(0.1, 0.42, elev));
+            col = lerpColor(soilRim, grass, smoothstep(0.05, 0.22, elev));
           }
           col = [col[0] * shade, col[1] * shade, col[2] * shade];
-          // Stratified rock bands (painted, soft)
-          const band =
-            Math.sin(y * 0.09 + fbm2(x * 0.03, y * 0.03, seed, 2) * 4) * 0.5 + 0.5;
-          col = lerpColor(col, cliff, band * 0.12 * (1 - elev * 0.5));
-          const grain = (fbm2(x * 0.11, y * 0.11, seed, 3) - 0.5) * 14;
-          col = [col[0] + grain, col[1] + grain * 0.92, col[2] + grain * 0.75];
-          // Soft rim into soil so the mass doesn't look stamped
-          blend = 0.88 + elev * 0.12;
-          if (t > 0.86) {
-            const u = smoothstep(0.86, 1, t);
-            col = lerpColor(col, scree, u);
-            blend = 1 - u * 0.25;
+          const grain = (fbm2(x * 0.09, y * 0.09, seed, 3) - 0.5) * 12;
+          col = [col[0] + grain, col[1] + grain * 0.9, col[2] + grain * 0.65];
+          blend = 0.55 + elev * 0.35;
+          if (t > 0.78) {
+            const u = smoothstep(0.78, 1, t);
+            col = lerpColor(col, under, u * 0.55);
+            blend *= 1 - u * 0.4;
           }
         }
         px[o] = Math.max(0, Math.min(255, under[0] * (1 - blend) + col[0] * blend));
@@ -4025,6 +4251,7 @@ function bakeBiomeTerrainTexture(image, mapSize, seed = 1) {
   tex.anisotropy = 16;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
+  buildTerrainHeightField(mapSize, terrainSeed);
   return tex;
 }
 
@@ -4273,7 +4500,7 @@ function createFogOfWar(size) {
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(size / 2, 0.2, size / 2);
+  mesh.position.set(size / 2, terrainHeightAmp + 0.55, size / 2);
   mesh.renderOrder = 8;
   mesh.name = "fogOfWar";
   return mesh;
@@ -4357,7 +4584,7 @@ function scatterGroundDecor(scene, size) {
     const seed = ((pond.x * 17) ^ (pond.y * 31) ^ (pond.r * 13)) | 0;
     const stretch = 0.84 + ((Math.abs(pond.x * 13 + pond.y) * 0.01) % 1) * 0.28;
     const lake = new THREE.Group();
-    lake.position.set(pond.x, 0.026, pond.y);
+    lake.position.set(pond.x, sampleTerrainHeight(pond.x, pond.y) + 0.028, pond.y);
     lake.rotation.y = (pond.x + pond.y) * 0.15;
     lake.scale.set(stretch, 1, 1 / Math.max(0.7, stretch));
 
@@ -4372,6 +4599,24 @@ function scatterGroundDecor(scene, size) {
     group.add(lake);
   }
 
+  const hillSoil = new THREE.MeshStandardMaterial({
+    color: 0x7a6a48,
+    roughness: 0.96,
+    metalness: 0.02,
+    flatShading: false,
+  });
+  const hillGrass = new THREE.MeshStandardMaterial({
+    color: 0x5a6840,
+    roughness: 0.94,
+    metalness: 0,
+    flatShading: false,
+  });
+  const hillCrest = new THREE.MeshStandardMaterial({
+    color: 0x8a7858,
+    roughness: 0.92,
+    metalness: 0.03,
+    flatShading: false,
+  });
   const rockMat = new THREE.MeshStandardMaterial({
     color: 0x6e685c,
     roughness: 0.9,
@@ -4384,55 +4629,69 @@ function scatterGroundDecor(scene, size) {
     metalness: 0.05,
     flatShading: false,
   });
-  const rockLite = new THREE.MeshStandardMaterial({
-    color: 0x8e8674,
-    roughness: 0.86,
-    metalness: 0.04,
-    flatShading: false,
-  });
 
-  // Soft rocky masses — noise-sculpted, smooth shaded (no faceted Lego cones).
+  // Low rolling hills — soft mounds with a few rock outcrops (not tall peaks).
   for (const mt of state.mountains || []) {
     const r = Math.max(2.2, Number(mt.r) || 4);
     const seed = ((mt.x * 23) ^ (mt.y * 41) ^ (mt.r * 11)) | 0;
     const mass = new THREE.Group();
-    mass.position.set(mt.x, 0, mt.y);
+    mass.position.set(mt.x, sampleTerrainHeight(mt.x, mt.y), mt.y);
     mass.rotation.y = (mt.x * 0.21 + mt.y * 0.13) % (Math.PI * 2);
 
+    // Main knoll — wide, low (~0.22–0.28 × radius)
+    const hMain = r * (0.22 + ((Math.abs(mt.x + mt.y) * 0.07) % 1) * 0.06);
     const core = new THREE.Mesh(
-      makeRockMassGeometry(r * 0.72, r * 0.95, seed),
-      rockLite,
+      makeHillMoundGeometry(r * 1.02, hMain, seed, 16, 56),
+      hillSoil,
     );
     core.castShadow = true;
     core.receiveShadow = true;
     mass.add(core);
 
-    const peaks = 2 + Math.floor((Math.abs(mt.x * 7 + mt.y) * 0.1) % 3);
-    for (let i = 0; i < peaks; i++) {
-      const ang = (i / peaks) * Math.PI * 2 + mt.r * 0.2;
-      const dist = r * (0.22 + (i % 3) * 0.1);
-      const h = r * (0.48 + (i % 2) * 0.22);
-      const rad = r * (0.28 + (i % 3) * 0.08);
-      const peak = new THREE.Mesh(
-        makeRockMassGeometry(rad, h, seed + i * 17),
+    // Secondary shoulder lobe for natural asymmetry
+    const ang0 = (seed % 360) * (Math.PI / 180);
+    const shoulder = new THREE.Mesh(
+      makeHillMoundGeometry(r * 0.58, hMain * 0.62, seed + 19, 12, 40),
+      hillGrass,
+    );
+    shoulder.position.set(Math.cos(ang0) * r * 0.38, 0, Math.sin(ang0) * r * 0.38);
+    shoulder.rotation.y = ang0 * 0.4;
+    shoulder.castShadow = true;
+    shoulder.receiveShadow = true;
+    mass.add(shoulder);
+
+    // Soft grass cap on the crown
+    const cap = new THREE.Mesh(
+      makeHillMoundGeometry(r * 0.42, hMain * 0.28, seed + 41, 10, 36),
+      hillCrest,
+    );
+    cap.position.y = hMain * 0.55;
+    cap.receiveShadow = true;
+    mass.add(cap);
+
+    // A few low rock outcrops — weathered stones, not summit spikes
+    const rocks = 1 + Math.floor((Math.abs(mt.x * 7 + mt.y) * 0.1) % 3);
+    for (let i = 0; i < rocks; i++) {
+      const ang = (i / rocks) * Math.PI * 2 + mt.r * 0.15;
+      const dist = r * (0.18 + (i % 3) * 0.12);
+      const rh = r * (0.08 + (i % 2) * 0.05);
+      const rad = r * (0.1 + (i % 3) * 0.04);
+      const rock = new THREE.Mesh(
+        makeRockMassGeometry(rad, rh, seed + i * 17),
         i % 2 === 0 ? rockMat : rockDark,
       );
-      peak.position.set(Math.cos(ang) * dist, 0, Math.sin(ang) * dist);
-      peak.rotation.y = ang * 0.35;
-      peak.scale.set(0.9 + (i % 2) * 0.15, 1, 0.85 + (i % 3) * 0.1);
-      peak.castShadow = true;
-      peak.receiveShadow = true;
-      mass.add(peak);
+      rock.position.set(
+        Math.cos(ang) * dist,
+        hMain * (0.35 + (i % 2) * 0.12),
+        Math.sin(ang) * dist,
+      );
+      rock.rotation.y = ang * 0.35;
+      rock.scale.set(1.1, 0.75, 1.05);
+      rock.castShadow = true;
+      rock.receiveShadow = true;
+      mass.add(rock);
     }
 
-    // Soft ground skirt (smooth, high segment count)
-    const skirt = new THREE.Mesh(
-      new THREE.CylinderGeometry(r * 0.92, r * 1.08, r * 0.14, 28),
-      rockDark,
-    );
-    skirt.position.y = r * 0.05;
-    skirt.receiveShadow = true;
-    mass.add(skirt);
     group.add(mass);
   }
 
@@ -4489,7 +4748,7 @@ function scatterGroundDecor(scene, size) {
         mid.position.y = h * 0.95;
         tree.add(mid);
       }
-      tree.position.set(x, 0, z);
+      tree.position.set(x, sampleTerrainHeight(x, z), z);
       tree.rotation.y = Math.random() * Math.PI * 2;
       group.add(tree);
       trees += 1;
@@ -4499,7 +4758,7 @@ function scatterGroundDecor(scene, size) {
     if (biome < 0.36 && rocks < maxRocks) {
       const s = 0.18 + Math.random() * 0.5;
       const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), desertRock);
-      rock.position.set(x, s * 0.28, z);
+      rock.position.set(x, sampleTerrainHeight(x, z) + s * 0.28, z);
       rock.rotation.set(Math.random(), Math.random(), Math.random());
       rock.scale.set(1 + Math.random() * 0.4, 0.55 + Math.random() * 0.35, 1 + Math.random() * 0.35);
       group.add(rock);
@@ -4510,7 +4769,7 @@ function scatterGroundDecor(scene, size) {
     if (biome >= 0.36 && biome <= 0.72 && bushes < maxBushes) {
       const s = 0.22 + Math.random() * 0.35;
       const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0), scrubBush);
-      bush.position.set(x, s * 0.35, z);
+      bush.position.set(x, sampleTerrainHeight(x, z) + s * 0.35, z);
       bush.scale.set(1.2, 0.55 + Math.random() * 0.35, 1.1);
       bush.rotation.y = Math.random() * Math.PI;
       group.add(bush);
@@ -4605,7 +4864,8 @@ function initThree(size, terrainTexture, home) {
   rim.position.set(-20, 18, 55);
   scene.add(rim);
 
-  const geo = new THREE.PlaneGeometry(size, size, 1, 1);
+  const segs = Math.min(160, Math.max(64, Math.round(size * 0.9)));
+  const geo = new THREE.PlaneGeometry(size, size, segs, segs);
   const mat = new THREE.MeshStandardMaterial({
     map: terrainTexture || null,
     color: terrainTexture ? 0xffffff : 0x6a4e32,
@@ -4617,6 +4877,7 @@ function initThree(size, terrainTexture, home) {
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(cx, 0, cz);
   ground.receiveShadow = true;
+  applyHeightFieldToGround(ground, size);
   scene.add(ground);
 
   // Very faint placement hint — not a loud square grid over the map.
@@ -4626,9 +4887,9 @@ function initThree(size, terrainTexture, home) {
     0x000000,
     0x4a3a28,
   );
-  grid.material.opacity = 0.05;
+  grid.material.opacity = 0.04;
   grid.material.transparent = true;
-  grid.position.set(cx, 0.02, cz);
+  grid.position.set(cx, terrainHeightAmp * 0.35 + 0.04, cz);
   scene.add(grid);
 
   scatterGroundDecor(scene, size);
@@ -4833,7 +5094,7 @@ function updateGhostPreview(event) {
   const tileZ = Math.floor(point.z);
   const x = tileX + 0.5;
   const z = tileZ + 0.5;
-  ghost.position.set(x, 0, z);
+  ghost.position.set(x, sampleTerrainHeight(x, z), z);
   ghost.visible = true;
   const valid = canPlaceBuildingAt(state.selectedBuild, tileX, tileZ);
   ghost.userData.placeValid = valid;
@@ -7434,26 +7695,35 @@ function upsertMesh(entity) {
   }
 
   if (mesh.userData.building) {
-    mesh.position.set(entity.x, 0, entity.y);
+    mesh.position.set(entity.x, sampleTerrainHeight(entity.x, entity.y), entity.y);
     if (mesh.userData.isPatriot || mesh.userData.isBunker) {
       mesh.userData.aimAt = entity.aim_at || null;
       if (entity.aim_yaw != null && Number.isFinite(entity.aim_yaw)) {
         mesh.userData.aimYawTarget = entity.aim_yaw;
       }
     }
+    applyGroundPose(mesh, 1 / 20, { tilt: !!mesh.userData.isPatriot || !!mesh.userData.isBunker, tiltScale: 0.55, maxTilt: 0.2, snap: true });
   } else if (mesh.userData.isUnitRig) {
     applyUnitMotion(mesh, entity);
     if (mesh.userData.isAir || isAirUnitKind(entity.kind)) {
-      mesh.position.y = mesh.userData.airAltitude || 2.4;
+      const groundY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
+      mesh.position.y = groundY + (mesh.userData.airAltitude || 2.4);
       const shadow = mesh.getObjectByName("airShadow");
-      if (shadow) shadow.position.y = -mesh.position.y + 0.02;
+      if (shadow) shadow.position.y = groundY + 0.02 - mesh.position.y;
+    } else {
+      applyGroundPose(mesh, 1 / 20, {
+        tilt: true,
+        tiltScale: mesh.userData.isTank ? 1 : 0.35,
+        snap: true,
+      });
     }
     if (mesh.userData.lastTint !== colors[0]) {
       tintUnitMesh(mesh, colors);
       mesh.userData.lastTint = colors[0];
     }
   } else {
-    mesh.position.set(entity.x, unitDims(entity.kind).h * 0.5, entity.y);
+    const h = sampleTerrainHeight(entity.x, entity.y);
+    mesh.position.set(entity.x, h + unitDims(entity.kind).h * 0.5, entity.y);
   }
 
   const syncKey = [
@@ -7952,10 +8222,13 @@ function updateAirDrive(mesh, dt) {
   if (mesh.userData.destX != null && mesh.userData.destZ != null) {
     slideToward(mesh, dt);
   }
-  mesh.position.y = alt + bob;
+  mesh.position.y = sampleTerrainHeight(mesh.position.x, mesh.position.z) + alt + bob;
 
   const shadow = mesh.getObjectByName("airShadow");
-  if (shadow) shadow.position.y = -mesh.position.y + 0.02;
+  if (shadow) {
+    const gy = sampleTerrainHeight(mesh.position.x, mesh.position.z);
+    shadow.position.y = gy + 0.02 - mesh.position.y;
+  }
 
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
   if (speed > 0.05) {
@@ -9467,7 +9740,10 @@ function updateTankWreck(mesh, now, dt) {
   // Hull / rubble sinks into ash near the end.
   if (t > 0.75) {
     const sink = isBuilding ? 0.35 * scale : 0.12;
-    mesh.position.y = (isBuilding ? -0.02 * scale : 0.02) - (t - 0.75) * sink;
+    const baseY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
+    mesh.position.y = baseY + (isBuilding ? -0.02 * scale : 0.02) - (t - 0.75) * sink;
+  } else {
+    mesh.position.y = sampleTerrainHeight(mesh.position.x, mesh.position.z);
   }
   void dt;
 }
@@ -9529,8 +9805,9 @@ function updateKnockPhysics(mesh, dt) {
   k.x += k.vx * dt;
   k.y += k.vy * dt;
   k.z += k.vz * dt;
-  if (k.y < 0) {
-    k.y = 0;
+  const groundY = sampleTerrainHeight(k.originX + k.x, k.originZ + k.z);
+  if (k.y < groundY) {
+    k.y = groundY;
     k.vy *= -0.28;
     k.vx *= 0.55;
     k.vz *= 0.55;
@@ -9538,10 +9815,10 @@ function updateKnockPhysics(mesh, dt) {
   }
   mesh.position.set(k.originX + k.x, k.y, k.originZ + k.z);
   mesh.rotation.z = k.spin * Math.min(1, k.age * 2) * (1 - k.age / k.life);
-  mesh.rotation.x = Math.min(0.9, k.y * 1.8) * Math.sign(k.spin || 1);
+  mesh.rotation.x = Math.min(0.9, (k.y - groundY) * 1.8) * Math.sign(k.spin || 1);
 
-  if (k.age >= k.life && k.y <= 0.02) {
-    mesh.position.set(k.originX + k.x, 0, k.originZ + k.z);
+  if (k.age >= k.life && k.y <= groundY + 0.02) {
+    mesh.position.set(k.originX + k.x, groundY, k.originZ + k.z);
     mesh.rotation.x = 0;
     mesh.rotation.z = 0;
     mesh.userData.knock = null;
@@ -9634,17 +9911,27 @@ function animate() {
       if (mesh.userData.isRadar) {
         const dish = mesh.getObjectByName("radarDish");
         if (dish) dish.rotation.y += (mesh.userData.scanRate || 0.85) * dt;
+        applyGroundPose(mesh, dt, { tilt: false });
       } else if (mesh.userData.isPatriot || mesh.userData.isBunker) {
         smoothPatriotFacing(mesh, dt);
+        applyGroundPose(mesh, dt, { tilt: true, tiltScale: 0.55, maxTilt: 0.22 });
       } else if (mesh.userData.isTank) {
         // Drive first so faceYaw matches this frame's slide.
         updateTankDrive(mesh, dt);
         smoothUnitFacing(mesh, dt);
+        applyGroundPose(mesh, dt, { tilt: true, tiltScale: 1, maxTilt: 0.44 });
+      } else if (mesh.userData.building) {
+        applyGroundPose(mesh, dt, { tilt: false });
       } else {
         smoothUnitFacing(mesh, dt);
         updateInfantryDrive(mesh, dt);
         updateAirDrive(mesh, dt);
         updateInfantryWalk(mesh, dt, now);
+        if (mesh.userData.isInfantry) {
+          applyGroundPose(mesh, dt, { tilt: true, tiltScale: 0.32, maxTilt: 0.2 });
+        } else if (mesh.userData.isUnitRig && !mesh.userData.isAir) {
+          applyGroundPose(mesh, dt, { tilt: true, tiltScale: 0.7, maxTilt: 0.35 });
+        }
       }
     }
   }

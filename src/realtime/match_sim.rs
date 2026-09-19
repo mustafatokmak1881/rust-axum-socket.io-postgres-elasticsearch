@@ -21,8 +21,8 @@ pub const MAX_PLAYERS: u8 = 32;
 pub const HOME_UNIT_BUDGET: usize = 18;
 /// Extra units per captured colony HQ (= half of home → x + x/2 + x/2 …).
 pub const COLONY_UNIT_BUDGET: usize = HOME_UNIT_BUDGET / 2;
-/// Non-HQ structures allowed at the home base.
-pub const HOME_BUILDING_BUDGET: usize = 6;
+/// Non-HQ structures allowed at the home base (econ ring + 3 Patriots + room to expand).
+pub const HOME_BUILDING_BUDGET: usize = 9;
 /// Extra structures unlocked per captured colony HQ (= half of home).
 pub const COLONY_BUILDING_BUDGET: usize = HOME_BUILDING_BUDGET / 2;
 /// Wipe / claim radius around a fallen HQ (city footprint).
@@ -1146,7 +1146,8 @@ impl MatchSim {
         let faction = "usa".to_string();
         if let Some(player) = self.players.get_mut(&user_id) {
             player.faction = faction.clone();
-            player.resources.power = player.resources.power.saturating_add(40);
+            // HQ base + margin so 3 Patriots (−90) don't brown out the starter plant.
+            player.resources.power = player.resources.power.saturating_add(100);
         }
 
         // Ring of finished starter structures around the Command Center.
@@ -1159,6 +1160,16 @@ impl MatchSim {
 
         for (kind, ox, oy) in slots {
             self.spawn_finished_building(user_id, team, &faction, kind, hx + ox, hy + oy);
+        }
+
+        // Three Patriots on the perimeter — early raids should hurt.
+        let patriot_slots: [(f32, f32); 3] = [
+            (3.9, -3.3),
+            (-3.9, -3.3),
+            (0.0, 4.8),
+        ];
+        for (ox, oy) in patriot_slots {
+            self.spawn_finished_building(user_id, team, &faction, "turret", hx + ox, hy + oy);
         }
 
         let tank = trainables().iter().find(|u| u.unit == "tank");
