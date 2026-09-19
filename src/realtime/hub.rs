@@ -401,14 +401,14 @@ impl MatchHub {
             return Err("Match not found or already ended".into());
         };
 
-        let expand_notices = {
+        let mut expand_notices: Vec<(Uuid, ServerMsg)> = Vec::new();
+        {
             let mut rt = runtime.write().await;
             if rt.sim.ended || !rt.open {
                 return Err("Match is closed".into());
             }
 
             let faction = normalize_faction(&faction);
-            let mut expand_notices: Vec<(Uuid, ServerMsg)> = Vec::new();
             if rt.sim.bot_count() > 0 {
                 // Prefer stealing a bot slot — keeps commander count fixed.
                 rt.sim
@@ -458,8 +458,7 @@ impl MatchHub {
                 }
             }
             rt.members.insert(user_id, ());
-            expand_notices
-        };
+        }
 
         for (uid, msg) in expand_notices {
             self.send(uid, msg);
