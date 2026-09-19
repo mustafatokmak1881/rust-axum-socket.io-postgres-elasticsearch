@@ -6358,21 +6358,35 @@ function showSelectedBuildingDetail(ent) {
   }
   if (econ && !state.selectedBuild) {
     const q = Number(ent.train_queue) || 0;
-    const train =
-      ent.train_progress != null && ent.train_progress < 1
-        ? ` · Üretim ${Math.round(ent.train_progress * 100)}%${q > 1 ? ` ×${q}` : ""}`
-        : q > 0
-          ? ` · Kuyruk ×${q}`
-          : "";
+    const isAir = String(ent.kind) === "airfield";
+    const hangar = isAir ? hangaredF16Count(ent.owner) : 0;
+    let train = "";
+    if (ent.train_progress != null && ent.train_progress < 1) {
+      train = ` · ${isAir ? "AIR" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
+        q > 1 ? ` ×${q}` : ""
+      }`;
+    } else if (q > 0) {
+      train = ` · Kuyruk ×${q}`;
+    }
+    if (isAir && hangar > 0) {
+      train += ` · Hangar ${hangar}`;
+    }
     $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}${train}${extra}`;
   } else if (!state.selectedBuild) {
     const q = Number(ent.train_queue) || 0;
-    const train =
-      ent.train_progress != null && ent.train_progress < 1
-        ? ` · Üretim ${Math.round(ent.train_progress * 100)}%${q > 1 ? ` ×${q}` : ""}`
-        : q > 0
-          ? ` · Kuyruk ×${q}`
-          : "";
+    const isAir = String(ent.kind) === "airfield";
+    const hangar = isAir ? hangaredF16Count(ent.owner) : 0;
+    let train = "";
+    if (ent.train_progress != null && ent.train_progress < 1) {
+      train = ` · ${isAir ? "AIR" : "Üretim"} ${Math.round(ent.train_progress * 100)}%${
+        q > 1 ? ` ×${q}` : ""
+      }`;
+    } else if (q > 0) {
+      train = ` · Kuyruk ×${q}`;
+    }
+    if (isAir && hangar > 0) {
+      train += ` · Hangar ${hangar}`;
+    }
     $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b>${train}${extra}`;
   }
   updateDemolishUi();
@@ -7154,12 +7168,17 @@ function buildEntityTipLines(entity) {
   const queue = Number(entity.train_queue) || 0;
   if (entity.train_progress != null && entity.train_progress < 1) {
     const pct = `${Math.round(entity.train_progress * 100)}%`;
+    const air = String(entity.kind || "") === "airfield";
     rows.push({
-      k: "Üretim",
+      k: air ? "AIR" : "Üretim",
       v: queue > 1 ? `${pct} · ×${queue} emir` : pct,
     });
   } else if (queue > 0) {
     rows.push({ k: "Kuyruk", v: `×${queue} emir` });
+  }
+  if (String(entity.kind || "") === "airfield") {
+    const hangar = hangaredF16Count(entity.owner);
+    if (hangar > 0) rows.push({ k: "Hangar", v: `${hangar} F-16` });
   }
 
   return { name, rows, tags, relation: relationForEntity(entity), owner: entity.owner_name };
@@ -7454,6 +7473,7 @@ function attachOwnerMarkings(mesh, entity) {
 function labelHeightFor(entity) {
   if (entity.building) {
     if (entity.kind === "hq") return 2.15;
+    if (entity.kind === "airfield") return 1.85;
     if (entity.kind === "bunker") return 0.48;
     if (entity.kind === "radar") return 1.1;
     if (entity.kind === "turret") return 0.92;
@@ -7467,17 +7487,33 @@ function labelHeightFor(entity) {
   return h + (tank ? 0.14 : 0.08);
 }
 
+function hangaredF16Count(owner) {
+  const oid = String(owner || "");
+  let n = 0;
+  for (const e of state.entities.values()) {
+    if (String(e.owner) !== oid) continue;
+    const k = String(e.kind || "");
+    if (!(k === "f16" || k.includes("f16"))) continue;
+    if (e.airborne) continue;
+    if ((e.hp ?? 1) <= 0) continue;
+    n += 1;
+  }
+  return n;
+}
+
 function activeLoadProgress(entity) {
   // Nearly-complete frames (0.99) are still constructing; only null means done.
   if (entity.progress != null && entity.progress < 1) {
     return { pct: entity.progress, label: "BUILD", queue: 0 };
   }
   const queue = Number(entity.train_queue) || 0;
+  const air = String(entity.kind || "") === "airfield";
+  const label = air ? "AIR" : "TRAIN";
   if (entity.train_progress != null && entity.train_progress < 1) {
-    return { pct: entity.train_progress, label: "TRAIN", queue };
+    return { pct: entity.train_progress, label, queue };
   }
   if (queue > 0) {
-    return { pct: 0, label: "TRAIN", queue };
+    return { pct: 0, label, queue };
   }
   return null;
 }
@@ -7534,7 +7570,7 @@ function makeProgressSprite(pct, label, compact = false, queue = 0) {
       c0 = "#287034";
       c1 = "#6fc252";
     }
-  } else if (label === "TRAIN") {
+  } else if (label === "TRAIN" || label === "AIR") {
     c0 = "#2f6a8a";
     c1 = "#6ec4e8";
   }
@@ -7556,10 +7592,10 @@ function makeProgressSprite(pct, label, compact = false, queue = 0) {
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = "rgba(0,0,0,0.75)";
   ctx.fillStyle = "#f6f3ea";
-  // Generals-style: show queued orders as ×N next to TRAIN.
+  // Generals-style: show queued orders as ×N (War Factory / Airfield / Barracks).
   const q = Number(queue) || 0;
   const text =
-    label === "TRAIN" && q > 1
+    (label === "TRAIN" || label === "AIR") && q > 1
       ? `${label} ×${q}  ${percent}%`
       : `${label} ${percent}%`;
   ctx.strokeText(text, 80, 9);
