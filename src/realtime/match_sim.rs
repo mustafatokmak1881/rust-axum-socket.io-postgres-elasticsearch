@@ -18,22 +18,17 @@ pub const BROADCAST_EVERY: u32 = 2; // 10 Hz to clients
 pub const MAX_PLAYERS: u8 = 32;
 /// Smallest playable edge (2 commanders).
 pub const MIN_MAP_SIZE: u16 = 64;
-/// Largest selectable edge — huge custom arenas allowed.
+/// Cap for auto-scaled arenas.
 pub const MAX_MAP_SIZE: u16 = 2048;
 
-/// Minimum map edge for N commanders (area grows with player count).
-/// 2 → 64, 8 → 128, 32 → 256. User may pick anything ≥ this up to MAX_MAP_SIZE.
-pub fn min_map_size_for_players(max_players: u8) -> u16 {
+/// Auto map edge from commander count — roomy so bases aren't cramped.
+/// 2 → 96, 8 → 252, 16 → 460, 32 → 876.
+pub fn map_size_for_players(max_players: u8) -> u16 {
     let n = max_players.clamp(2, MAX_PLAYERS) as f32;
-    let size = (64.0 * (n / 2.0).sqrt()).round() as i32;
+    // ~26 wu extra edge per commander past 2, plus base breathing room.
+    let size = (96.0 + (n - 2.0) * 26.0).round() as i32;
     let size = ((size + 1) / 2) * 2; // even
     (size as u16).clamp(MIN_MAP_SIZE, MAX_MAP_SIZE)
-}
-
-/// Resolve final edge: at least the commander minimum, at most MAX_MAP_SIZE.
-pub fn resolve_map_size(requested: u16, max_players: u8) -> u16 {
-    let min = min_map_size_for_players(max_players);
-    requested.max(min).clamp(MIN_MAP_SIZE, MAX_MAP_SIZE)
 }
 
 /// Total living+queued units with a single home HQ.

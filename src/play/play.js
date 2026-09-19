@@ -10118,50 +10118,13 @@ function animate() {
 
 /* ---------- UI events ---------- */
 
-const MIN_MAP_AREA = 64;
-const MAX_MAP_AREA = 2048;
-
-/** Minimum edge length for N commanders — mirrors server `min_map_size_for_players`. */
-function minAreaForCommanders(n) {
+/** Auto edge from commander count — mirrors server `map_size_for_players` (roomy). */
+function mapSizeForCommanders(n) {
   const c = Math.max(2, Math.min(32, Number(n) || 2));
-  let size = Math.round(64 * Math.sqrt(c / 2));
+  let size = Math.round(96 + (c - 2) * 26);
   size = Math.round(size / 2) * 2;
-  return Math.max(MIN_MAP_AREA, Math.min(MAX_MAP_AREA, size));
+  return Math.max(64, Math.min(2048, size));
 }
-
-function clampMapArea(v, commanders) {
-  const min = minAreaForCommanders(commanders);
-  let n = Math.round(Number(v) || min);
-  if (!Number.isFinite(n)) n = min;
-  n = Math.round(n / 2) * 2;
-  return Math.max(min, Math.min(MAX_MAP_AREA, n));
-}
-
-/** When commanders rise, lift area to the new floor (keep larger custom values). */
-function syncLobbyAreaFromCommanders() {
-  const slots = $("#max-players");
-  const areaEl = $("#map-area");
-  if (!slots || !areaEl) return;
-  const commanders = Number(slots.value) || 8;
-  const min = minAreaForCommanders(commanders);
-  areaEl.min = String(min);
-  areaEl.max = String(MAX_MAP_AREA);
-  const cur = Number(areaEl.value) || min;
-  if (cur < min) areaEl.value = String(min);
-  areaEl.title = `Minimum ${min} · en fazla ${MAX_MAP_AREA}`;
-}
-
-function syncLobbyAreaClamp() {
-  const slots = $("#max-players");
-  const areaEl = $("#map-area");
-  if (!slots || !areaEl) return;
-  areaEl.value = String(clampMapArea(areaEl.value, slots.value));
-}
-
-$("#max-players")?.addEventListener("input", syncLobbyAreaFromCommanders);
-$("#max-players")?.addEventListener("change", syncLobbyAreaFromCommanders);
-$("#map-area")?.addEventListener("change", syncLobbyAreaClamp);
-syncLobbyAreaFromCommanders();
 
 $("#faction-row")?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-faction]");
@@ -10174,8 +10137,7 @@ $("#faction-row")?.addEventListener("click", (event) => {
 $("#btn-create").addEventListener("click", () => {
   void enterGameFullscreen();
   const maxPlayers = Number($("#max-players").value) || 8;
-  const mapSize = clampMapArea($("#map-area")?.value, maxPlayers);
-  if ($("#map-area")) $("#map-area").value = String(mapSize);
+  const mapSize = mapSizeForCommanders(maxPlayers);
   send({
     t: "create_lobby",
     max_players: maxPlayers,
