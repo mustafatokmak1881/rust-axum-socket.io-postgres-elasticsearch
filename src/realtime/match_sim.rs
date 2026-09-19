@@ -5811,6 +5811,7 @@ impl MatchSim {
             flag: entity.flag.clone(),
             progress,
             train_progress,
+            train_queue: entity.train_queue.len().min(255) as u8,
             prone: entity.prone,
             hacked: entity.building && self.tick < entity.hacked_until_tick,
             aim_at: if entity.kind.contains("tank")

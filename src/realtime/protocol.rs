@@ -5,6 +5,10 @@ fn default_faction() -> String {
     "usa".into()
 }
 
+fn is_u8_zero(v: &u8) -> bool {
+    *v == 0
+}
+
 pub fn normalize_faction(_faction: &str) -> String {
     // Locked to USA while the roster is rebuilt country-by-country.
     "usa".into()
@@ -317,6 +321,9 @@ pub struct EntityView {
     /// Always serialize (including `null`) so clients clear a stuck 99% TRAIN bar.
     #[serde(default)]
     pub train_progress: Option<f32>,
+    /// Orders waiting in this building's train queue (Generals-style ×N).
+    #[serde(default, skip_serializing_if = "is_u8_zero")]
+    pub train_queue: u8,
     /// Infantry lying down in combat.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prone: bool,

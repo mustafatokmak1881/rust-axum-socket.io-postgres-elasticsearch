@@ -1142,7 +1142,11 @@ function applyDelta(msg) {
   }
   playShots(msg.shots || []);
   updateArmyCounts();
-  if (state.selectedBuilding) refreshTrainablePanel();
+  if (state.selectedBuilding) {
+    refreshTrainablePanel();
+    const selected = state.entities.get(state.selectedBuilding);
+    if (selected) showSelectedBuildingDetail(selected);
+  }
   $("#match-caption").textContent =
     `Tick ${msg.tick} · ${state.entities.size} entities · ${globalVision ? "open map" : "vision fog"}`;
 }
@@ -6353,9 +6357,23 @@ function showSelectedBuildingDetail(ent) {
     extra = " · HQ yıkılamaz";
   }
   if (econ && !state.selectedBuild) {
-    $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}${extra}`;
+    const q = Number(ent.train_queue) || 0;
+    const train =
+      ent.train_progress != null && ent.train_progress < 1
+        ? ` · Üretim ${Math.round(ent.train_progress * 100)}%${q > 1 ? ` ×${q}` : ""}`
+        : q > 0
+          ? ` · Kuyruk ×${q}`
+          : "";
+    $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b> — ${escapeHtml(econ)}${train}${extra}`;
   } else if (!state.selectedBuild) {
-    $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b>${extra}`;
+    const q = Number(ent.train_queue) || 0;
+    const train =
+      ent.train_progress != null && ent.train_progress < 1
+        ? ` · Üretim ${Math.round(ent.train_progress * 100)}%${q > 1 ? ` ×${q}` : ""}`
+        : q > 0
+          ? ` · Kuyruk ×${q}`
+          : "";
+    $("#build-detail").innerHTML = `<b>${escapeHtml(name)}</b>${train}${extra}`;
   }
   updateDemolishUi();
 }
@@ -7133,8 +7151,15 @@ function buildEntityTipLines(entity) {
   if (entity.building && entity.progress != null && entity.progress < 1) {
     rows.push({ k: "İnşa", v: `${Math.round(entity.progress * 100)}%` });
   }
+  const queue = Number(entity.train_queue) || 0;
   if (entity.train_progress != null && entity.train_progress < 1) {
-    rows.push({ k: "Üretim", v: `${Math.round(entity.train_progress * 100)}%` });
+    const pct = `${Math.round(entity.train_progress * 100)}%`;
+    rows.push({
+      k: "Üretim",
+      v: queue > 1 ? `${pct} · ×${queue} emir` : pct,
+    });
+  } else if (queue > 0) {
+    rows.push({ k: "Kuyruk", v: `×${queue} emir` });
   }
 
   return { name, rows, tags, relation: relationForEntity(entity), owner: entity.owner_name };
@@ -7445,15 +7470,19 @@ function labelHeightFor(entity) {
 function activeLoadProgress(entity) {
   // Nearly-complete frames (0.99) are still constructing; only null means done.
   if (entity.progress != null && entity.progress < 1) {
-    return { pct: entity.progress, label: "BUILD" };
+    return { pct: entity.progress, label: "BUILD", queue: 0 };
   }
+  const queue = Number(entity.train_queue) || 0;
   if (entity.train_progress != null && entity.train_progress < 1) {
-    return { pct: entity.train_progress, label: "TRAIN" };
+    return { pct: entity.train_progress, label: "TRAIN", queue };
+  }
+  if (queue > 0) {
+    return { pct: 0, label: "TRAIN", queue };
   }
   return null;
 }
 
-function makeProgressSprite(pct, label, compact = false) {
+function makeProgressSprite(pct, label, compact = false, queue = 0) {
   const percent = Math.max(0, Math.min(100, Math.round(pct * 100)));
   const scale = 4; // hi-res canvas so zoom stays sharp
   const canvas = document.createElement("canvas");
@@ -7527,7 +7556,12 @@ function makeProgressSprite(pct, label, compact = false) {
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = "rgba(0,0,0,0.75)";
   ctx.fillStyle = "#f6f3ea";
-  const text = `${label} ${percent}%`;
+  // Generals-style: show queued orders as ×N next to TRAIN.
+  const q = Number(queue) || 0;
+  const text =
+    label === "TRAIN" && q > 1
+      ? `${label} ×${q}  ${percent}%`
+      : `${label} ${percent}%`;
   ctx.strokeText(text, 80, 9);
   ctx.fillText(text, 80, 9);
 
@@ -7576,12 +7610,13 @@ function updateProgressBar(mesh, entity) {
   }
 
   const percent = Math.round(load.pct * 100);
-  const key = `${load.label}:${percent}`;
+  const queue = Number(load.queue) || 0;
+  const key = `${load.label}:${percent}:q${queue}`;
   if (mesh.userData.progressBarKey === key && existing) return;
 
   clearSpriteBar(mesh, "progressBar");
 
-  const sprite = makeProgressSprite(load.pct, load.label, false);
+  const sprite = makeProgressSprite(load.pct, load.label, false, queue);
   const baseH = labelHeightFor(entity);
   sprite.position.set(0, Math.max(0.5, baseH - 0.36), 0);
   mesh.add(sprite);
@@ -10290,6 +10325,7 @@ function upsertMesh(entity) {
     Math.round(entity.hp || 0),
     entity.progress == null ? "-" : Math.round(entity.progress * 100),
     entity.train_progress == null ? "-" : Math.round(entity.train_progress * 100),
+    Number(entity.train_queue) || 0,
     colors.join(","),
   ].join("|");
   if (mesh.userData.syncKey === syncKey) return;
