@@ -2519,17 +2519,28 @@ impl MatchSim {
                     }
                 }
             }
+            let takeoff_roll = if is_jet {
+                self.entities
+                    .get(id)
+                    .and_then(|e| self.f16_takeoff_roll(user_id, e.x, e.y))
+            } else {
+                None
+            };
             if let Some(entity) = self.entities.get_mut(id) {
                 if entity.owner == user_id && entity.unit {
                     entity.target = Some(target_id);
                     entity.move_to = None;
                     entity.stuck_frames = 0;
-                    entity.detour = None;
-                    entity.detour_ttl = 0;
-                    entity.dirty = true;
                     if is_f16_kind(&entity.kind) {
+                        // Takeoff roll along the runway before climbing out to the target.
+                        entity.detour = takeoff_roll;
+                        entity.detour_ttl = 160; // ~8s at 20 Hz
                         armed_any = true;
+                    } else {
+                        entity.detour = None;
+                        entity.detour_ttl = 0;
                     }
+                    entity.dirty = true;
                 }
             }
         }
@@ -2614,7 +2625,7 @@ impl MatchSim {
         assigned + queued
     }
 
-    /// Four apron slots inside the airfield footprint (2×2).
+    /// Four apron slots matching the client airfield pad marks (local X/Z).
     fn airfield_pad_slots(ax: f32, ay: f32) -> [(f32, f32); 4] {
         const OX: f32 = 0.72;
         const OY: f32 = 0.38;
@@ -2624,6 +2635,36 @@ impl MatchSim {
             (ax - OX, ay + OY),
             (ax + OX, ay + OY),
         ]
+    }
+
+    fn pad_slot_claimed(
+        &self,
+        x: f32,
+        y: f32,
+        exclude: Option<Uuid>,
+    ) -> bool {
+        const R2: f32 = 0.28 * 0.28;
+        self.entities.values().any(|e| {
+            if Some(e.id) == exclude || !e.unit || e.hp <= 0.0 || !is_f16_kind(&e.kind) {
+                return false;
+            }
+            // Another jet already taxiing / RTB to this slot.
+            if let Some((mx, my)) = e.move_to {
+                let dx = mx - x;
+                let dy = my - y;
+                if dx * dx + dy * dy < R2 {
+                    return true;
+                }
+            }
+            // Hangared jet sitting on the slot.
+            let airborne = e.mag_ammo > 0 || e.move_to.is_some() || e.target.is_some();
+            if airborne {
+                return false;
+            }
+            let dx = e.x - x;
+            let dy = e.y - y;
+            dx * dx + dy * dy < R2
+        })
     }
 
     fn free_airfield_pad(
@@ -2638,20 +2679,7 @@ impl MatchSim {
         for (sx, sy) in slots {
             let x = sx.clamp(0.5, map - 0.5);
             let y = sy.clamp(0.5, map - 0.5);
-            let occupied = self.entities.values().any(|e| {
-                if Some(e.id) == exclude || !e.unit || e.hp <= 0.0 || !is_f16_kind(&e.kind) {
-                    return false;
-                }
-                // Only count hangared jets (not out on a sortie).
-                let airborne = e.mag_ammo > 0 || e.move_to.is_some() || e.target.is_some();
-                if airborne {
-                    return false;
-                }
-                let dx = e.x - x;
-                let dy = e.y - y;
-                dx * dx + dy * dy < 0.22 * 0.22
-            });
-            if !occupied {
+            if !self.pad_slot_claimed(x, y, exclude) {
                 return (x, y);
             }
         }
@@ -2674,6 +2702,12 @@ impl MatchSim {
         )
     }
 
+    /// Runway threshold along +X (strip axis) for takeoff roll / landing final.
+    fn airfield_runway_threshold(ax: f32, ay: f32, map: f32) -> (f32, f32) {
+        ((ax + 2.55).clamp(0.5, map - 0.5), ay.clamp(0.5, map - 0.5))
+    }
+
+    #[allow(dead_code)]
     fn nearest_owned_airfield_pad(&self, owner: Uuid, from_x: f32, from_y: f32) -> Option<(f32, f32)> {
         let mut best: Option<(Uuid, f32, f32, f32)> = None;
         for e in self.entities.values() {
@@ -2699,6 +2733,40 @@ impl MatchSim {
                 })
             })
         })
+    }
+
+    /// Pad + approach waypoint for RTB (final → one of four apron slots).
+    fn f16_rtb_route(
+        &self,
+        owner: Uuid,
+        from_x: f32,
+        from_y: f32,
+        jet_id: Uuid,
+    ) -> Option<((f32, f32), (f32, f32))> {
+        let mut best: Option<(Uuid, f32, f32, f32)> = None;
+        for e in self.entities.values() {
+            if e.owner != owner || e.hp <= 0.0 || e.kind != "airfield" || e.build_remaining_ms > 0 {
+                continue;
+            }
+            let dx = e.x - from_x;
+            let dy = e.y - from_y;
+            let d2 = dx * dx + dy * dy;
+            if best.map_or(true, |(_, _, _, d)| d2 < d) {
+                best = Some((e.id, e.x, e.y, d2));
+            }
+        }
+        let map = self.map_size as f32;
+        let (id, ax, ay) = best.map(|(id, ax, ay, _)| (id, ax, ay))?;
+        let pad = self.free_airfield_pad(id, ax, ay, Some(jet_id));
+        let approach = Self::airfield_runway_threshold(ax, ay, map);
+        Some((approach, pad))
+    }
+
+    fn f16_takeoff_roll(&self, owner: Uuid, from_x: f32, from_y: f32) -> Option<(f32, f32)> {
+        let af = self.nearest_owned_airfield_id(owner, from_x, from_y)?;
+        let e = self.entities.get(&af)?;
+        let map = self.map_size as f32;
+        Some(Self::airfield_runway_threshold(e.x, e.y, map))
     }
 
     pub fn set_focus(&mut self, user_id: Uuid, x: f32, y: f32) {
@@ -3090,7 +3158,8 @@ impl MatchSim {
                     entity.dirty = true;
                 }
             } else {
-            let f16_can_hunt = !is_f16_kind(&entity.kind) || entity.mag_ammo > 0;
+            let f16_can_hunt =
+                !is_f16_kind(&entity.kind) || (entity.mag_ammo > 0 && entity.detour.is_none());
             if f16_can_hunt && entity.damage > 0.0 && entity.range > 0.0 && self.tick % 2 == 0 {
                 if obeying_move {
                     // On the march: always pick nearest in-range threat (don't stick to someone behind).
@@ -3155,17 +3224,57 @@ impl MatchSim {
                 if let Some((gx, gy)) = goal {
                     if airborne {
                         // Generals-style air: fly straight over terrain and buildings.
+                        // F-16: honour takeoff-roll / landing-final detour before the real goal.
+                        let mut gx = gx;
+                        let mut gy = gy;
+                        if is_f16_kind(&entity.kind) {
+                            if let Some((dx, dy)) = entity.detour {
+                                let ddx = dx - entity.x;
+                                let ddy = dy - entity.y;
+                                let dd = (ddx * ddx + ddy * ddy).sqrt();
+                                if dd <= 0.45 {
+                                    entity.detour = None;
+                                    entity.detour_ttl = 0;
+                                } else {
+                                    gx = dx;
+                                    gy = dy;
+                                }
+                            }
+                            if entity.detour_ttl > 0 {
+                                entity.detour_ttl = entity.detour_ttl.saturating_sub(1);
+                                if entity.detour_ttl == 0 {
+                                    entity.detour = None;
+                                }
+                            }
+                        }
                         let prev_x = entity.x;
                         let prev_y = entity.y;
                         let gdx = gx - entity.x;
                         let gdy = gy - entity.y;
                         let toward_goal = (gdx * gdx + gdy * gdy).sqrt();
-                        let step = entity.speed * (dt_ms as f32 / 1000.0);
-                        let arrive_r = (entity.range * 0.15).clamp(0.35, 1.2);
+                        let mut step = entity.speed * (dt_ms as f32 / 1000.0);
+                        // Slower takeoff roll / landing approach.
+                        if is_f16_kind(&entity.kind) {
+                            if entity.detour.is_some() && entity.mag_ammo > 0 {
+                                step *= 0.42; // runway roll
+                            } else if entity.mag_ammo == 0 {
+                                step *= 0.50; // RTB / final
+                            }
+                        }
+                        let arrive_r = if is_f16_kind(&entity.kind) && entity.mag_ammo == 0 {
+                            0.16 // must seat into the apron slot
+                        } else {
+                            (entity.range * 0.15).clamp(0.35, 1.2)
+                        };
                         if toward_goal <= arrive_r {
                             entity.x = gx;
                             entity.y = gy;
-                            entity.move_to = None;
+                            if entity.detour.is_none() {
+                                entity.move_to = None;
+                            } else {
+                                entity.detour = None;
+                                entity.detour_ttl = 0;
+                            }
                             entity.stuck_frames = 0;
                         } else if toward_goal > 0.001 {
                             let travel = step.min(toward_goal);
@@ -3541,9 +3650,12 @@ impl MatchSim {
                         if f16_spent {
                             entity.target = None;
                             entity.ability_cooldown_ms = F16_REARM_MS;
-                            if let Some(pad) =
-                                self.nearest_owned_airfield_pad(attacker_owner, fx, fy)
+                            if let Some((approach, pad)) =
+                                self.f16_rtb_route(attacker_owner, fx, fy, entity.id)
                             {
+                                // Long final along the strip, then taxi into a free pad slot.
+                                entity.detour = Some(approach);
+                                entity.detour_ttl = 500;
                                 entity.move_to = Some(pad);
                             }
                             entity.dirty = true;

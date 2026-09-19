@@ -9279,6 +9279,64 @@ function isF16Kind(kind) {
   return String(kind || "").includes("f16");
 }
 
+const AIRFIELD_PAD_OFFSETS = [
+  [-0.72, -0.38],
+  [0.72, -0.38],
+  [-0.72, 0.38],
+  [0.72, 0.38],
+];
+
+function nearestOwnedAirfield(owner, x, z) {
+  const oid = String(owner || "");
+  let best = null;
+  let bestD = Infinity;
+  for (const e of state.entities.values()) {
+    if (String(e.kind) !== "airfield") continue;
+    if (String(e.owner) !== oid) continue;
+    if ((e.hp ?? 1) <= 0) continue;
+    const dx = Number(e.x) - x;
+    const dz = Number(e.y) - z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestD) {
+      bestD = d2;
+      best = e;
+    }
+  }
+  return best;
+}
+
+function f16NearHomeApron(entity) {
+  const af = nearestOwnedAirfield(entity.owner, entity.x, entity.y);
+  if (!af) return false;
+  const dx = Number(entity.x) - Number(af.x);
+  const dz = Number(entity.y) - Number(af.y);
+  return dx * dx + dz * dz < 5.2 * 5.2;
+}
+
+function snapF16ToApronSlot(mesh, entity) {
+  const af = nearestOwnedAirfield(entity.owner, entity.x, entity.y);
+  if (!af) return;
+  let best = null;
+  let bestD = Infinity;
+  for (const [ox, oz] of AIRFIELD_PAD_OFFSETS) {
+    const sx = Number(af.x) + ox;
+    const sz = Number(af.y) + oz;
+    const dx = Number(entity.x) - sx;
+    const dz = Number(entity.y) - sz;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestD) {
+      bestD = d2;
+      best = [sx, sz];
+    }
+  }
+  if (best && bestD < 0.55 * 0.55) {
+    mesh.userData.destX = best[0];
+    mesh.userData.destZ = best[1];
+  }
+  // Park nose along the runway (+X).
+  mesh.userData.faceYaw = Math.PI / 2;
+}
+
 /**
  * F-16 Fighting Falcon — Ghost Gray strike loadout.
  * Built part-by-part from planform + 3/4 refs (radome, gold canopy, LERX,
@@ -10350,19 +10408,29 @@ function upsertMesh(entity) {
     applyUnitMotion(mesh, entity);
     if (mesh.userData.isAir || isAirUnitKind(entity.kind)) {
       if (mesh.userData.isF16) {
+        const wasHangared = mesh.userData.hangared;
         mesh.userData.hangared = !entity.airborne;
+        mesh.userData.rtbHome = entity.airborne && f16NearHomeApron(entity);
+        if (wasHangared && !mesh.userData.hangared) {
+          mesh.userData.flightPhase = "takeoff";
+          mesh.userData.phaseT = 0;
+          mesh.userData.takeoffUntil = performance.now() + 3400;
+        } else if (!wasHangared && mesh.userData.hangared) {
+          mesh.userData.flightPhase = "hangared";
+          mesh.userData.phaseT = 0;
+        }
+        if (mesh.userData.hangared) {
+          snapF16ToApronSlot(mesh, entity);
+        }
+        // Keep altitude lerp in updateAirDrive — do not snap here.
+      } else {
+        const groundY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
+        const alt = mesh.userData.airAltitude || 2.4;
+        mesh.userData.currentAlt = alt;
+        mesh.position.y = groundY + alt;
+        const shadow = mesh.getObjectByName("airShadow");
+        if (shadow) shadow.position.y = groundY + 0.02 - mesh.position.y;
       }
-      const groundY = sampleTerrainHeight(mesh.position.x, mesh.position.z);
-      const hangared = !!mesh.userData.isF16 && mesh.userData.hangared;
-      const alt = hangared
-        ? mesh.userData.hangarAltitude ?? 0.13
-        : mesh.userData.airAltitude || 2.4;
-      mesh.userData.currentAlt = alt;
-      mesh.position.y = groundY + alt;
-      const shadow = mesh.getObjectByName("airShadow");
-      if (shadow) shadow.position.y = groundY + 0.02 - mesh.position.y;
-      const gear = mesh.getObjectByName("f16Gear");
-      if (gear) gear.visible = hangared;
     } else {
       applyGroundPose(mesh, 1 / 20, {
         tilt: true,
@@ -11008,18 +11076,20 @@ function updateInfantryDrive(mesh, dt) {
 
 function updateAirDrive(mesh, dt) {
   if (!mesh?.userData?.isAir || mesh.userData.knock) return;
-  const hangared = !!mesh.userData.isF16 && mesh.userData.hangared;
+
+  if (mesh.userData.isF16) {
+    updateF16Flight(mesh, dt);
+    return;
+  }
+
+  const hangared = false;
   const cruise = mesh.userData.airAltitude || 2.4;
-  const pad = mesh.userData.hangarAltitude ?? 0.13;
-  const wantAlt = hangared ? pad : cruise;
+  const wantAlt = cruise;
   const curAlt = mesh.userData.currentAlt ?? wantAlt;
-  mesh.userData.currentAlt =
-    curAlt + (wantAlt - curAlt) * Math.min(1, dt * (hangared ? 2.2 : 1.4));
+  mesh.userData.currentAlt = curAlt + (wantAlt - curAlt) * Math.min(1, dt * 1.4);
   const alt = mesh.userData.currentAlt;
-  const bob = hangared
-    ? 0
-    : Math.sin(performance.now() * 0.002 + (mesh.userData.id || "").length) * 0.04;
-  if (mesh.userData.destX != null && mesh.userData.destZ != null && !hangared) {
+  const bob = Math.sin(performance.now() * 0.002 + (mesh.userData.id || "").length) * 0.04;
+  if (mesh.userData.destX != null && mesh.userData.destZ != null) {
     slideToward(mesh, dt);
   }
   mesh.position.y = sampleTerrainHeight(mesh.position.x, mesh.position.z) + alt + bob;
@@ -11028,14 +11098,11 @@ function updateAirDrive(mesh, dt) {
   if (shadow) {
     const gy = sampleTerrainHeight(mesh.position.x, mesh.position.z);
     shadow.position.y = gy + 0.02 - mesh.position.y;
-    if (shadow.material) shadow.material.opacity = hangared ? 0.22 : 0.12;
+    if (shadow.material) shadow.material.opacity = 0.12;
   }
 
-  const gear = mesh.getObjectByName("f16Gear");
-  if (gear) gear.visible = hangared;
-
   const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
-  if (!hangared && speed > 0.05) {
+  if (speed > 0.05) {
     const yaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
     mesh.userData.faceYaw = yaw;
     mesh.userData.moving = true;
@@ -11045,27 +11112,25 @@ function updateAirDrive(mesh, dt) {
     const wantBank = THREE.MathUtils.clamp(-dyaw * 4.5, -0.55, 0.55);
     mesh.userData.bank = (mesh.userData.bank || 0) * 0.85 + wantBank * 0.15;
     mesh.userData.prevFaceYaw = yaw;
-  } else if (hangared || performance.now() - (mesh.userData.moveSeenAt || 0) > 280) {
+  } else if (performance.now() - (mesh.userData.moveSeenAt || 0) > 280) {
     mesh.userData.moving = false;
     mesh.userData.bank = (mesh.userData.bank || 0) * 0.9;
   }
 
   mesh.rotation.order = "YXZ";
-  mesh.rotation.z = hangared ? 0 : mesh.userData.bank || 0;
-  mesh.rotation.x = hangared
-    ? 0
-    : mesh.userData.isJet
-      ? mesh.userData.moving
-        ? -0.12
-        : -0.04
-      : mesh.userData.moving
-        ? 0.06
-        : 0.02;
+  mesh.rotation.z = mesh.userData.bank || 0;
+  mesh.rotation.x = mesh.userData.isJet
+    ? mesh.userData.moving
+      ? -0.12
+      : -0.04
+    : mesh.userData.moving
+      ? 0.06
+      : 0.02;
 
   if (mesh.userData.isJet) {
     mesh.traverse((obj) => {
       if (obj.name === "airAfterburner" && obj.material) {
-        const on = !hangared && !!mesh.userData.moving;
+        const on = !!mesh.userData.moving;
         obj.material.emissiveIntensity = on
           ? 0.45 + Math.sin(performance.now() * 0.03) * 0.18
           : 0.05;
@@ -11073,11 +11138,169 @@ function updateAirDrive(mesh, dt) {
     });
   }
 
-  // Spin rotors
-  const spin = hangared ? 0 : (mesh.userData.moving ? 22 : 14) * dt;
+  const spin = (mesh.userData.moving ? 22 : 14) * dt;
   mesh.traverse((obj) => {
     if (obj.name === "airRotor") obj.rotation.y += spin;
     if (obj.name === "airTailRotor") obj.rotation.x += spin * 1.8;
+  });
+}
+
+/** Realistic F-16 takeoff roll → climb, cruise, then final → apron slot. */
+function updateF16Flight(mesh, dt) {
+  const hangared = !!mesh.userData.hangared;
+  const cruise = mesh.userData.airAltitude || 2.95;
+  const pad = mesh.userData.hangarAltitude ?? 0.13;
+  const now = performance.now();
+  let phase = mesh.userData.flightPhase || (hangared ? "hangared" : "cruise");
+
+  if (hangared) {
+    phase = "hangared";
+  } else if (mesh.userData.takeoffUntil && now < mesh.userData.takeoffUntil) {
+    phase = "takeoff";
+  } else if (mesh.userData.rtbHome) {
+    phase = "landing";
+  } else if (phase === "takeoff" || phase === "landing") {
+    phase = "cruise";
+  } else {
+    phase = "cruise";
+  }
+  mesh.userData.flightPhase = phase;
+  mesh.userData.phaseT = (mesh.userData.phaseT || 0) + dt;
+
+  let wantAlt = cruise;
+  let wantPitch = -0.08;
+  let gearDown = false;
+  let speedScale = 1;
+  let burn = false;
+
+  if (phase === "hangared") {
+    wantAlt = pad;
+    wantPitch = 0;
+    gearDown = true;
+    speedScale = 0.4;
+    mesh.userData.faceYaw = Math.PI / 2;
+    mesh.userData.bank = (mesh.userData.bank || 0) * 0.8;
+    if (mesh.userData.destX != null) slideToward(mesh, dt, speedScale);
+  } else if (phase === "takeoff") {
+    const t = mesh.userData.phaseT || 0;
+    gearDown = t < 1.75;
+    burn = t > 0.35;
+    if (t < 1.0) {
+      // Ground roll along the strip
+      wantAlt = pad + t * 0.2;
+      wantPitch = 0.04;
+      speedScale = 0.5;
+    } else if (t < 2.6) {
+      // Rotate and climb
+      const u = (t - 1.0) / 1.6;
+      wantAlt = pad + 0.2 + u * (cruise - pad - 0.2);
+      wantPitch = 0.22 * (1 - u * 0.35);
+      speedScale = 0.7 + u * 0.35;
+      burn = true;
+    } else {
+      wantAlt = cruise;
+      wantPitch = -0.1;
+      speedScale = 1;
+      mesh.userData.flightPhase = "cruise";
+      mesh.userData.takeoffUntil = 0;
+    }
+    if (mesh.userData.destX != null) slideToward(mesh, dt, speedScale);
+  } else if (phase === "landing") {
+    const dx = (mesh.userData.destX ?? mesh.position.x) - mesh.position.x;
+    const dz = (mesh.userData.destZ ?? mesh.position.z) - mesh.position.z;
+    const dist = Math.hypot(dx, dz);
+    const curAlt = mesh.userData.currentAlt ?? cruise;
+    // Glideslope: descend as we close on the apron
+    const glide = THREE.MathUtils.clamp(dist / 4.5, 0, 1);
+    wantAlt = pad + (cruise - pad) * (0.15 + glide * 0.85);
+    if (curAlt < pad + 0.85) {
+      wantPitch = 0.12; // flare nose-up
+      gearDown = true;
+      speedScale = 0.42;
+    } else if (curAlt < cruise * 0.7) {
+      wantPitch = 0.06;
+      gearDown = true;
+      speedScale = 0.55;
+    } else {
+      wantPitch = -0.04;
+      gearDown = curAlt < cruise * 0.55;
+      speedScale = 0.65;
+    }
+    if (mesh.userData.destX != null) slideToward(mesh, dt, speedScale);
+    if (dist > 0.04) {
+      mesh.userData.faceYaw = Math.atan2(dx, dz);
+    }
+  } else {
+    // Cruise
+    wantAlt = cruise;
+    wantPitch = mesh.userData.moving ? -0.12 : -0.04;
+    gearDown = false;
+    burn = !!mesh.userData.moving;
+    if (mesh.userData.destX != null) slideToward(mesh, dt, 1);
+  }
+
+  const curAlt = mesh.userData.currentAlt ?? wantAlt;
+  const altRate = phase === "takeoff" ? 1.6 : phase === "landing" ? 1.35 : hangared ? 2.4 : 1.5;
+  mesh.userData.currentAlt = curAlt + (wantAlt - curAlt) * Math.min(1, dt * altRate);
+  const alt = mesh.userData.currentAlt;
+  const bob =
+    phase === "hangared" || (phase === "landing" && alt < pad + 0.4)
+      ? 0
+      : Math.sin(now * 0.002 + (mesh.userData.id || "").length) * 0.035;
+  mesh.position.y = sampleTerrainHeight(mesh.position.x, mesh.position.z) + alt + bob;
+
+  const shadow = mesh.getObjectByName("airShadow");
+  if (shadow) {
+    const gy = sampleTerrainHeight(mesh.position.x, mesh.position.z);
+    shadow.position.y = gy + 0.02 - mesh.position.y;
+    if (shadow.material) {
+      shadow.material.opacity = phase === "hangared" ? 0.28 : alt < 1.2 ? 0.2 : 0.11;
+    }
+  }
+
+  const gear = mesh.getObjectByName("f16Gear");
+  if (gear) gear.visible = gearDown || alt < pad + 0.55;
+
+  const speed = Math.hypot(mesh.userData.velX || 0, mesh.userData.velZ || 0);
+  if (phase !== "hangared" && speed > 0.05) {
+    if (phase !== "landing" || alt > pad + 0.7) {
+      const yaw = Math.atan2(mesh.userData.velX, mesh.userData.velZ);
+      mesh.userData.faceYaw = yaw;
+    }
+    mesh.userData.moving = true;
+    let dyaw = (mesh.userData.faceYaw || 0) - (mesh.userData.prevFaceYaw || mesh.userData.faceYaw || 0);
+    while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+    while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    const wantBank =
+      phase === "takeoff" || phase === "landing"
+        ? THREE.MathUtils.clamp(-dyaw * 2.2, -0.28, 0.28)
+        : THREE.MathUtils.clamp(-dyaw * 4.5, -0.55, 0.55);
+    mesh.userData.bank = (mesh.userData.bank || 0) * 0.85 + wantBank * 0.15;
+    mesh.userData.prevFaceYaw = mesh.userData.faceYaw;
+  } else if (phase === "hangared" || now - (mesh.userData.moveSeenAt || 0) > 280) {
+    mesh.userData.moving = false;
+    mesh.userData.bank = (mesh.userData.bank || 0) * 0.88;
+  }
+
+  const curPitch = mesh.userData.pitch || 0;
+  mesh.userData.pitch = curPitch + (wantPitch - curPitch) * Math.min(1, dt * 4);
+
+  mesh.rotation.order = "YXZ";
+  if (mesh.userData.faceYaw != null) {
+    const diff = shortestAngle(mesh.rotation.y, mesh.userData.faceYaw);
+    mesh.rotation.y += diff * Math.min(1, dt * (phase === "hangared" ? 6 : 10));
+  }
+  mesh.rotation.z = phase === "hangared" ? 0 : mesh.userData.bank || 0;
+  mesh.rotation.x = mesh.userData.pitch || 0;
+
+  mesh.traverse((obj) => {
+    if (obj.name === "airAfterburner" && obj.material) {
+      obj.material.emissiveIntensity = burn
+        ? 0.55 + Math.sin(now * 0.035) * 0.22
+        : mesh.userData.moving && phase === "cruise"
+          ? 0.35 + Math.sin(now * 0.03) * 0.12
+          : 0.04;
+    }
   });
 }
 
@@ -12831,7 +13054,7 @@ function animate() {
       } else if (mesh.userData.building) {
         applyGroundPose(mesh, dt, { tilt: false });
       } else {
-        smoothUnitFacing(mesh, dt);
+        if (!mesh.userData.isF16) smoothUnitFacing(mesh, dt);
         updateInfantryDrive(mesh, dt);
         updateAirDrive(mesh, dt);
         updateInfantryWalk(mesh, dt, now);
