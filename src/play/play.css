@@ -435,6 +435,78 @@ input, select {
   font-size: 13px;
 }
 
+/* Hover dwell — short unit/building fact sheet near the cursor. */
+.entity-tip {
+  position: fixed;
+  z-index: 15;
+  min-width: 148px;
+  max-width: 220px;
+  padding: 8px 10px 9px;
+  pointer-events: none;
+  background: linear-gradient(165deg, #161e12f5, #0c100af0);
+  border: 1px solid #6a8a3a;
+  box-shadow: 0 8px 22px #000a;
+  color: var(--hud);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  line-height: 1.35;
+}
+.entity-tip[hidden] { display: none !important; }
+.entity-tip .tip-title {
+  margin: 0 0 5px;
+  font-family: var(--display);
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  color: #fff4ce;
+  text-transform: uppercase;
+}
+.entity-tip .tip-owner {
+  margin: -2px 0 6px;
+  font-size: 11px;
+  color: #8a9a78;
+}
+.entity-tip .tip-owner.you { color: #9fef4a; }
+.entity-tip .tip-owner.ally { color: #7ec8ff; }
+.entity-tip .tip-owner.enemy { color: #ff8866; }
+.entity-tip ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.entity-tip li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 1px 0;
+  border-top: 1px solid #2a362244;
+}
+.entity-tip li:first-child { border-top: 0; }
+.entity-tip .k { color: #8a9a78; }
+.entity-tip .v { color: #e8f0d0; font-weight: 600; text-align: right; }
+.entity-tip .tip-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+.entity-tip .tip-tag {
+  padding: 1px 6px;
+  border: 1px solid #4a5a40;
+  background: #1a241666;
+  color: #c8d8a8;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.entity-tip .tip-tag.warn {
+  border-color: #8a6a28;
+  color: var(--warn);
+}
+.entity-tip .tip-tag.stealth {
+  border-color: #4a6080;
+  color: #9ec0ff;
+}
+
 .scoreboard {
   position: absolute;
   inset: 64px 8% 72px;

@@ -6055,9 +6055,10 @@ function onEdgePointerMove(event) {
   edgeMouse.h = window.innerHeight;
   edgeMouse.inside = Boolean(state.match) && !$("#match-screen")?.hidden;
   edgeMouse.overUi = Boolean(
-    event.target?.closest?.("#radar, .build-rail, .unit-rail"),
+    event.target?.closest?.("#radar, .build-rail, .unit-rail, .ally-chat, .scoreboard, .top-hud"),
   );
   updateGhostPreview(event);
+  updateEntityHoverTip(event);
 }
 
 function myColors() {
@@ -6670,7 +6671,426 @@ function enemyUnderPointer(event, groundPoint) {
   return enemy;
 }
 
+/** Raycast / screen / ground pick — any visible unit or building under the cursor. */
+function pickAnyUnderPointer(event, groundPoint) {
+  if (raycaster && camera && state.meshes.size) {
+    const canvas = $("#viewport");
+    const rect = canvas?.getBoundingClientRect?.();
+    if (rect && rect.width > 2) {
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const roots = [];
+      for (const mesh of state.meshes.values()) {
+        const ent = state.entities.get(mesh.userData.id);
+        if (!ent || (!ent.unit && !ent.building)) continue;
+        if (ent.hp != null && ent.hp <= 0) continue;
+        if (mesh.userData.wreck || mesh.userData.corpse) continue;
+        roots.push(mesh);
+      }
+      if (roots.length) {
+        const hits = raycaster.intersectObjects(roots, true);
+        for (const hit of hits) {
+          if (
+            hit.object?.name === "airShadow" ||
+            hit.object?.name === "selRing" ||
+            hit.object?.name === "ownerLabel" ||
+            hit.object?.name === "hpBar" ||
+            hit.object?.name === "fogOfWar" ||
+            hit.object?.name === "ownerTricolor"
+          ) {
+            continue;
+          }
+          let obj = hit.object;
+          while (obj) {
+            const id = obj.userData?.id;
+            if (id && state.entities.has(id)) {
+              const ent = state.entities.get(id);
+              if (ent && (ent.unit || ent.building) && (ent.hp == null || ent.hp > 0)) return ent;
+            }
+            obj = obj.parent;
+          }
+        }
+      }
+
+      let bestScreen = null;
+      let bestPx = Infinity;
+      for (const entity of state.entities.values()) {
+        if (!entity.unit && !entity.building) continue;
+        if (entity.hp != null && entity.hp <= 0) continue;
+        const p = worldToClient(entity.x, entity.y, pickAltitudeForEntity(entity));
+        if (!p) continue;
+        const d = Math.hypot(p.x - event.clientX, p.y - event.clientY);
+        const maxPx = entity.building
+          ? 34
+          : isAirUnitKind(entity.kind)
+            ? 48
+            : String(entity.kind || "").includes("tank") ||
+                String(entity.kind || "").includes("mlrs")
+              ? 26
+              : 16;
+        if (d <= maxPx && d < bestPx) {
+          bestScreen = entity;
+          bestPx = d;
+        }
+      }
+      if (bestScreen) return bestScreen;
+    }
+  }
+
+  if (!groundPoint) return null;
+  let best = null;
+  let bestDist = 1.35;
+  for (const entity of state.entities.values()) {
+    if (!entity.unit && !entity.building) continue;
+    if (entity.hp != null && entity.hp <= 0) continue;
+    const d = Math.hypot(entity.x - groundPoint.x, entity.y - groundPoint.z);
+    const reach = entity.building
+      ? 0.7
+      : isAirUnitKind(entity.kind)
+        ? 1.3
+        : String(entity.kind || "").includes("tank") ||
+            String(entity.kind || "").includes("mlrs")
+          ? 0.42
+          : 0.2;
+    if (d > reach) continue;
+    const score = isAirUnitKind(entity.kind) ? d + 0.12 : d;
+    if (!best || score < bestDist) {
+      best = entity;
+      bestDist = score;
+    }
+  }
+  return best;
+}
+
+/** Static lore for hover tip — mirrors generals_roster + defense constants. */
+const ENTITY_INFO = {
+  hq: {
+    name: "Komuta Merkezi",
+    role: "Üs",
+    tags: ["Komuta", "Ordu / bina kapasitesi"],
+  },
+  power_plant: {
+    name: "Cold Fusion Reactor",
+    role: "Enerji",
+    tags: ["Güç üretir"],
+  },
+  nuclear_reactor: {
+    name: "Nuclear Reactor",
+    role: "Enerji",
+    tags: ["Güç üretir"],
+  },
+  barracks: { name: "Barracks", role: "Üretim", tags: ["Piyade"] },
+  supply: { name: "Supply Center", role: "Lojistik", tags: ["İkmal"] },
+  supply_stash: { name: "Supply Stash", role: "Lojistik", tags: ["İkmal"] },
+  war_factory: { name: "War Factory", role: "Üretim", tags: ["Araç"] },
+  arms_dealer: { name: "Arms Dealer", role: "Üretim", tags: ["Araç"] },
+  airfield: {
+    name: "Airfield",
+    role: "Üretim",
+    tags: ["Hava", "F-16 hangar"],
+  },
+  turret: {
+    name: "Patriot Battery",
+    role: "Savunma",
+    range: 17,
+    damage: 780,
+    tags: ["Hava savunma", "Güdümlü füze"],
+  },
+  stinger_site: {
+    name: "Stinger Site",
+    role: "Savunma",
+    range: 17,
+    damage: 780,
+    tags: ["Hava savunma"],
+  },
+  gatling_cannon: {
+    name: "Gattling Cannon",
+    role: "Savunma",
+    range: 8,
+    damage: 42,
+    tags: ["Hızlı ateş", "Yumuşak hedef"],
+  },
+  bunker: {
+    name: "Bunker",
+    role: "Savunma",
+    range: 4.8,
+    damage: 72,
+    tags: ["Piyade yuvası"],
+  },
+  tunnel_network: {
+    name: "Tunnel Network",
+    role: "Savunma",
+    range: 4.8,
+    damage: 72,
+    tags: ["MG yuvası"],
+  },
+  firebase: {
+    name: "Fire Base",
+    role: "Savunma",
+    range: 12.5,
+    damage: 560,
+    tags: ["Obüs", "Uzun menzil"],
+  },
+  ranger: {
+    name: "Ranger",
+    role: "Piyade",
+    range: 4.5,
+    damage: 85,
+    speed: 0.2,
+    tags: ["Tüfek"],
+  },
+  spy: {
+    name: "Spy",
+    role: "Özel",
+    range: 4,
+    damage: 70,
+    speed: 0.24,
+    tags: ["Görünmez", "Sabotaj", "Geniş görüş"],
+    stealth: true,
+  },
+  hacker: {
+    name: "Hacker",
+    role: "Özel",
+    range: 2.8,
+    damage: 28,
+    speed: 0.18,
+    tags: ["Görünmez", "Bina hack", "Güç / altın"],
+    stealth: true,
+  },
+  terrorist: {
+    name: "Terrorist",
+    role: "Özel",
+    range: 3.8,
+    damage: 60,
+    speed: 0.21,
+    tags: ["Görünmez", "İsyan", "Piyade çevir"],
+    stealth: true,
+  },
+  tank: {
+    name: "M1A1 Abrams",
+    role: "Tank",
+    range: 13.5,
+    damage: 650,
+    speed: 0.6,
+    tags: ["Ana muharebe", "Zırh"],
+  },
+  mlrs: {
+    name: "M270 MLRS",
+    role: "Topçu",
+    range: 22,
+    damage: 450,
+    speed: 0.55,
+    tags: ["Roket salvo", "Alan hasarı", "İnce zırh"],
+  },
+  f16: {
+    name: "F-16 Fighting Falcon",
+    role: "Hava",
+    range: 16.5,
+    damage: 8800,
+    speed: 10.8,
+    tags: ["Hangar", "1 bomba / sorti", "Kalkış 6500g"],
+  },
+};
+
+const hoverTip = {
+  id: null,
+  since: 0,
+  shown: false,
+  x: 0,
+  y: 0,
+};
+const HOVER_TIP_MS = 480;
+
+function hideEntityHoverTip() {
+  hoverTip.id = null;
+  hoverTip.since = 0;
+  hoverTip.shown = false;
+  const el = $("#entity-tip");
+  if (el) el.hidden = true;
+}
+
+function findTrainable(kind) {
+  return (state.trainable || []).find((u) => u.unit === kind) || null;
+}
+
+function speedLabel(speed) {
+  const s = Number(speed) || 0;
+  if (s >= 2) return "Çok hızlı";
+  if (s >= 0.55) return "Hızlı";
+  if (s >= 0.28) return "Orta";
+  if (s > 0) return "Yavaş";
+  return null;
+}
+
+function relationForEntity(entity) {
+  const you = state.match?.you;
+  const team = state.match?.team;
+  if (entity.owner === you) return { key: "you", label: "Sen" };
+  if (!state.match?.ffa && team != null && entity.team === team) {
+    return { key: "ally", label: "Dost" };
+  }
+  return { key: "enemy", label: "Düşman" };
+}
+
+function loreForKind(kind) {
+  const k = String(kind || "");
+  if (ENTITY_INFO[k]) return ENTITY_INFO[k];
+  for (const key of Object.keys(ENTITY_INFO)) {
+    if (k.includes(key)) return ENTITY_INFO[key];
+  }
+  return null;
+}
+
+function buildEntityTipLines(entity) {
+  const kind = String(entity.kind || "");
+  const lore = loreForKind(kind) || {};
+  const train = findTrainable(kind);
+  const build = findBuildable(kind);
+  const name =
+    lore.name ||
+    train?.name ||
+    build?.name ||
+    BUILDING_LABELS[kind] ||
+    kind.replace(/_/g, " ");
+  const range = train?.range ?? lore.range;
+  const damage = train?.damage ?? lore.damage;
+  const speed = train?.speed ?? lore.speed;
+  const role = lore.role || (entity.building ? "Bina" : "Birim");
+  const tags = [...(lore.tags || [])];
+  if (lore.stealth && !tags.some((t) => /görünmez/i.test(t))) tags.unshift("Görünmez");
+  if (entity.prone && !tags.includes("Yere yatmış")) tags.push("Yere yatmış");
+  if (entity.hacked && !tags.includes("Hack'li")) tags.push("Hack'li");
+  if (kind.includes("f16")) {
+    tags.push(entity.airborne ? "Sortide" : "Hangarda");
+  }
+
+  const rows = [];
+  rows.push({ k: "Tür", v: role });
+  const hp = Math.round(Number(entity.hp) || 0);
+  const maxHp = Math.round(Number(entity.max_hp) || hp || 1);
+  rows.push({ k: "Can", v: `${hp} / ${maxHp}` });
+  if (range != null && Number(range) > 0) {
+    rows.push({ k: "Menzil", v: Number(range).toFixed(1).replace(/\.0$/, "") });
+  }
+  if (damage != null && Number(damage) > 0) {
+    rows.push({ k: "Hasar", v: String(Math.round(Number(damage))) });
+  }
+  const spd = speedLabel(speed);
+  if (spd) rows.push({ k: "Hız", v: spd });
+  if (build && (build.power || build.cost_gold)) {
+    if (build.power) {
+      rows.push({
+        k: "Güç",
+        v: build.power > 0 ? `+${build.power}` : String(build.power),
+      });
+    }
+  }
+  if (entity.building && entity.progress != null && entity.progress < 1) {
+    rows.push({ k: "İnşa", v: `${Math.round(entity.progress * 100)}%` });
+  }
+  if (entity.train_progress != null && entity.train_progress < 1) {
+    rows.push({ k: "Üretim", v: `${Math.round(entity.train_progress * 100)}%` });
+  }
+
+  return { name, rows, tags, relation: relationForEntity(entity), owner: entity.owner_name };
+}
+
+function renderEntityHoverTip(entity, clientX, clientY) {
+  const el = $("#entity-tip");
+  if (!el || !entity) return;
+  const tip = buildEntityTipLines(entity);
+  const ownerBit = tip.owner
+    ? `<div class="tip-owner ${tip.relation.key}">${escapeHtml(tip.relation.label)} · ${escapeHtml(tip.owner)}</div>`
+    : `<div class="tip-owner ${tip.relation.key}">${escapeHtml(tip.relation.label)}</div>`;
+  el.innerHTML =
+    `<div class="tip-title">${escapeHtml(tip.name)}</div>` +
+    ownerBit +
+    `<ul>${tip.rows
+      .map(
+        (r) =>
+          `<li><span class="k">${escapeHtml(r.k)}</span><span class="v">${escapeHtml(r.v)}</span></li>`,
+      )
+      .join("")}</ul>` +
+    (tip.tags.length
+      ? `<div class="tip-tags">${tip.tags
+          .map((t) => {
+            const cls = /görünmez|stealth/i.test(t)
+              ? "tip-tag stealth"
+              : /hack|sorti|kalkış|bomba/i.test(t)
+                ? "tip-tag warn"
+                : "tip-tag";
+            return `<span class="${cls}">${escapeHtml(t)}</span>`;
+          })
+          .join("")}</div>`
+      : "");
+  el.hidden = false;
+  const pad = 14;
+  const tw = el.offsetWidth || 180;
+  const th = el.offsetHeight || 120;
+  let x = clientX + pad;
+  let y = clientY + pad;
+  if (x + tw > window.innerWidth - 8) x = clientX - tw - pad;
+  if (y + th > window.innerHeight - 8) y = clientY - th - pad;
+  el.style.left = `${Math.max(6, x)}px`;
+  el.style.top = `${Math.max(6, y)}px`;
+}
+
+function updateEntityHoverTip(event) {
+  if (!state.match || $("#match-screen")?.hidden || edgeMouse.overUi || boxSelect.active) {
+    hideEntityHoverTip();
+    return;
+  }
+  const now = performance.now();
+  // Throttle expensive picks while still tracking dwell.
+  if (
+    hoverTip._lastPick != null &&
+    now - hoverTip._lastPick < 70 &&
+    hoverTip.id &&
+    Math.hypot(event.clientX - hoverTip.x, event.clientY - hoverTip.y) < 10
+  ) {
+    hoverTip.x = event.clientX;
+    hoverTip.y = event.clientY;
+    if (hoverTip.shown) {
+      const ent = state.entities.get(hoverTip.id);
+      if (ent) renderEntityHoverTip(ent, event.clientX, event.clientY);
+      else hideEntityHoverTip();
+    } else if (now - hoverTip.since >= HOVER_TIP_MS) {
+      const ent = state.entities.get(hoverTip.id);
+      if (ent) {
+        hoverTip.shown = true;
+        renderEntityHoverTip(ent, event.clientX, event.clientY);
+      } else hideEntityHoverTip();
+    }
+    return;
+  }
+  hoverTip._lastPick = now;
+  hoverTip.x = event.clientX;
+  hoverTip.y = event.clientY;
+  const point = worldFromEvent(event);
+  const ent = pickAnyUnderPointer(event, point);
+  if (!ent) {
+    hideEntityHoverTip();
+    return;
+  }
+  if (ent.id !== hoverTip.id) {
+    hoverTip.id = ent.id;
+    hoverTip.since = now;
+    hoverTip.shown = false;
+    const el = $("#entity-tip");
+    if (el) el.hidden = true;
+    return;
+  }
+  if (!hoverTip.shown && now - hoverTip.since >= HOVER_TIP_MS) {
+    hoverTip.shown = true;
+    renderEntityHoverTip(ent, event.clientX, event.clientY);
+  } else if (hoverTip.shown) {
+    renderEntityHoverTip(ent, event.clientX, event.clientY);
+  }
+}
+
 function onPointerDown(event) {
+  hideEntityHoverTip();
   void enterGameFullscreen();
 
   if (event.button === 2) {
