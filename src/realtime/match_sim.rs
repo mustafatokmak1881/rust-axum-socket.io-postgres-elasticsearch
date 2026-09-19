@@ -155,34 +155,46 @@ impl PlayerState {
 
 /// Distinct tricolor schemes so ownership stays readable even with many players.
 /// Reuses by wrap-around past the table length (100 players → still recognizable bands).
-pub fn color_scheme_for_slot(slot: usize) -> [u32; 3] {
-    const SCHEMES: &[[u32; 3]] = &[
-        [0xc62828, 0xf5f5f5, 0x1565c0], // red · white · blue
-        [0xf9a825, 0x212121, 0x2e7d32], // yellow · black · green
-        [0x6a1b9a, 0xff6f00, 0x00838f], // purple · orange · teal
-        [0xffffff, 0xc62828, 0x212121], // white · red · black
-        [0x1565c0, 0xf9a825, 0xffffff], // blue · yellow · white
-        [0x2e7d32, 0xffffff, 0xc62828], // green · white · red
-        [0xff6f00, 0x1565c0, 0x212121], // orange · blue · black
-        [0x00838f, 0xf5f5f5, 0x6a1b9a], // teal · white · purple
-        [0xad1457, 0x81d4fa, 0x33691e], // magenta · lightblue · darkgreen
-        [0x4e342e, 0xffeb3b, 0xd32f2f], // brown · yellow · red
-        [0x1a237e, 0xeeff41, 0xe65100], // navy · lime · orange
-        [0x00695c, 0xffcdd2, 0x311b92], // green · pink · indigo
-        [0xbf360c, 0xb3e5fc, 0x263238], // deep orange · sky · charcoal
-        [0x4527a0, 0xa5d6a7, 0xff8f00], // violet · mint · amber
-        [0x37474f, 0xff1744, 0x00e5ff], // slate · neon red · cyan
-        [0xfafafa, 0x00c853, 0x0d47a1], // white · green · blue
-        [0xffd600, 0x880e4f, 0x00bfa5], // gold · wine · aqua
-        [0x3e2723, 0xffffff, 0x1565c0], // brown · white · blue
-        [0xd50000, 0x00e676, 0x212121], // red · lime · black
-        [0x0277bd, 0xffecb3, 0x4a148c], // blue · cream · purple
-        [0x558b2f, 0xff5252, 0xeceff1], // olive · coral · silver
-        [0x5d4037, 0x40c4ff, 0xffab00], // brown · azure · amber
-        [0x7b1fa2, 0xc8e6c9, 0xb71c1c], // purple · pale green · red
-        [0x01579b, 0xfff176, 0x1b5e20], // blue · pale yellow · green
-    ];
-    SCHEMES[slot % SCHEMES.len()]
+const COLOR_SCHEMES: &[[u32; 3]] = &[
+    [0xc62828, 0xf5f5f5, 0x1565c0], // red · white · blue
+    [0xf9a825, 0x212121, 0x2e7d32], // yellow · black · green
+    [0x6a1b9a, 0xff6f00, 0x00838f], // purple · orange · teal
+    [0xffffff, 0xc62828, 0x212121], // white · red · black
+    [0x1565c0, 0xf9a825, 0xffffff], // blue · yellow · white
+    [0x2e7d32, 0xffffff, 0xc62828], // green · white · red
+    [0xff6f00, 0x1565c0, 0x212121], // orange · blue · black
+    [0x00838f, 0xf5f5f5, 0x6a1b9a], // teal · white · purple
+    [0xad1457, 0x81d4fa, 0x33691e], // magenta · lightblue · darkgreen
+    [0x4e342e, 0xffeb3b, 0xd32f2f], // brown · yellow · red
+    [0x1a237e, 0xeeff41, 0xe65100], // navy · lime · orange
+    [0x00695c, 0xffcdd2, 0x311b92], // green · pink · indigo
+    [0xbf360c, 0xb3e5fc, 0x263238], // deep orange · sky · charcoal
+    [0x4527a0, 0xa5d6a7, 0xff8f00], // violet · mint · amber
+    [0x37474f, 0xff1744, 0x00e5ff], // slate · neon red · cyan
+    [0xfafafa, 0x00c853, 0x0d47a1], // white · green · blue
+    [0xffd600, 0x880e4f, 0x00bfa5], // gold · wine · aqua
+    [0x3e2723, 0xffffff, 0x1565c0], // brown · white · blue
+    [0xd50000, 0x00e676, 0x212121], // red · lime · black
+    [0x0277bd, 0xffecb3, 0x4a148c], // blue · cream · purple
+    [0x558b2f, 0xff5252, 0xeceff1], // olive · coral · silver
+    [0x5d4037, 0x40c4ff, 0xffab00], // brown · azure · amber
+    [0x7b1fa2, 0xc8e6c9, 0xb71c1c], // purple · pale green · red
+    [0x01579b, 0xfff176, 0x1b5e20], // blue · pale yellow · green
+];
+
+/// Random tricolor for a new commander — prefers schemes not already in the match.
+pub fn pick_color_scheme(used: &[[u32; 3]]) -> [u32; 3] {
+    let mut rng = rand::thread_rng();
+    let free: Vec<[u32; 3]> = COLOR_SCHEMES
+        .iter()
+        .copied()
+        .filter(|scheme| !used.iter().any(|u| u == scheme))
+        .collect();
+    if !free.is_empty() {
+        free[rng.gen_range(0..free.len())]
+    } else {
+        COLOR_SCHEMES[rng.gen_range(0..COLOR_SCHEMES.len())]
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1059,8 +1071,8 @@ impl MatchSim {
         bot: Option<BotMind>,
     ) {
         let (x, y) = self.allocate_spawn_xy(team);
-        let slot = self.players.len();
-        let colors = color_scheme_for_slot(slot);
+        let used: Vec<[u32; 3]> = self.players.values().map(|p| p.colors).collect();
+        let colors = pick_color_scheme(&used);
 
         self.players.insert(
             user_id,
